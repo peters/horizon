@@ -54,6 +54,7 @@ mod transcript;
 pub mod ui_thread;
 mod util;
 mod view;
+mod window_close;
 mod workspace;
 pub mod workspace_list;
 
@@ -151,4 +152,5 @@ pub use view::{
     CanvasConfig, CanvasViewState, DEFAULT_CANVAS_ZOOM, DEFAULT_FIT_FLOOR_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM,
     clamp_canvas_zoom, fit_floor_zoom, reveal_zoom,
 };
+pub use window_close::{RunningPrograms, WindowCloseSetting};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

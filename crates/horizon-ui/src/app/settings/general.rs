@@ -1,6 +1,6 @@
 use egui::Ui;
 use horizon_core::notify::NotificationSetting;
-use horizon_core::{AppearanceTheme, BrowserHostEngine, Config};
+use horizon_core::{AppearanceTheme, BrowserHostEngine, Config, WindowCloseSetting};
 
 use crate::theme;
 
@@ -482,23 +482,37 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
         );
 
         ui.add_space(10.0);
-        changed |= ui
-            .checkbox(
-                &mut config.features.keep_running_when_closed,
-                egui::RichText::new("Keep Horizon running when its window is closed")
-                    .color(theme::FG())
-                    .size(12.0),
-            )
-            .changed();
-        super::dim_label(
-            ui,
-            "A closed window keeps the terminals, the agent programs and the links of this computer. Start Horizon again \
-             to show its window, and choose Quit Horizon in the menu to end Horizon.",
-        );
+        changed |= render_window_close_row(ui, config);
 
         ui.add_space(10.0);
         changed |= render_notification_row(ui, config, view);
     });
+    changed
+}
+
+/// The row of what a close of the main window does: the three values of the
+/// setting, and the sentence of each one.
+fn render_window_close_row(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    ui.label(
+        egui::RichText::new("When the window is closed")
+            .color(theme::FG_SOFT())
+            .size(12.0),
+    );
+    for setting in WindowCloseSetting::VALUES {
+        changed |= ui
+            .radio_value(
+                &mut config.features.when_window_closes,
+                setting,
+                egui::RichText::new(setting.label()).color(theme::FG()).size(12.0),
+            )
+            .changed();
+    }
+    super::dim_label(
+        ui,
+        "Ask shows a question while a program of this computer runs. Keep Horizon running hides the window, and a start \
+         shows it again. Quit Horizon ends every program of this computer.",
+    );
     changed
 }
 

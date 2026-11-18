@@ -66,6 +66,7 @@ fn every_field_of_the_settings_window_round_trips() {
     config.appearance.theme = crate::AppearanceTheme::Light;
     config.features.sidebar_accordion = true;
     config.features.notifications = crate::notify::NotificationSetting::NeedsYou;
+    config.features.when_window_closes = crate::WindowCloseSetting::KeepRunning;
     config.overlays.minimap_width = 400.0;
     config.browser_host.ssh_target = Some("browser-vm".to_string());
     config.browser_host.profile = Some("work".to_string());
@@ -99,6 +100,11 @@ fn every_field_of_the_settings_window_round_trips() {
         stored.features.notifications,
         crate::notify::NotificationSetting::NeedsYou,
         "the value of a desktop notification"
+    );
+    assert_eq!(
+        stored.features.when_window_closes,
+        crate::WindowCloseSetting::KeepRunning,
+        "the choice of a close of the window"
     );
     assert_eq!(stored.remote_hosts, config.remote_hosts, "every remote host entry");
     assert_eq!(stored.secrets, config.secrets, "the names of the named secrets");

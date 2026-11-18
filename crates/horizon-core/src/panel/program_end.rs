@@ -73,6 +73,19 @@ impl Panel {
         }
     }
 
+    /// Whether the program of this panel is a program of this computer that still
+    /// runs: a shell, a command or an agent of a local terminal, including one that
+    /// the worker still prepares. A follow panel, a panel of a machine, a card, a
+    /// browser, a device and an editor own no such program.
+    #[must_use]
+    pub fn runs_a_program_here(&self) -> bool {
+        !self.is_follower()
+            && self.machine.is_none()
+            && self.kind != PanelKind::Ssh
+            && self.program_end.is_none()
+            && self.content.terminal().is_some()
+    }
+
     /// Whether this panel still shows the program that it started. Keys typed
     /// into a panel that does not are dropped, and the line under its grid is
     /// the answer that says so.

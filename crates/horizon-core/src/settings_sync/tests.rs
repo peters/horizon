@@ -554,9 +554,9 @@ fn a_store_of_another_schema_is_refused_by_both_write_paths_of_a_section() {
 fn the_field_of_a_shared_section_that_stays_with_this_computer_does_not_travel() {
     let mut config = Config::default();
     config.features.keep_agents_through_restart = true;
-    config.features.keep_running_when_closed = true;
+    config.features.when_window_closes = crate::WindowCloseSetting::Quit;
     let local = body_of_section(&config, "features");
-    for field in ["keep_agents_through_restart", "keep_running_when_closed"] {
+    for field in ["keep_agents_through_restart", "when_window_closes"] {
         assert!(
             local.get(field).is_none(),
             "the server carries no field of this computer: {field} in {local}"
@@ -582,8 +582,8 @@ fn the_field_of_a_shared_section_that_stays_with_this_computer_does_not_travel()
         "another computer does not end the programs of this one"
     );
     assert_eq!(
-        stored_features["keep_running_when_closed"],
-        json!(true),
+        stored_features["when_window_closes"],
+        json!("quit"),
         "another computer does not end this one with its window"
     );
     assert_eq!(

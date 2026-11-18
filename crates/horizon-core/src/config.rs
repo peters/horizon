@@ -12,6 +12,7 @@ use crate::notify::NotificationSetting;
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::{APP_SHORTCUTS, AppShortcuts, ShortcutBinding, default_shortcut_settings};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
+use crate::window_close::WindowCloseSetting;
 
 mod browser_host;
 mod machines;
@@ -223,10 +224,9 @@ pub struct FeaturesConfig {
     pub sidebar_accordion: bool,
     /// Whether the program of an agent panel runs in a holder that outlives a restart of Horizon.
     pub keep_agents_through_restart: bool,
-    /// Whether the close of the main window hides it and keeps every terminal,
-    /// agent program and link of this Horizon running. It says how this computer
-    /// runs its programs, so it stays with this computer.
-    pub keep_running_when_closed: bool,
+    /// What the close of the main window does, and whether it asks first: it
+    /// says how this computer runs its programs, so it stays with this computer.
+    pub when_window_closes: WindowCloseSetting,
     /// Which change of an agent panel a desktop notification tells, while no
     /// window of Horizon has the focus. A store of an older build has no such
     /// row, and it reads as the default that speaks of both changes.
@@ -955,6 +955,7 @@ mod tests {
     use super::{
         Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets, preset_named,
     };
+    use crate::WindowCloseSetting;
     use crate::notify::NotificationSetting;
     use crate::panel::PanelKind;
     use crate::ssh::{DiscoveredSshHost, SshConnection};
@@ -1124,9 +1125,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_running_when_closed_defaults_disabled() {
-        assert!(!FeaturesConfig::default().keep_running_when_closed);
-        assert!(!Config::default().features.keep_running_when_closed);
+    fn the_close_of_the_window_asks_by_default() {
+        assert_eq!(FeaturesConfig::default().when_window_closes, WindowCloseSetting::Ask);
+        assert_eq!(Config::default().features.when_window_closes, WindowCloseSetting::Ask);
     }
 
     /// A settings file of an older Horizon may hold keys of features that this

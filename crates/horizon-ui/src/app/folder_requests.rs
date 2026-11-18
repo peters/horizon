@@ -102,7 +102,7 @@ impl HorizonApp {
         let Some(folder) = request.folder().map(std::path::Path::to_path_buf) else {
             // The start named no folder: it asks for the window itself, and this
             // window shows and raises it, or says that it ends with its window.
-            if self.template_config.features.keep_running_when_closed {
+            if self.window_stays_open() {
                 self.show_main_window(ctx);
                 self.answer_folder_request(request, horizon_core::folder_requests::Answer::Window);
             } else {
@@ -270,7 +270,7 @@ mod tests {
         let (_temp, ctx, mut app) = waiting_app();
         let root = app.session_store.home().root().to_path_buf();
         holds_a_lease(&mut app);
-        app.template_config.features.keep_running_when_closed = true;
+        app.template_config.features.when_window_closes = horizon_core::WindowCloseSetting::KeepRunning;
 
         let asking_root = root.clone();
         let caller = std::thread::spawn(move || horizon_core::folder_requests::ask_window(&asking_root));

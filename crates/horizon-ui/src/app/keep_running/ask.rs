@@ -1,0 +1,114 @@
+//! The ask that a close of the main window, or `Quit Horizon`, shows while
+//! programs run.
+//!
+//! The ask draws what its counts say, and those counts came with the request: no
+//! frame of the ask counts a panel, and a window without an ask returns here at
+//! once. The first action of a close is the one that Enter takes, the second is
+//! the dangerous one, and a press outside the ask or the escape key cancels it.
+
+use egui::{Context, Key, Order, RichText};
+
+use crate::theme;
+
+use super::{CloseAnswer, HorizonApp};
+
+const CLOSE_HEADING: &str = "Close Horizon?";
+const KEEP_RUNNING: &str = "Keep running in the background";
+const KEEP_RUNNING_HELP: &str = "Start Horizon again to show the window. Menu, Quit Horizon ends it.";
+const END_AND_QUIT: &str = "End them and quit";
+const REMEMBER: &str = "Remember this choice";
+const QUIT: &str = "Quit";
+const CANCEL: &str = "Cancel";
+
+impl HorizonApp {
+    /// The ask of a close request or of `Quit Horizon`, and the answer of the
+    /// person to it.
+    pub(in crate::app) fn show_close_ask(&mut self, ctx: &Context) {
+        let Some(ask) = self.keep_running.ask.as_ref() else {
+            return;
+        };
+        let (running, from_menu) = (ask.running, ask.from_menu);
+        let mut remember = ask.remember;
+        let mut answer = None;
+        // The ask is one layer above the toolbar of a workspace on the canvas, which
+        // the window draws in the order of a tooltip: an ask below it would get no
+        // press that lands on such a toolbar.
+        let id = egui::Id::unique("close_horizon_ask");
+        let shown = egui::Modal::new(id)
+            .area(egui::Modal::default_area(id).order(Order::Tooltip))
+            .show(ctx, |ui| {
+                ui.set_max_width(430.0);
+                let heading = if from_menu {
+                    running.quit_question()
+                } else {
+                    CLOSE_HEADING.to_owned()
+                };
+                ui.label(RichText::new(heading).size(13.0).color(theme::FG()));
+                ui.add_space(6.0);
+                for line in running
+                    .programs_line()
+                    .into_iter()
+                    .chain(running.outliving_lines(from_menu))
+                {
+                    ui.label(RichText::new(line).size(12.5).color(theme::FG()));
+                }
+                ui.add_space(10.0);
+                if from_menu {
+                    ui.horizontal(|ui| {
+                        answer = actions(
+                            ui,
+                            &[
+                                (QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
+                                (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
+                            ],
+                        );
+                    });
+                    return;
+                }
+                if action(ui, KEEP_RUNNING, theme::FG()) {
+                    answer = Some(CloseAnswer::KeepRunning);
+                }
+                ui.label(RichText::new(KEEP_RUNNING_HELP).size(11.5).color(theme::FG_SOFT()));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    answer = actions(
+                        ui,
+                        &[
+                            (END_AND_QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
+                            (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
+                        ],
+                    );
+                });
+                // The first action is the one that Enter takes.
+                if ui.input(|input| input.key_pressed(Key::Enter)) {
+                    answer.get_or_insert(CloseAnswer::KeepRunning);
+                }
+                ui.add_space(2.0);
+                ui.checkbox(&mut remember, RichText::new(REMEMBER).size(12.0).color(theme::FG()));
+            });
+        if let Some(ask) = self.keep_running.ask.as_mut() {
+            ask.remember = remember;
+        }
+        // A press outside the ask, or the escape key, is the `Cancel`.
+        if let Some(answer) = answer.or_else(|| shown.should_close().then_some(CloseAnswer::Cancel)) {
+            self.answer_close_ask(ctx, answer);
+        }
+    }
+}
+
+/// Whether the person pressed the action `label`, drawn in `color`.
+fn action(ui: &mut egui::Ui, label: &str, color: egui::Color32) -> bool {
+    ui.add(egui::Button::new(RichText::new(label).color(color).size(12.0)))
+        .clicked()
+}
+
+/// The action of the row of `entries` that the person pressed, if one.
+fn actions(ui: &mut egui::Ui, entries: &[(&str, egui::Color32, CloseAnswer)]) -> Option<CloseAnswer> {
+    let mut pressed = None;
+    for (label, color, answer) in entries {
+        if action(ui, label, *color) {
+            pressed = Some(*answer);
+        }
+    }
+    pressed
+}

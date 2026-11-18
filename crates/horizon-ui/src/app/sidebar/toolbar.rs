@@ -161,7 +161,7 @@ impl HorizonApp {
             // the four the person wants.
             ToolbarAction::SetUp => self.press_set_up(ctx, horizon_core::SetupGoal::Choose),
             ToolbarAction::Settings => self.toggle_settings(),
-            ToolbarAction::Quit => self.begin_shutdown(),
+            ToolbarAction::Quit => self.request_quit(),
         }
     }
 }

@@ -255,7 +255,7 @@ impl std::fmt::Display for SectionFault {
 /// carries them.
 const LOCAL_FIELDS: &[(&str, &str)] = &[
     ("features", "keep_agents_through_restart"),
-    ("features", "keep_running_when_closed"),
+    ("features", "when_window_closes"),
 ];
 
 /// `value` of the section `name` with its local-only fields taken from `row`, or with them taken out when `row` is none.

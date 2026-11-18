@@ -1,16 +1,19 @@
-//! The close of the main window with the setting on and off, the notice of the
-//! first hide, and the end of Horizon from the menu.
+//! The close of the main window with each of the three choices, the ask that
+//! counts what runs, the notice of the first hide, and `Quit Horizon`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use egui::{Context, RawInput, ViewportCommand, ViewportId};
+use egui::{Context, Event, Key, Modifiers, RawInput, ViewportCommand, ViewportId};
 use horizon_core::notify::{Notice, Sink};
-use horizon_core::{Config, RuntimeState, StartupDecision};
+use horizon_core::{Config, PanelKind, PanelOptions, RuntimeState, StartupDecision, WindowCloseSetting};
 
 use crate::app::HorizonApp;
+use crate::app::keep_running::CloseAnswer;
 use crate::app::notify::Notifications;
 use crate::app::root_chrome::ToolbarAction;
-use crate::app::test_support::{run_app_frame_with_input, test_app_with_config_and_startup, wait_for_session_saves};
+use crate::app::test_support::{
+    raw_input, run_app_frame_with_input, test_app_with_config_and_startup, wait_for_session_saves,
+};
 
 /// The sink of a test: it records the notices that Horizon would show.
 #[derive(Clone, Default)]
@@ -33,9 +36,27 @@ impl Recorder {
     }
 }
 
-/// The input of a frame in which the person closes the main window.
+/// The options of a panel of this computer that runs a program of its own. The
+/// program ends by itself after a few seconds, so a test that fails leaves no
+/// process behind.
+fn running(mut options: PanelOptions) -> PanelOptions {
+    options.launch_wrapper = vec!["/bin/sh".to_owned(), "-c".to_owned(), "sleep 10".to_owned()];
+    options
+}
+
+/// The options of a terminal of a workspace that is placed on a machine.
+fn on_a_machine(session: &str) -> PanelOptions {
+    running(PanelOptions {
+        kind: PanelKind::Ssh,
+        machine: Some("build-1".to_owned()),
+        machine_session: Some(session.to_owned()),
+        ..PanelOptions::default()
+    })
+}
+
+/// The input of a frame in which the desktop asks the main window to close.
 fn close_request() -> RawInput {
-    let mut input = RawInput::default();
+    let mut input = raw_input([1400.0, 900.0], None);
     input
         .viewports
         .entry(ViewportId::ROOT)
@@ -45,21 +66,123 @@ fn close_request() -> RawInput {
     input
 }
 
+/// One frame of the window with `input` as its input.
+fn frame_with(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
+    run_app_frame_with_input(ctx, app, input)
+}
+
+/// Two frames of the window before the case draws, so the layout of a new window
+/// is in the memory of the context: the first frame of a window draws no text.
+fn warm_up(ctx: &Context, app: &mut HorizonApp) {
+    for _ in 0..2 {
+        let _ = frame_with(ctx, app, raw_input([1400.0, 900.0], None));
+    }
+}
+
+/// One frame of the window in which the desktop asks it to close.
+fn close_frame(ctx: &Context, app: &mut HorizonApp) -> egui::FullOutput {
+    frame_with(ctx, app, close_request())
+}
+
+/// The ask that waits now, drawn: the frame that takes the request gives the ask
+/// its place, and the frame after it draws the ask there.
+fn ask_frame(ctx: &Context, app: &mut HorizonApp) -> egui::FullOutput {
+    for _ in 0..2 {
+        let _ = frame_with(ctx, app, raw_input([1400.0, 900.0], None));
+    }
+    frame_with(ctx, app, raw_input([1400.0, 900.0], None))
+}
+
+/// One frame of the window with `key` pressed and released.
+fn press_key(ctx: &Context, app: &mut HorizonApp, key: Key) -> egui::FullOutput {
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events = [true, false]
+        .map(|pressed| Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        })
+        .to_vec();
+    frame_with(ctx, app, input)
+}
+
 /// The commands that the frame of `input` sent to the main window.
 fn commands(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> Vec<ViewportCommand> {
-    let output = run_app_frame_with_input(ctx, app, input);
-    output
+    frame_with(ctx, app, input)
         .viewport_output
         .get(&ViewportId::ROOT)
         .map(|output| output.commands.clone())
         .unwrap_or_default()
 }
 
+/// The drawn texts of the frame.
+fn texts(output: &egui::FullOutput) -> Vec<&str> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The drawn texts of the frame with their centre.
+fn texts_with_centre(output: &egui::FullOutput) -> Vec<(&str, egui::Pos2)> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some((text.galley.text(), text.pos + text.galley.size() * 0.5)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The centre of the button `label` of the ask under its `heading`: the one
+/// nearest to the heading, because the toolbar of the window says the word too.
+fn button(output: &egui::FullOutput, label: &str, heading: &str) -> egui::Pos2 {
+    let drawn = texts_with_centre(output);
+    let anchor = drawn
+        .iter()
+        .find(|(text, _)| *text == heading)
+        .map(|(_, centre)| *centre)
+        .unwrap_or_else(|| panic!("the ask draws {heading}: {:?}", texts(output)));
+    drawn
+        .iter()
+        .filter(|(text, _)| *text == label)
+        .map(|(_, centre)| *centre)
+        .min_by(|a, b| a.distance(anchor).total_cmp(&b.distance(anchor)))
+        .unwrap_or_else(|| panic!("the ask offers {label}: {:?}", texts(output)))
+}
+
+/// One press of `pos`: the frame that takes it down and the frame that lets it up.
+fn press(ctx: &Context, app: &mut HorizonApp, pos: egui::Pos2) -> egui::FullOutput {
+    let mut output = egui::FullOutput::default();
+    // The pointer moves to the button first, as a real pointer does.
+    let mut hover = raw_input([1400.0, 900.0], None);
+    hover.events = vec![Event::PointerMoved(pos)];
+    let _ = frame_with(ctx, app, hover);
+    for pressed in [true, false] {
+        let mut input = raw_input([1400.0, 900.0], None);
+        input.events = vec![Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }];
+        output = frame_with(ctx, app, input);
+    }
+    output
+}
+
 /// The application of one test, with a sink that records instead of showing, and
 /// a session whose board the run saves.
-fn app_with(keep_running: bool) -> (tempfile::TempDir, Context, HorizonApp, Recorder) {
+fn app_with(setting: WindowCloseSetting) -> (tempfile::TempDir, Context, HorizonApp, Recorder) {
     let mut config = Config::default();
-    config.features.keep_running_when_closed = keep_running;
+    config.features.when_window_closes = setting;
     let (temp, ctx, mut app) = test_app_with_config_and_startup(
         &config,
         StartupDecision::Ephemeral {
@@ -85,11 +208,15 @@ fn saved_board(temp: &tempfile::TempDir) -> RuntimeState {
         .expect("the hide saved the board")
 }
 
-/// Without the setting, the close of the window ends Horizon as it did: the frame
-/// cancels the close of the native window and the exit of the panels runs.
+/// With the choice `quit`, a close ends Horizon as it did before the two rounds,
+/// and it asks nothing while programs run.
 #[test]
-fn the_close_of_the_window_ends_horizon_when_the_setting_is_off() {
-    let (_temp, ctx, mut app, recorder) = app_with(false);
+fn the_choice_quit_ends_horizon_and_asks_nothing() {
+    let (_temp, ctx, mut app, recorder) = app_with(WindowCloseSetting::Quit);
+    let workspace = app.board.create_workspace("Quit");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
 
     let sent = commands(&ctx, &mut app, close_request());
 
@@ -102,15 +229,16 @@ fn the_close_of_the_window_ends_horizon_when_the_setting_is_off() {
         "the window is not hidden: {sent:?}"
     );
     assert!(app.shutdown_progress.is_some(), "the exit of the panels runs");
+    assert!(app.keep_running.ask.is_none(), "no ask comes before the end");
     assert!(!app.keep_running.hidden, "no window is hidden");
     assert!(recorder.lines().is_empty(), "nothing is said about a hide");
 }
 
-/// With the setting on, the close hides the window and ends nothing: the panels
-/// run, and the board of the session is on disk at the hide.
+/// With the choice `keep_running`, a close hides the window and ends nothing: the
+/// panels run, and the board of the session is on disk at the hide.
 #[test]
-fn the_close_of_the_window_hides_it_and_keeps_horizon_running() {
-    let (temp, ctx, mut app, _recorder) = app_with(true);
+fn the_choice_keep_running_hides_the_window_and_keeps_horizon_running() {
+    let (temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::KeepRunning);
     let workspace = app.board.create_workspace("Kept");
     app.board.focus_workspace(workspace);
 
@@ -127,6 +255,7 @@ fn the_close_of_the_window_hides_it_and_keeps_horizon_running() {
     );
     assert!(app.shutdown_progress.is_none(), "no panel is stopped");
     assert!(app.keep_running.hidden, "the window is hidden");
+    assert!(app.keep_running.ask.is_none(), "quiet never asks");
     let saved = saved_board(&temp);
     assert!(
         saved.workspaces.iter().any(|saved| saved.name == "Kept"),
@@ -137,7 +266,7 @@ fn the_close_of_the_window_hides_it_and_keeps_horizon_running() {
 /// The notice of the first hide speaks once for the run, not for each hide.
 #[test]
 fn the_notice_of_a_hidden_window_speaks_once_for_the_run() {
-    let (_temp, ctx, mut app, recorder) = app_with(true);
+    let (_temp, ctx, mut app, recorder) = app_with(WindowCloseSetting::KeepRunning);
 
     let first = commands(&ctx, &mut app, close_request());
     let second = commands(&ctx, &mut app, close_request());
@@ -154,7 +283,7 @@ fn the_notice_of_a_hidden_window_speaks_once_for_the_run() {
 /// The window is shown again and raised for a second start of this computer.
 #[test]
 fn a_second_start_shows_the_window_again_and_raises_it() {
-    let (_temp, ctx, mut app, _recorder) = app_with(true);
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::KeepRunning);
     let _ = commands(&ctx, &mut app, close_request());
     assert!(app.keep_running.hidden);
 
@@ -170,7 +299,7 @@ fn a_second_start_shows_the_window_again_and_raises_it() {
 /// pass of a window that draws nothing: that pass shows and raises the window.
 #[test]
 fn the_pass_of_a_hidden_window_shows_it_for_a_second_start() {
-    let (_temp, ctx, mut app, _recorder) = app_with(true);
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::KeepRunning);
     let root = app.session_store.home().root().to_path_buf();
     let _ = commands(&ctx, &mut app, close_request());
     assert!(app.keep_running.hidden, "the window is hidden");
@@ -193,22 +322,249 @@ fn the_pass_of_a_hidden_window_shows_it_for_a_second_start() {
     app.board.shutdown_terminal_panels();
 }
 
-/// The menu ends Horizon with the setting on, and with it off.
+/// With the choice `ask` and no program, a close ends Horizon at once and shows no
+/// ask.
 #[test]
-fn quit_horizon_ends_the_program_whatever_the_setting_says() {
-    for keep_running in [false, true] {
-        let (_temp, ctx, mut app, recorder) = app_with(keep_running);
+fn the_choice_ask_ends_at_once_when_no_program_runs() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+
+    let sent = commands(&ctx, &mut app, close_request());
+
+    assert!(sent.contains(&ViewportCommand::CancelClose), "{sent:?}");
+    assert!(app.shutdown_progress.is_some(), "the exit of the panels runs");
+    assert!(app.keep_running.ask.is_none(), "nothing runs, so nothing is asked");
+}
+
+/// The ask counts the programs of this computer and the panels of a machine, and
+/// it speaks of both.
+#[test]
+fn the_ask_counts_the_programs_here_and_the_panels_of_a_machine() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+    let workspace = app.board.create_workspace("Ask");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    let _ = app
+        .create_panel_with_options(on_a_machine("hz-22222222-1"), workspace)
+        .expect("a panel of a machine");
+    let _ = app
+        .create_panel_with_options(
+            PanelOptions {
+                kind: PanelKind::Editor,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("an editor panel");
+    warm_up(&ctx, &mut app);
+    let _ = close_frame(&ctx, &mut app);
+
+    let output = ask_frame(&ctx, &mut app);
+    let drawn = texts(&output);
+
+    assert!(drawn.contains(&"Close Horizon?"), "the heading: {drawn:?}");
+    assert!(
+        drawn.contains(&"1 program is running."),
+        "only the local terminal counts: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"1 panel runs on a machine and keeps running there."),
+        "the panels of a machine have their own line: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"Keep running in the background"),
+        "the first action: {drawn:?}"
+    );
+    assert!(drawn.contains(&"End them and quit"), "the second action: {drawn:?}");
+    assert!(drawn.contains(&"Cancel"), "the third action: {drawn:?}");
+    assert!(drawn.contains(&"Remember this choice"), "the box: {drawn:?}");
+    let running = app.keep_running.ask.as_ref().map(|ask| ask.running);
+    assert_eq!(
+        running.map(|running| (running.here, running.on_machines)),
+        Some((1, 1)),
+        "the ask counted when the close came"
+    );
+    assert!(
+        output
+            .viewport_output
+            .get(&ViewportId::ROOT)
+            .is_some_and(|output| !output.commands.contains(&ViewportCommand::Visible(false))),
+        "the window stays while the ask shows"
+    );
+    app.board.shutdown_terminal_panels();
+}
+
+/// Enter takes the first action: Horizon keeps running behind its hidden window.
+#[test]
+fn enter_keeps_running_in_the_background() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+    let workspace = app.board.create_workspace("Ask");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    let _ = close_frame(&ctx, &mut app);
+
+    let output = press_key(&ctx, &mut app, Key::Enter);
+    let sent = output
+        .viewport_output
+        .get(&ViewportId::ROOT)
+        .map(|output| output.commands.clone())
+        .unwrap_or_default();
+
+    assert!(sent.contains(&ViewportCommand::Visible(false)), "{sent:?}");
+    assert!(app.keep_running.hidden, "the window is hidden");
+    assert!(app.keep_running.ask.is_none(), "the ask is answered");
+    assert!(app.shutdown_progress.is_none(), "Enter ends no program");
+    app.board.shutdown_terminal_panels();
+}
+
+/// `End them and quit` ends the programs and Horizon.
+#[test]
+fn end_them_and_quit_ends_horizon() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+    let workspace = app.board.create_workspace("Ask");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    let _ = close_frame(&ctx, &mut app);
+    let output = ask_frame(&ctx, &mut app);
+
+    let _ = press(&ctx, &mut app, button(&output, "End them and quit", "Close Horizon?"));
+
+    assert!(app.shutdown_progress.is_some(), "the programs and Horizon end");
+    assert!(!app.keep_running.hidden, "the window is not hidden");
+    assert!(app.keep_running.ask.is_none(), "the ask is answered");
+}
+
+/// `Cancel` and the escape key keep everything where it is.
+#[test]
+fn cancel_and_escape_keep_everything() {
+    for escape in [false, true] {
+        let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+        let workspace = app.board.create_workspace("Ask");
+        let _ = app
+            .create_panel_with_options(running(PanelOptions::default()), workspace)
+            .expect("a shell panel");
+        warm_up(&ctx, &mut app);
+        let _ = close_frame(&ctx, &mut app);
+        assert!(app.keep_running.ask.is_some(), "the ask shows");
+        let output = ask_frame(&ctx, &mut app);
+
+        if escape {
+            let _ = press_key(&ctx, &mut app, Key::Escape);
+        } else {
+            let _ = press(&ctx, &mut app, button(&output, "Cancel", "Close Horizon?"));
+        }
+
+        assert!(app.keep_running.ask.is_none(), "the ask is answered");
+        assert!(app.shutdown_progress.is_none(), "Cancel ends no program");
+        assert!(!app.keep_running.hidden, "Cancel hides nothing");
+        app.board.shutdown_terminal_panels();
+    }
+}
+
+/// The box `Remember this choice` writes the choice of the person, and the next
+/// close takes it without a question.
+#[test]
+fn remember_writes_the_choice_and_the_next_close_does_not_ask() {
+    for (answer, expected) in [
+        (CloseAnswer::KeepRunning, WindowCloseSetting::KeepRunning),
+        (CloseAnswer::Quit, WindowCloseSetting::Quit),
+    ] {
+        let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+        let workspace = app.board.create_workspace("Ask");
+        let _ = app
+            .create_panel_with_options(running(PanelOptions::default()), workspace)
+            .expect("a shell panel");
+        warm_up(&ctx, &mut app);
+        let _ = close_frame(&ctx, &mut app);
+        let ask = app.keep_running.ask.as_mut().expect("the ask shows");
+        ask.remember = true;
+
+        app.answer_close_ask(&ctx, answer);
+
+        assert_eq!(
+            app.template_config.features.when_window_closes, expected,
+            "the box wrote the choice of the person"
+        );
+        assert!(app.keep_running.ask.is_none(), "the ask is answered");
+
+        // The next close takes the remembered choice and asks nothing, which needs
+        // a window that the answer of a `quit` did not end.
+        app.shutdown_progress = None;
+        app.keep_running.hidden = false;
+        let _ = close_frame(&ctx, &mut app);
+        assert!(app.keep_running.ask.is_none(), "the remembered choice asks nothing");
+        match expected {
+            WindowCloseSetting::Quit => assert!(app.shutdown_progress.is_some(), "quit ends Horizon"),
+            _ => assert!(app.keep_running.hidden, "keep running hides the window"),
+        }
+        app.board.shutdown_terminal_panels();
+    }
+}
+
+/// `Quit Horizon` in the menu asks for the programs that it ends, with the lines
+/// of what lives on, and `Quit` ends Horizon.
+#[test]
+fn quit_horizon_asks_for_the_programs_and_ends_them() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::KeepRunning);
+    app.template_config.features.keep_agents_through_restart = true;
+    let workspace = app.board.create_workspace("Quit");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    let _ = app
+        .create_panel_with_options(
+            running(PanelOptions {
+                kind: PanelKind::Codex,
+                ..PanelOptions::default()
+            }),
+            workspace,
+        )
+        .expect("an agent panel");
+    let _ = app
+        .create_panel_with_options(on_a_machine("hz-33333333-1"), workspace)
+        .expect("a panel of a machine");
+    warm_up(&ctx, &mut app);
+
+    app.perform_toolbar_action(&ctx, ToolbarAction::Quit);
+    let output = ask_frame(&ctx, &mut app);
+    let drawn = texts(&output);
+
+    assert!(
+        drawn.contains(&"End 2 programs and quit?"),
+        "the question counts the programs of this computer: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"Agent programs that are kept through a restart come back at the next start."),
+        "the agent programs come back: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"1 panel runs on a machine and keeps running there."),
+        "the panel of the machine keeps running there: {drawn:?}"
+    );
+    assert!(app.shutdown_progress.is_none(), "the question ends nothing yet");
+
+    let _ = press(&ctx, &mut app, button(&output, "Quit", "End 2 programs and quit?"));
+
+    assert!(app.shutdown_progress.is_some(), "Quit ends Horizon");
+}
+
+/// `Quit Horizon` ends Horizon at once when no program runs.
+#[test]
+fn quit_horizon_ends_at_once_when_nothing_runs() {
+    for setting in WindowCloseSetting::VALUES {
+        let (_temp, ctx, mut app, _recorder) = app_with(setting);
 
         app.perform_toolbar_action(&ctx, ToolbarAction::Quit);
 
         assert!(
             app.shutdown_progress.is_some(),
-            "Quit ends the panels with the setting {keep_running}"
+            "Quit ends Horizon with the choice {setting:?}"
         );
-        assert!(
-            !app.keep_running.hidden,
-            "Quit hides nothing with the setting {keep_running}"
-        );
-        assert!(recorder.lines().is_empty(), "Quit says nothing about a hide");
+        assert!(app.keep_running.ask.is_none(), "nothing runs, so nothing is asked");
+        assert!(!app.keep_running.hidden, "Quit hides nothing");
     }
 }
