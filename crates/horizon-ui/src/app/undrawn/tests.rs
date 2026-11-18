@@ -50,12 +50,19 @@ fn worked(app: &HorizonApp) -> bool {
 /// One frame as eframe runs it for a window that it shows: the pass, and then
 /// the ui. `discard` asks for a second pass of the same frame. Answers the
 /// count of the passes, and whether a pass before the ui did the work.
+///
+/// eframe gives each frame the time of its start, and egui gives that same
+/// time to each pass of the frame.
 fn run_shown_frame(ctx: &Context, app: &mut HorizonApp, discard: bool) -> (usize, bool) {
     let _frame = horizon_core::ui_thread::FrameScope::enter();
     let mut frame = eframe::Frame::_new_kittest();
     let (mut passes, mut work) = (0, false);
+    let input = RawInput {
+        time: Some(ctx.input(|input| input.time) + 1.0),
+        ..RawInput::default()
+    };
     let _ = ctx
-        .run_ui(RawInput::default(), |ui| {
+        .run_ui(input, |ui| {
             passes += 1;
             if discard && passes == 1 {
                 ui.ctx().request_discard("the test asks for a second pass");
@@ -316,8 +323,21 @@ fn a_panel_that_opens_with_no_frame_starts_its_program() {
         text(app, first).contains("READY")
     });
 
-    // A request of an agent opens a panel while the window draws nothing.
-    let second = terminal(&mut app, PRINTS);
+    // A request of an agent opens a panel while the window draws nothing. The
+    // program of such a panel waits for the preparation of a worker.
+    let workspace = app.board.active_workspace.expect("the workspace of the test");
+    let options = PanelOptions {
+        kind: PanelKind::Command,
+        command: Some("/bin/sh".to_owned()),
+        args: vec!["-c".to_owned(), PRINTS.to_owned()],
+        position: Some(OFFSCREEN),
+        ..PanelOptions::default()
+    };
+    let second = app.board.create_panel_waiting(options, workspace).expect("the panel");
+    assert!(
+        !text(&app, second).contains("READY"),
+        "the program waits for its preparation"
+    );
     assert!(
         passes_until(&ctx, &mut app, |app| text(app, second).contains("READY")),
         "the program of the new panel starts with no frame"

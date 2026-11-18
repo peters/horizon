@@ -149,10 +149,10 @@ fn a_panel_that_opens_and_closes_in_a_window_that_draws_nothing_enters_and_leave
         size: Some([600.0, 300.0]),
         ..PanelOptions::default()
     };
-    let second = window
-        .app
-        .board
-        .create_panel(options, workspace)
+    // The program of such a panel waits for the preparation of a worker.
+    let board = &mut window.app.board;
+    let second = board
+        .create_panel_waiting(options, workspace)
         .expect("the second terminal");
     let second_id = window.id(second);
     let (link, id) = (window.link.clone(), second_id.clone());
