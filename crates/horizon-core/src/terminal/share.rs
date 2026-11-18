@@ -184,7 +184,7 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
     }
     // The rows are drawn with the modes of a new terminal, and every mode that
     // changes how output is drawn is set after them.
-    draw_rows(grid, &mut out, true);
+    draw_rows(grid, &mut out);
     if mode.contains(TermMode::ORIGIN) {
         out.push_str("\x1b[?6h");
     }
@@ -200,7 +200,7 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
         // The cursor waits behind the last column for the next character. The
         // cell under it, drawn once more, leaves the cursor of the follower there.
         pen.paint(&mut out, &row[column]);
-        push_cell(&mut out, &row[column], true);
+        push_cell(&mut out, &row[column]);
     }
     pen.paint(&mut out, &cursor.template);
     for (flag, sequence) in MODES {

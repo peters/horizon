@@ -34,13 +34,13 @@ impl Terminal {
 /// [`Terminal::screen_replay_bytes`] describes them.
 pub(super) fn screen_replay_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
     let mut out = String::new();
-    draw_rows(term.grid(), &mut out, false);
+    draw_rows(term.grid(), &mut out);
     out.into_bytes()
 }
 
 /// Draws the rows of the viewport of `grid` from the first cell of an empty
-/// screen. With `in_place` every cell keeps its column, as [`push_cell`] says.
-pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
+/// screen, with every cell in the column that it had, as [`push_cell`] says.
+pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String) {
     let rows = grid.screen_lines();
     let columns = grid.columns();
     out.reserve(rows * (columns + 2));
@@ -57,11 +57,8 @@ pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
                 {
                     continue;
                 }
-                if cell.flags.contains(Flags::HIDDEN) && !in_place {
-                    continue;
-                }
                 painted.paint(out, cell);
-                push_cell(out, cell, in_place);
+                push_cell(out, cell);
             }
         }
         painted = painted.reset(out);
@@ -72,11 +69,11 @@ pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
 }
 
 /// Writes the text of `cell`. The grid keeps a tab in the first cell that the
-/// tab passed, and it keeps hidden text. `in_place` draws both as a blank: a tab
-/// would move the cursor past its cell, and the replay of a restart skips
-/// hidden text, so either moves the rest of its row.
-pub(super) fn push_cell(out: &mut String, cell: &Cell, in_place: bool) {
-    if in_place && (cell.c == '\t' || cell.flags.contains(Flags::HIDDEN)) {
+/// tab passed, and it keeps hidden text. Both are drawn as a blank: a tab would
+/// move the cursor past its cell, and hidden text is none of what a reader of
+/// the screen sees, so either would move the rest of its row.
+pub(super) fn push_cell(out: &mut String, cell: &Cell) {
+    if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) {
         out.push(' ');
         return;
     }

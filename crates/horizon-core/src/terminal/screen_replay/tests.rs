@@ -5,6 +5,7 @@ use alacritty_terminal::event::Event;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
@@ -128,4 +129,52 @@ fn an_empty_screen_replays_no_bytes() {
     let replay = screen_replay_bytes(&old.lock());
 
     assert!(replay.is_empty(), "an empty screen draws nothing: {replay:?}");
+}
+
+/// The column of each character of `screen` that a person reads, row by row: no
+/// blank cell, no hidden text and no tab, which is a jump and no character.
+fn read_columns(screen: &Arc<FairMutex<Term<TerminalEventProxy>>>) -> Vec<Vec<(usize, char)>> {
+    let term = screen.lock();
+    let grid = term.grid();
+    (0..grid.screen_lines())
+        .map(|row| {
+            let line = &grid[Line(i32::try_from(row).expect("a row of the screen"))];
+            line[..Column(grid.columns())]
+                .iter()
+                .enumerate()
+                .filter(|(_, cell)| cell.c != ' ' && cell.c != '\t' && !cell.flags.contains(Flags::HIDDEN))
+                .map(|(column, cell)| (column, cell.c))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_tab_cell_and_hidden_text_keep_every_character_in_its_column() {
+    let old = screen(24, 80);
+    // A row as `ls` writes it, with a tab that jumps to the next stop, and a row
+    // with text that the program kept out of sight.
+    replay_terminal_bytes(&old, b"ab\tcd\r\n\x1b[8mhidden\x1b[0m tail");
+
+    let replay = screen_replay_bytes(&old.lock());
+    let passed = screen(24, 80);
+    replay_terminal_bytes(&passed, &replay);
+
+    let before = read_columns(&old);
+    assert_eq!(
+        before[0],
+        [(0, 'a'), (1, 'b'), (8, 'c'), (9, 'd')],
+        "the fixture row holds the text after the tab at its stop"
+    );
+    assert_eq!(
+        before[1],
+        [(7, 't'), (8, 'a'), (9, 'i'), (10, 'l')],
+        "the fixture row hides six cells before the space"
+    );
+    let after = read_columns(&passed);
+    assert_eq!(
+        after[..2].to_vec(),
+        before[..2].to_vec(),
+        "each character of the two rows comes back in its column"
+    );
 }
