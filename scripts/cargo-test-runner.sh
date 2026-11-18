@@ -9,8 +9,14 @@
 # the person. The value of `HORIZON_FORBID_REAL_HOME` is that home, and the guard
 # of `horizon-browser-control` ends a test that names it anyway, with the line
 # that asked for it.
+#
+# macOS gives a process 256 open files, and one test process runs every test of a
+# crate, so the limit that a board of panels needs must be in place before the
+# first test starts. `horizon_core::open_files` sets the same ceiling for an
+# application, which the runner cannot call.
 case "$1" in
   */deps/*)
+    ulimit -n 8192 2>/dev/null || true
     person=${HOME:-}
     private=$(mktemp -d "${TMPDIR:-/var/tmp}/horizon-test-home.XXXXXX") || exit 1
     if [ -n "$person" ]; then
