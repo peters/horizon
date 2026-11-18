@@ -250,7 +250,7 @@ impl HorizonApp {
             clipboard_images: crate::clipboard_image::ClipboardImages::new(),
             terminal_selection_drag: TerminalSelectionDragState::default(),
             config_last_mtime, shutdown_progress: None,
-            pending_session_switch: None, exit_cleanup_complete: false, welcome: super::welcome::WelcomeCache::default(),
+            pending_session_switch: None, exit_cleanup_complete: false, exit_code: None, welcome: super::welcome::WelcomeCache::default(),
             setup: super::setup::SetupState::new(),
             exit_save_deadline: None,
             transcript_deletes: super::transcript_deletes::PendingTranscriptDeletes::default(), speech: super::speech::SpeechUi::new(),

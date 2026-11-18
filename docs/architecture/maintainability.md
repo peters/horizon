@@ -505,7 +505,9 @@ when it names one of those kinds.
     `holds_session_lease` in `folder_requests.rs` gives that fact to the close
     and to the pump of the folder requests.
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
-    ownership and persistence sequencing in `lifecycle/shutdown.rs`
+    ownership and persistence sequencing in `lifecycle/shutdown.rs`. `exit_process`
+    there is the one end of the process for a close, a quit and the exit of the
+    toolkit. A test build records the status and does not end the test binary.
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI
   - `panels`: panel-area orchestration and body rendering, with gesture and
     context-menu handling and outcome application in `panels/interaction.rs`

@@ -53,9 +53,21 @@ impl HorizonApp {
         self.shutdown_progress = Some(progress);
     }
 
+    /// Ends the process of Horizon with `code`: the one end of a close, of a quit
+    /// and of the exit of the toolkit. A test build records the status and
+    /// returns, because an exit of the test binary skips every test after it
+    /// while cargo still reports success.
+    pub(in crate::app) fn exit_process(&mut self, code: i32) {
+        self.exit_code = Some(code);
+        #[cfg(not(test))]
+        crate::plugin_install::exit_after_releasing_plugins(code);
+    }
+
     #[profiling::function]
     pub(in crate::app) fn poll_shutdown_progress(&mut self) {
-        if !self.finish_saved_session_deletion_for_shutdown() {
+        // The process ends with the frame that asked for it; only the frames of
+        // a test follow, and they end nothing a second time.
+        if self.exit_code.is_some() || !self.finish_saved_session_deletion_for_shutdown() {
             return;
         }
         let Some(progress) = &self.shutdown_progress else {
@@ -93,11 +105,11 @@ impl HorizonApp {
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
-        if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
+        let failed = browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed;
+        if failed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
-            crate::plugin_install::exit_after_releasing_plugins(1);
         }
-        crate::plugin_install::exit_after_releasing_plugins(0);
+        self.exit_process(i32::from(failed));
     }
 
     #[profiling::function]

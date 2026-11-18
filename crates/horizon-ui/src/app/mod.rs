@@ -536,6 +536,8 @@ pub struct HorizonApp {
     shutdown_progress: Option<ShutdownProgress>,
     pending_session_switch: Option<PendingSessionSwitch>,
     exit_cleanup_complete: bool,
+    /// The status that the end of this run asked the process to end with.
+    exit_code: Option<i32>,
     /// When the exit stops waiting for the session writer.
     exit_save_deadline: Option<Instant>,
     /// Transcripts whose delete runs on the coordination worker, so a panel
@@ -755,7 +757,7 @@ impl eframe::App for HorizonApp {
         self.run_exit_cleanup();
         // macOS can leave Horizon running as a windowless app after eframe
         // has already torn down the viewport, so terminate explicitly.
-        crate::plugin_install::exit_after_releasing_plugins(0);
+        self.exit_process(0);
     }
 }
 

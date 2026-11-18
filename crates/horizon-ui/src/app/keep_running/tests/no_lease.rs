@@ -9,8 +9,8 @@ use horizon_core::{
 };
 
 use super::{
-    Recorder, ask_frame, button, close_frame, close_request, commands, fill_of, press, press_key, running, settled_ask,
-    texts, warm_up,
+    Recorder, ask_frame, button, close_frame, close_request, commands, exit_status, fill_of, press, press_key, running,
+    settled_ask, texts, warm_up,
 };
 use crate::app::HorizonApp;
 use crate::app::notify::Notifications;
@@ -119,6 +119,7 @@ fn end_them_and_quit_ends_a_window_without_a_lease() {
         WindowCloseSetting::KeepRunning,
         "the answer of a window without a lease changes no setting"
     );
+    assert_eq!(exit_status(&ctx, &mut app), 0, "the answer ends the process");
 }
 
 /// With the choice `keep_running`, the close of a window without a lease hides
@@ -148,8 +149,7 @@ fn the_choice_keep_running_asks_in_a_window_without_a_lease() {
 /// holds no lease too: with the choice `keep_running` its close hides nothing.
 ///
 /// The board of a chooser holds no panel. This test gives it one, so the close
-/// has a program to ask for: the close of an empty board ends Horizon in that
-/// same frame, and with it the process of the tests.
+/// has a program to ask for.
 #[test]
 fn the_choice_keep_running_hides_no_window_that_took_no_session() {
     let chooser = StartupChooser {
@@ -179,6 +179,32 @@ fn the_choice_keep_running_hides_no_window_that_took_no_session() {
     assert!(app.shutdown_progress.is_none(), "the close ends nothing yet");
     assert!(recorder.lines().is_empty(), "nothing is said about a hide");
     app.board.shutdown_terminal_panels();
+}
+
+/// The real chooser of a start, whose board holds no panel: with the choice
+/// `keep_running` its close hides nothing and ends Horizon, as the choice `ask`
+/// does when nothing runs.
+#[test]
+fn the_choice_keep_running_ends_a_chooser_that_runs_nothing() {
+    let chooser = StartupChooser {
+        reason: StartupPromptReason::MultipleRecoverable,
+        config_path: "config.json".to_owned(),
+        sessions: Vec::new(),
+    };
+    let (_temp, ctx, mut app, recorder) = app_of(WindowCloseSetting::KeepRunning, StartupDecision::Choose(chooser));
+    assert!(app.active_session.is_none(), "the window took no session");
+
+    let sent = commands(&ctx, &mut app, close_request());
+
+    assert!(
+        !sent.contains(&ViewportCommand::Visible(false)),
+        "the window is not hidden: {sent:?}"
+    );
+    assert!(app.keep_running.ask.is_none(), "nothing runs, so nothing is asked");
+    assert!(app.shutdown_progress.is_some(), "the close ends Horizon");
+    assert_eq!(exit_status(&ctx, &mut app), 0, "the close ends the process");
+    assert!(!app.keep_running.hidden, "no window is hidden");
+    assert!(recorder.lines().is_empty(), "nothing is said about a hide");
 }
 
 /// One frame that writes the heartbeat of the lease, and the answer of the

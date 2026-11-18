@@ -111,6 +111,21 @@ fn press_key(ctx: &Context, app: &mut HorizonApp, key: Key) -> egui::FullOutput 
     frame_with(ctx, app, input)
 }
 
+/// The status that the end of the window asks the process to end with: the
+/// frames of the exit run until the window asks, as the frames of a window that
+/// ends do. A test build records the status where a normal build ends the process.
+fn exit_status(ctx: &Context, app: &mut HorizonApp) -> i32 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(status) = app.exit_code {
+            return status;
+        }
+        assert!(std::time::Instant::now() < deadline, "the exit never ends the process");
+        let _ = frame_with(ctx, app, raw_input([1400.0, 900.0], None));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// The commands that the frame of `input` sent to the main window.
 fn commands(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> Vec<ViewportCommand> {
     frame_with(ctx, app, input)
@@ -397,6 +412,8 @@ fn the_choice_ask_ends_at_once_when_no_program_runs() {
     assert!(sent.contains(&ViewportCommand::CancelClose), "{sent:?}");
     assert!(app.shutdown_progress.is_some(), "the exit of the panels runs");
     assert!(app.keep_running.ask.is_none(), "nothing runs, so nothing is asked");
+    assert_eq!(exit_status(&ctx, &mut app), 0, "the close ends the process");
+    assert!(!app.keep_running.hidden, "the window that ends is not hidden");
 }
 
 /// The ask counts the programs of this computer and the panels of a machine, and
