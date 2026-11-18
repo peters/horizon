@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::hub::{MAX_LIVE_LINKS, REFRESH_EVERY, RESIZE_EVERY};
+use super::hub::{MAX_LIVE_LINKS, REFRESH_EVERY};
 use super::outbox::{CEILING_BYTES, Next, Outbox, Push, RESUME_BYTES, Tag};
 use super::protocol::{
     DEVICE_CHARS, ID_CHARS, LABEL_CHARS, LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest,

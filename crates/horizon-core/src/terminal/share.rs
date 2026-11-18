@@ -202,6 +202,7 @@ impl ShareSource {
     /// no size of its own body, and draws the grid from the top left. The thread
     /// that shares the terminal calls this, and a later screen carries the grid.
     /// Answers whether the grid changed.
+    #[must_use]
     pub fn hold_grid(&self, cols: u16, rows: u16) -> bool {
         let Some(term) = self.term.upgrade() else {
             return false;

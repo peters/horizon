@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::super::hub::RESIZE_EVERY;
 use super::super::protocol::{LiveEvent, LiveRequest};
-use super::{Computer, OWNER, bytes, computer, follow, panel, text};
+use super::{Computer, OWNER, computer, follow, panel, text};
 use crate::server::LinkRegistry;
 
 /// The grid that a follower gives the program of a panel that it follows.

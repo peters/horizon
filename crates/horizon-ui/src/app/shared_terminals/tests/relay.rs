@@ -340,14 +340,11 @@ fn lists(app: &HorizonApp, id: &str) -> bool {
         .any(|computer| computer.device == "desk-a" && computer.panels.iter().any(|listed| listed.id == id))
 }
 
-/// The person of one computer types in a terminal of another computer, and the
-/// program of that computer takes the grid of the window that typed: the size of
-/// the program changes, both sides show the same grid, and a third computer that
-/// only watches takes the new grid and keeps its history. The person of the owner
-/// then types, and the size of that panel comes back.
-/// Mutation: drop the relay of the request (no size changes), send the screens of
-/// a new grid to the follower that asked alone (the third computer keeps the old
-/// grid), or keep the hold after the owner typed (the size never comes back).
+/// The program of A takes the grid of the window of B, which typed there. C, which
+/// only watches, takes the new grid and keeps its history; the person of A then
+/// types, and the size of that panel comes back.
+/// Mutation: drop the relay of the request, send the screens of a new grid to the
+/// follower that asked alone, or keep the hold after the owner typed.
 #[test]
 fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
     let home = tempfile::tempdir().expect("the home of the server");
@@ -364,14 +361,7 @@ fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
     frames_until(
         "B and C list the panel of A",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
-        |apps| {
-            apps[1]
-                .shared_terminals
-                .found
-                .computers
-                .iter()
-                .any(|computer| computer.device == "desk-a")
-        },
+        |apps| lists(apps[1], &id) && lists(apps[2], &id),
     );
 
     // The program of A writes the lines that are the history of a follower.
@@ -380,14 +370,8 @@ fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
         .panel_mut(panel)
         .expect("the owner panel")
         .write_input(lines.as_bytes());
-    frames_until(
-        "A shows the last line",
-        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
-        |apps| text(apps[0], panel).contains("GOT:line 60"),
-    );
 
-    // Two computers follow the panel, and the body of the panel of B fits a grid
-    // that is not the grid of the stream.
+    // Two computers follow the panel, and the body of B fits another grid.
     b.open_shared_terminal("desk-a", &id, &ctx_b);
     let follow_b = follower_of(&b).expect("the follow panel of B");
     frames_until(
@@ -420,14 +404,9 @@ fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
         .expect("the follow panel")
         .write_input(b"size\n");
     frames_until(
-        "A holds the grid of B",
+        "A holds the grid of B, and C shows it",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
-        |apps| super::size::shown(apps[0], panel) == (asked.1, asked.0),
-    );
-    frames_until(
-        "C shows the grid of B",
-        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
-        |apps| grid(apps[2], follow_c) == asked,
+        |apps| super::size::shown(apps[0], panel) == (asked.1, asked.0) && grid(apps[2], follow_c) == asked,
     );
     b.board
         .panel_mut(follow_b)

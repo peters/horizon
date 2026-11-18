@@ -9,7 +9,7 @@ mod render;
 mod scrollbar;
 
 use egui::{Context, FontId, Vec2};
-use horizon_core::Panel;
+use horizon_core::{Panel, Terminal};
 
 use self::ime::{clear_terminal_ime_state, publish_terminal_ime_output};
 pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
@@ -88,7 +88,7 @@ impl<'a> TerminalView<'a> {
         // panel shows the grid of its stream, and a panel whose program a follower
         // holds shows the grid of that follower.
         let streamed = self.panel.terminal().filter(|terminal| terminal.shows_foreign_grid());
-        let (new_rows, new_cols) = streamed.map_or((viewport.rows, viewport.cols), |terminal| terminal.shown_grid());
+        let (new_rows, new_cols) = streamed.map_or((viewport.rows, viewport.cols), Terminal::shown_grid);
         if streamed.is_none() {
             self.panel
                 .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
