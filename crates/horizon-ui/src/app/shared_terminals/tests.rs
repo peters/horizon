@@ -67,8 +67,10 @@ struct Relay {
     /// the panels whose screen it is taking now: the relay of the server.
     awaiting: Vec<String>,
     replay: Vec<String>,
-    /// How many screens the owner side sent, how many the follower of this
-    /// window took, and how many it asked for.
+    /// How many screens the owner side sent, how many of them the follower of
+    /// this window took with a new screen that clears its history, and how many
+    /// new screens it asked for. A screen that is not new draws in place, so it
+    /// clears no history and a test does not count it.
     screens: usize,
     taken: usize,
     refreshes: usize,
@@ -283,7 +285,7 @@ impl LiveLink for StandIn {
         }
         relay.screens += 1;
         if relay.takes(panel, true, false, everyone) {
-            relay.taken += 1;
+            relay.taken += usize::from(fresh);
             relay.grids.push((cols, rows));
             relay.awaiting.retain(|waiting| waiting != panel);
             relay.replay.push(panel.to_owned());
@@ -652,10 +654,14 @@ fn a_follower_reads_the_lines_that_the_program_wrote_before_it_came() {
 
     // A second computer follows the same panel. The owner makes the screen of
     // that computer, and it reaches that computer alone: the follower of this
-    // window takes none of it, so its history and its screen do not change.
+    // window takes no screen that starts a new one, so its history and its
+    // screen stay. The screens are not counted: a join owes its screen and a
+    // second one 250 ms later, which the frames of a busy computer reach, and
+    // that second screen draws in place.
     let sent = window.link.relay().screens;
     let taken = window.link.relay().taken;
     let lines = above_the_viewport(&window.app, follow);
+    let screen = text(&window.app, follow);
     let other = LiveWatcher {
         device: "desk-other".to_owned(),
         label: "Other".to_owned(),
@@ -671,21 +677,13 @@ fn a_follower_reads_the_lines_that_the_program_wrote_before_it_came() {
         refresh: true,
     });
     window.frames(3);
-    assert_eq!(
-        window.link.relay().screens,
-        sent + 1,
-        "the owner makes a screen for the computer that joined"
-    );
-    assert_eq!(
-        window.link.relay().taken,
-        taken,
-        "a follower that relays takes no screen of another follower"
-    );
-    assert_eq!(
-        above_the_viewport(&window.app, follow),
-        lines,
-        "a follower that relays keeps its history when another follower joins"
-    );
+    let relay = window.link.relay();
+    let kept = above_the_viewport(&window.app, follow);
+    let shown = text(&window.app, follow);
+    assert!(relay.screens > sent, "a screen for the joined computer");
+    assert_eq!(relay.taken, taken, "a follower takes no new screen of another");
+    assert_eq!(kept, lines, "a relay keeps its history");
+    assert_eq!(shown, screen, "a relay keeps its screen");
 }
 
 #[test]
