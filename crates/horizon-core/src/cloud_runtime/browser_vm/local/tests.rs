@@ -426,14 +426,48 @@ fn a_start_reports_a_route_only_when_the_vnc_server_greets() {
     let quiet_fixture = Fixture::new();
     quiet_fixture.mark_image();
     quiet_fixture.start_ssh_server();
-    let (quiet, server) = vnc_listener(None);
+    // A display that accepts and never greets, and a start that waits a moment for it.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let quiet = listener.local_addr().expect("an address").port();
+    let holder = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        held.extend(listener.incoming().take(64).flatten());
+    });
     let error = quiet_fixture
         .vm()
         .with_ports(quiet, 2293)
+        .with_greet_wait(std::time::Duration::from_millis(300))
         .up(None)
         .expect_err("a VNC server that greets nothing");
-    server.join().expect("the listener");
     assert!(error.to_string().contains("no VNC greeting"), "{error}");
+    drop(holder);
+}
+
+#[test]
+fn a_start_waits_for_a_display_that_greets_after_its_first_connection() {
+    // The display of a container needs a moment after the container starts, and its
+    // first connection can come before it greets, so the start tries again.
+    let fixture = Fixture::new();
+    fixture.mark_image();
+    fixture.start_ssh_server();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let port = listener.local_addr().expect("an address").port();
+    std::thread::spawn(move || {
+        let mut first = true;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            if first {
+                first = false;
+                continue;
+            }
+            let _ = stream.write_all(b"RFB 003.008\n");
+        }
+    });
+    fixture
+        .vm()
+        .with_ports(port, 2222)
+        .up(None)
+        .expect("a display that greets on its second connection");
 }
 
 #[test]
