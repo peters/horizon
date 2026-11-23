@@ -59,7 +59,7 @@ horizon-app-host = { path = "crates/horizon-app-host", version = "0.2.7" }
 quick-xml = "0.42.0"
 # Binary property lists and SRP group arithmetic for modern casting.
 plist = "1.10.1"
-mdns-sd = "0.21.4"
+mdns-sd = "0.22.0"
 horizon-cast = { path = "crates/horizon-cast" }
 horizon-media = { path = "crates/horizon-media" }
 # Cast v2 receivers present self-signed TLS certificates on port 8009.
