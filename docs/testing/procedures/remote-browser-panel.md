@@ -22,9 +22,10 @@ page scroll, the navigation and the fixed limit of the pointer.
 - Candidate: a build of `horizon` and `horizon-browser` from this branch or later.
 - Platforms: Linux on the computer of the person. macOS uses the same commands.
 - This procedure does not test: the egress profile and the deploy entry. Later
-  pulls of #1780 add them. It does not test the pointer of the person on a
-  remote page, because the MCP contract has no coordinate pointer operation. Use
-  the task `R4` for that limit.
+  pulls of #1780 add them.
+- It does not test a drag that the page follows, because a drag does not cross
+  the channel. The task `R4` examines that limit, the limit of the other mouse
+  buttons and the point of a click.
 
 ## 3. Safety
 
@@ -133,10 +134,10 @@ page scroll, the navigation and the fixed limit of the pointer.
 
 4. Examine the two lines below the chrome.
 
-   Result: the first line is
-   `To click this page, open the machine's display in a device panel.` The second
-   line is `This panel keeps the browser host that it was created with; a new
-   panel follows the settings.`
+   Result: the first line is `A left click on this page reaches the host at its
+   point; a drag does not cross, and another mouse button or a text character
+   outside the US layout is refused.` The second line is `This panel keeps the
+   browser host that it was created with; a new panel follows the settings.`
 
 5. A test creates the same panel without the settings entry:
 
@@ -182,23 +183,52 @@ page scroll, the navigation and the fixed limit of the pointer.
    Result: the next frame of the panel shows the new page, and `panel.url` gives
    its address.
 
-### 6.4 R4 — the limit of the pointer is typed and visible
+### 6.4 R4 — a left click of the person reaches the page, and a drag does not
 
-1. Send a click:
+1. Click a link of the page in the panel of step 6.2 with the left button.
 
-   ```rust
-   let click = BrowserCommand::Input(BrowserInput::MousePress { x: 30.0, y: 40.0,
-       button: BrowserButton::Left, click_count: 1, buttons: 1,
-       modifiers: BrowserModifiers::none() });
+   Result: the page of the host changes to that link, and the next frame shows
+   the new page. The click crossed as one click at its point.
+
+2. Click a control that needs a real pointer position, such as a canvas, a map or
+   a video control, or let an agent click one point:
+
+   ```
+   browser_act { "panel_id": "<id>", "action": "click", "x": 120, "y": 240 }
    ```
 
-   Result: `panel.remote_host_refusal(&click)` is `Some(RemoteHostRefusal::Pointer)`
-   and `panel.try_send(click)` returns false. The page does not change.
+   Result: the point of the page reacts. The answer is `completed`.
 
-2. Examine the panel.
+3. Ask the agent to click a point outside the page viewport, for example
+   `x: 5000`.
 
-   Result: the first line of step 6.2.4 gives the device panel of the machine as
-   the way to click the page.
+   Result: the answer is `invalid_input`, and its message names the point and the
+   size of the viewport. The page does not change.
+
+4. Drag inside the page, for example across a slider.
+
+   > **CAUTION:** A DRAG DOES NOT CROSS THE CHANNEL. THE PANEL CLICKS WHERE THE POINTER LET GO.
+
+   Result: the panel clicks the point where the drag ended, and the page does not
+   follow the path of the drag. The note of the panel states this limit.
+
+5. Double-click a word of the page.
+
+   Result: the page gets two single clicks at that point, so a control that
+   counts clicks changes two times. The page does not select the word, because
+   the channel carries no double click.
+
+6. Click the page with the right button.
+
+   Result: the page does not change, and no context menu opens. The panel shows
+   the line that a page of a browser host takes a left click only, and that names
+   the display of that machine in a device panel.
+
+7. Press the left button inside the page, move the pointer out of the Horizon
+   window, and release it there.
+
+   Result: the page gets no click. The widget ends its own capture, and only a
+   release of the person inside the page crosses.
 
 ### 6.5 R5 — the pages of the person and of an agent stay apart
 

@@ -10,11 +10,13 @@
 //! The frames of the page are the PNG that `browser_screenshot` inlines, so the
 //! panel never reads a private path on the remote machine. The input crosses as
 //! the semantic calls of the contract: a key press, a page scroll, a navigation,
-//! a viewport. A pointer position does not cross it, because the contract has no
-//! coordinate pointer operation at all: a click takes an element, not a point.
-//! That limit belongs to the contract that the agents use, so an agent has the
-//! same limit on a local page, and a person who wants to click the page of the
-//! host uses the display of that machine in a device panel.
+//! a viewport, and a left click at a point. The release of the person's pointer
+//! becomes one click at its point, and the press alone becomes nothing, so a drag
+//! does not cross: the release of a drag clicks where the pointer let go. The
+//! contract counts the clicks of a sequence itself, so a double click crosses as
+//! two single clicks, and a click of another mouse button does not cross at all.
+//! A page that needs a drag or another button uses the display of that machine
+//! in a device panel.
 //!
 //! The actor of the pages of a panel is [`PANEL_ACTOR`], which no agent has, so a
 //! page of a panel and a page of an agent never appear in each other's list.
@@ -44,8 +46,8 @@ use view::{HostChannel, HostOpener, HostPage, HostView};
 pub const PANEL_ACTOR: &str = "horizon:person:browser-panel";
 
 /// The note that a panel of a browser host shows while it is ready: what the
-/// channel carries, and the one way to click the page.
-pub const POINTER_NOTE: &str = "To click this page, open the machine's display in a device panel.";
+/// channel carries, and the input limits that it keeps.
+pub const HOST_INPUT_NOTE: &str = "A left click on this page reaches the host at its point; a drag does not cross, and another mouse button or a text character outside the US layout is refused.";
 
 /// The note that a panel of a browser host shows about its backend: the page
 /// lives on the machine of the host, so another entry in the settings cannot
@@ -102,8 +104,8 @@ impl RemoteHostFailure {
 /// A panel command that the channel of a browser host cannot carry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteHostRefusal {
-    /// The contract has no coordinate pointer operation.
-    Pointer,
+    /// The contract clicks with the left button only.
+    Button,
     /// The contract takes no text that the US layout cannot press.
     Text,
     /// A page of a host does not take this command from a panel.
@@ -115,7 +117,7 @@ impl RemoteHostRefusal {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::Pointer => "remote_host_pointer_unsupported",
+            Self::Button => "remote_host_button_unsupported",
             Self::Text => "remote_host_text_unsupported",
             Self::Unsupported => "remote_host_command_unsupported",
         }
@@ -125,8 +127,8 @@ impl RemoteHostRefusal {
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
-            Self::Pointer => {
-                "A page of a browser host takes no pointer position. Use a device panel with SSH to click the display of that machine."
+            Self::Button => {
+                "A page of a browser host takes a left click only. Use that button on the display of that machine in a device panel."
             }
             Self::Text => {
                 "A page of a browser host takes only the text that the US keyboard layout can press. Type the text on the display of that machine in a device panel."
@@ -299,9 +301,6 @@ impl BrowserPanelState {
             return None;
         }
         match command {
-            BrowserCommand::Input(
-                horizon_browser::BrowserInput::MousePress { .. } | horizon_browser::BrowserInput::MouseRelease { .. },
-            ) => Some(RemoteHostRefusal::Pointer),
             BrowserCommand::DropFiles { .. }
             | BrowserCommand::Video { .. }
             | BrowserCommand::Orientation { .. }
@@ -312,10 +311,22 @@ impl BrowserPanelState {
         }
     }
 
+    /// Whether the channel of this panel carries the button state of the
+    /// pointer.
+    ///
+    /// A local engine holds a pressed button until its release arrives, so a
+    /// capture that the widget cancels must still send that release. The channel
+    /// of a browser host carries no press at all, and one release on it is one
+    /// click, so a release that the person did not make would click the page.
+    #[must_use]
+    pub fn carries_pointer_button_state(&self) -> bool {
+        !self.is_remote_host()
+    }
+
     /// The short line that a panel of a browser host shows while it is ready.
     #[must_use]
     pub fn remote_host_note(&self) -> Option<&'static str> {
-        self.is_remote_host().then_some(POINTER_NOTE)
+        self.is_remote_host().then_some(HOST_INPUT_NOTE)
     }
 
     /// The short line that says that this panel keeps the host that it was

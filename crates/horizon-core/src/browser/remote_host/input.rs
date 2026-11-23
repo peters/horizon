@@ -1,13 +1,14 @@
 //! What a panel command becomes on the channel of a browser host.
 //!
 //! The channel is the MCP contract of that host, so a command reaches the page
-//! as the call of one tool. The contract is semantic: it takes a click on an
-//! element, never a pointer position. A keyboard key, an untargeted page scroll
-//! and a navigation cross it, and a pointer position does not, so this module
-//! names that difference instead of dropping the command.
+//! as the call of one tool. The contract is semantic: a click names an element or
+//! one point of the page, and it presses the left button. A keyboard key, an
+//! untargeted page scroll, a navigation and a left click at a point cross it. The
+//! button state of a drag and a click of another mouse button do not, so this
+//! module names that difference instead of dropping the command.
 
 use horizon_browser::{
-    BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers,
+    BrowserButton, BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers,
 };
 
 use super::RemoteHostRefusal;
@@ -35,9 +36,10 @@ impl HostAction {
 /// channel cannot carry it.
 ///
 /// # Errors
-/// Returns [`RemoteHostRefusal::Pointer`] for a pointer position and
-/// [`RemoteHostRefusal::Unsupported`] for a command that a page of a host does
-/// not take from this panel.
+/// Returns [`RemoteHostRefusal::Button`] for a click of a mouse button other
+/// than the left one, [`RemoteHostRefusal::Text`] for text that the US layout
+/// cannot press, and [`RemoteHostRefusal::Unsupported`] for a command that a
+/// page of a host does not take from this panel.
 pub(super) fn translate(command: &BrowserCommand, panel_id: &str) -> Result<Vec<HostAction>, RemoteHostRefusal> {
     let actions = match command {
         BrowserCommand::Navigate(url) => vec![HostAction {
@@ -73,10 +75,27 @@ fn press(panel_id: &str, key: &str) -> HostAction {
 
 fn input_actions(input: &BrowserInput, panel_id: &str) -> Result<Vec<HostAction>, RemoteHostRefusal> {
     Ok(match input {
-        // The contract carries no pointer position, so a move changes nothing on
-        // the page that this panel can see.
-        BrowserInput::MouseMove { .. } | BrowserInput::KeyUp { .. } => Vec::new(),
-        BrowserInput::MousePress { .. } | BrowserInput::MouseRelease { .. } => return Err(RemoteHostRefusal::Pointer),
+        // A move changes nothing on the page that this panel can see: the
+        // contract carries no pointer state, only the point of a click. A press
+        // alone is not a click either, so only the release below crosses. A drag
+        // therefore does not cross, and its release clicks where the pointer let
+        // go.
+        BrowserInput::MouseMove { .. } | BrowserInput::KeyUp { .. } | BrowserInput::MousePress { .. } => Vec::new(),
+        // One release is one click, and the contract presses the left button
+        // only. The contract counts the clicks of a sequence itself, so a count
+        // taken from the click count of the release would press again for every
+        // release before it, and a double click would reach the page as three
+        // presses. A double click therefore crosses as two single clicks: the
+        // page gets as many presses as the person made.
+        BrowserInput::MouseRelease { x, y, button, .. } => {
+            if *button != BrowserButton::Left {
+                return Err(RemoteHostRefusal::Button);
+            }
+            vec![HostAction::act(
+                panel_id,
+                serde_json::json!({ "action": "click", "x": x, "y": y, "count": 1 }),
+            )]
+        }
         // A wheel over the page is a page scroll. The contract scrolls the page
         // and takes no point, so the deltas cross and the point does not.
         BrowserInput::Wheel { delta_x, delta_y, .. } => vec![HostAction::act(
