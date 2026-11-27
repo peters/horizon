@@ -13,11 +13,12 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests the orchestrator dock at the right edge of the root window,
-and the conversation that it runs. It proves that the dock draws only after the
-switch turns it on, that the canvas ends at its left edge, that the minimap stays
-on the canvas, that each workspace keeps its own draft and its own conversation,
-and that a message of the person reaches an agent program with no terminal and
-comes back as an answer. It also proves the look of the dock: the field with its
+and the conversation that it runs. It proves that the dock draws only after its
+setting turns it on, that the canvas ends at its left edge, that the minimap
+stays on the canvas, that each workspace keeps its own draft and its own
+conversation, and that a message of the person reaches an agent program with no
+terminal and comes back as an answer. It also tests the two parts of the sidebar
+that the dock adds: the group `Agents` and the button `+ Rent a machine`. It also proves the look of the dock: the field with its
 control inside it, the example rows of the empty state, the state chip of the
 header with the cost beside it, the request and the result of a tool row, the
 gradient bar of an agent text, and the chevron of the three chips.
@@ -474,6 +475,116 @@ open, because Horizon types no wake line for an owner without a terminal.
    Result: The dock adds no text, because the program holds no `next_click` any
    more. The press waits in the queue of the card for five minutes.
 
+### 6.17 OD-17 — The setting of Settings turns the dock on
+
+1. Stop the fixture. Start it again with the same arguments, but without
+   `HORIZON_ORCHESTRATOR_DOCK=1`, and use `--state <evidence>/dock-setting`.
+
+   Result: The Horizon window shows no column at its right edge, and the sidebar
+   shows no group `Agents` and no button `+ Rent a machine`.
+
+2. Open **Menu › Settings** and read the tab General, section Features.
+
+   Result: The section holds the check box **Orchestrator dock** with the line
+   `A conversation with one agent at the right edge of the window. It does the
+   work of the workspace and shows it as cards. Experimental.` under it. The check
+   box is clear.
+
+3. Press the check box **Orchestrator dock**.
+
+   Result: The dock stands at the right edge of the window without a restart, and
+   the sidebar shows the group `Agents` and the button `+ Rent a machine`. The
+   canvas ends at the left edge of the dock.
+
+4. Press the check box again.
+
+   Result: The dock goes, and the group and the button go with it. The canvas
+   reaches the right edge of the window.
+
+5. Press the check box once more, and restart Horizon with the same arguments.
+
+   Result: The dock stands at the right edge of the window after the restart,
+   because the setting is saved.
+
+6. Press the chord of the command palette, type `orchestrator dock` and press
+   Enter. Then close the Settings window, open it again and read the check box.
+
+   Result: The dock goes, and the check box is still clear or still checked as
+   step 5 left it: the palette turns the dock of this run over and writes no
+   setting.
+
+> **CAUTION:** THE NEXT STEP CHANGES SETTINGS. TURN THE SETTING OFF AFTER IT.
+
+7. Clear the check box **Orchestrator dock** and close the Settings window.
+
+   Result: The window holds no dock.
+
+### 6.18 OD-18 — The group Agents
+
+1. Start the run of OD-17 step 3, so that the dock is on, and look at the sidebar
+   under the section Machines.
+
+   Result: The header `Agents` stands 18 points from the left edge of the sidebar,
+   and the count `4` follows it in the monospace font. Four rows stand under the
+   header, 34 points each, in this order: Claude, Codex, Pi, Gemini.
+
+2. Read each row.
+
+   Result: A state dot of 8 points stands at the left of the row. The dot is
+   filled green when the program of that row is on the `PATH` of the fixture, and
+   the line under the name reads `on this computer`. The dot is hollow when the
+   program is not there, the name is dim, and the line reads
+   `not found on this computer`. On a computer without Claude Code, the row
+   `Claude` shows the hollow dot.
+
+3. Point at a row, and press it.
+
+   Result: The row shows no card and no hover text, the pointer stays an arrow,
+   and the press does nothing.
+
+4. Start a computer where none of the four programs is on the `PATH`. Start the
+   fixture with the setting on.
+
+   Result: Every row says `looking` with a hollow dot for the first frame of the
+   window, and then the four rows say `not found on this computer`.
+
+### 6.19 OD-19 — The button + Rent a machine
+
+1. Read the end of the section Machines of the run of OD-18.
+
+   Result: The button `+ Rent a machine` stands under the rows of the machines,
+   or under the line `No machines yet. Set up rents one, or adds the Horizon
+   server.` when the list holds no machine. Its fill is the panel surface, it has
+   a 1 px outline and radius 10, it is 30 points high, and it keeps 12 points of
+   room at each side of the sidebar. The label is centred.
+
+2. Point at the button.
+
+   Result: The outline of the button becomes stronger and the pointer is a
+   pointing hand. The fill does not change.
+
+3. Press the button.
+
+   Result: The dock of the active workspace shows the bubble
+   `Rent a machine for this workspace. Show me the card with the type, the place and the price first.`
+   The chip of the header of the dock reads `working`, and the answer of the
+   stand-in follows it. The board opens no panel.
+
+4. Press the button again while the chip of the header reads `working`.
+
+   Result: The pointer shows a pointing hand, the hover text reads
+   `The orchestrator works`, and the press adds no message to the dock.
+
+5. Close every workspace of the window, and read the button.
+
+   Result: The label is dim, and the hover text reads `Open a workspace first`. A
+   press adds no message.
+
+6. Clear the check box **Orchestrator dock** in Settings, and read the end of the
+   section Machines.
+
+   Result: The button is gone.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.
@@ -522,6 +633,16 @@ open, because Horizon types no wake line for an owner without a terminal.
   `next_click` open, and `Claude` after the wait ends.
 - A press on a button of the card reaches the program of the dock, and the dock
   shows the text that names the button.
+- The setting **Orchestrator dock** turns the dock on and off without a restart,
+  and it is saved. The palette turns the dock of one run over and writes no
+  setting.
+- The group `Agents` stands under the machine section only while the dock is on.
+  It draws four rows in the order Claude, Codex, Pi, Gemini, and each row says
+  whether this computer has that program.
+- The button `+ Rent a machine` stands at the end of the machine section only
+  while the dock is on. One press sends one message to the orchestrator of the
+  active workspace, and the button sends nothing without an active workspace and
+  while that orchestrator works.
 
 ## 8. Cleanup
 

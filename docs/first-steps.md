@@ -562,6 +562,25 @@ panel, and its program ends. The setting is off at first and it is a value of
 this computer, so it does not follow a server. A panel of a machine and an ssh
 panel run their program in another place, so a holder never serves one.
 
+### Try the orchestrator dock
+
+The setting **Orchestrator dock**, on the General tab under **Features**, puts a
+column at the right edge of the window. The column holds a conversation with one
+agent program, and the agent does the work of the active workspace and shows it
+as cards on its canvas. The setting is off at first, and this feature is
+experimental.
+
+The column does not start an agent program by itself. Write in the field at the
+bottom of the column and press Enter, or press **+ Rent a machine** in the
+sidebar: that button asks the orchestrator of the active workspace for a machine
+of its own, and the agent shows the type, the place and the price before it rents
+one.
+
+The group **Agents** of the sidebar, under the machine section, says which agent
+programs this computer has. A green dot and `on this computer` name a program
+that Horizon found. A hollow dot and `not found on this computer` name a program
+that this computer lacks.
+
 ## Open a browser panel
 
 Browser panels need a source build from `main`. The **Browser** preset uses a

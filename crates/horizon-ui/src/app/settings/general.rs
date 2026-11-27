@@ -489,6 +489,18 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
         );
 
         ui.add_space(10.0);
+        changed |= ui
+            .checkbox(
+                &mut config.features.orchestrator_dock,
+                egui::RichText::new("Orchestrator dock").color(theme::FG()).size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "A conversation with one agent at the right edge of the window. It does the work of the workspace and shows it as cards. Experimental.",
+        );
+
+        ui.add_space(10.0);
         changed |= render_window_close_row(ui, config, view.window_cannot_hide);
 
         ui.add_space(10.0);

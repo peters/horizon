@@ -1,3 +1,4 @@
+pub(in crate::app) mod agents;
 mod computers;
 mod list;
 pub(in crate::app) mod machines;
@@ -5,6 +6,7 @@ mod menus;
 mod new_workspace;
 mod panel_rows;
 mod place;
+mod rent_machine;
 mod rich_menu;
 pub(in crate::app) mod rows;
 mod text;
@@ -79,6 +81,9 @@ struct SidebarActions {
     open_shared_terminal: Option<(String, String)>,
     /// A confirmed "Forget this machine" on the row of this machine.
     forget_machine: Option<String>,
+    /// A press on `+ Rent a machine`, which sends the message of the button to
+    /// the orchestrator of the active workspace.
+    rent_machine: bool,
     remove_empty_workspace: Option<WorkspaceId>,
     /// Put a workspace on this computer, or on a machine of the list.
     set_workspace_place: Option<(WorkspaceId, horizon_core::WorkspacePlace)>,
@@ -243,6 +248,7 @@ impl HorizonApp {
 
                 self.render_sidebar_workspaces(ui, workspace_data, actions, &mut drag_state);
                 self.render_sidebar_machines(ui, actions);
+                self.render_sidebar_agents(ui);
                 self.render_sidebar_computers(ui, actions);
             });
 
@@ -538,6 +544,17 @@ impl HorizonApp {
         ui.add_space(1.0);
     }
 
+    /// The presses of the machine section: Set up, and the button that rents a
+    /// machine for the active workspace.
+    fn apply_machine_section_presses(&mut self, ctx: &Context, actions: &SidebarActions) {
+        if actions.press_set_up {
+            self.press_set_up(ctx, horizon_core::SetupGoal::Choose);
+        }
+        if actions.rent_machine {
+            self.rent_a_machine(ctx);
+        }
+    }
+
     /// The actions of a press on a machine or on an agent of a machine.
     fn apply_machine_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
         if let Some(name) = actions.forget_machine.clone() {
@@ -591,9 +608,7 @@ impl HorizonApp {
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);
         }
-        if actions.press_set_up {
-            self.press_set_up(ctx, horizon_core::SetupGoal::Choose);
-        }
+        self.apply_machine_section_presses(ctx, actions);
         let workspace_collision_ids = self.workspace_collision_scope(None);
         let workspace_drop_target = actions.workspace_drop.map(|drop| {
             let moved = if sidebar_workspace_drop_should_dock(self.workspace_is_detached(drop.target_workspace_id)) {

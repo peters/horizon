@@ -17,9 +17,11 @@
 //!
 //! The dock keeps the right edge of the window, and an open Settings panel stands
 //! to its left, so the canvas ends at the left edge of the leftmost of the two.
-//! Nothing here is saved: the switch, the rectangle of a frame, the drafts and
-//! the conversations are the state of this run, as `sidebar_visible` and
-//! `minimap_visible` are.
+//! The setting `features.orchestrator_dock` turns the dock on, and the
+//! environment switch [`DOCK_SWITCH`] does the same for the fixture of the smoke
+//! test. Nothing here is saved: the switch of a run that the palette turned, the
+//! rectangle of a frame, the drafts and the conversations are the state of this
+//! run, as `sidebar_visible` and `minimap_visible` are.
 
 mod composer;
 mod empty;
@@ -42,9 +44,11 @@ use egui::Rect;
 use horizon_core::agent_bridge::{Bridge, BridgeError, ProgramSpec};
 
 use self::session::{Session, Start};
+use super::HorizonApp;
 
-/// The environment switch of this part. `1` turns the dock on; a setting replaces
-/// the variable in a later part.
+/// The environment switch of this part. `1` turns the dock on, for the fixture of
+/// the smoke test: the setting `features.orchestrator_dock` turns it on for a
+/// person.
 pub(in crate::app) const DOCK_SWITCH: &str = "HORIZON_ORCHESTRATOR_DOCK";
 /// The environment variable that replaces the program path of the orchestrator.
 /// The arguments of the program stay the same. It exists for the stand-in of the
@@ -60,8 +64,18 @@ const WORKER_FLUSH: Duration = Duration::from_secs(2);
 
 /// The state of the dock of this run.
 pub(in crate::app) struct OrchestratorDock {
-    /// Whether the switch of the experiment is on.
-    visible: bool,
+    /// The setting `features.orchestrator_dock`, as the last frame read it.
+    setting: bool,
+    /// Whether that setting is the switch of the dock: the dock of a run follows
+    /// the settings of the person, and a dock whose start named its switch, as a
+    /// test does, keeps it.
+    follows_setting: bool,
+    /// The environment switch of the fixture, which holds for the whole run.
+    environment: bool,
+    /// The switch of this run after the palette turned it: `None` until that
+    /// press, and then the choice of the person for this run. The setting stays
+    /// as Settings holds it.
+    run_switch: Option<bool>,
     /// The rectangle that the dock took in this frame, from before it drew.
     rect: Option<Rect>,
     /// The program of every conversation: `claude`, or the path that the
@@ -100,18 +114,26 @@ pub(in crate::app) struct LastFrame {
 }
 
 impl OrchestratorDock {
-    /// The dock of a start, as the environment switch names it.
-    pub(in crate::app) fn from_environment() -> Self {
-        Self::from_values(
+    /// The dock of a start whose settings hold `setting`: the dock is on when the
+    /// setting is on, or when the fixture names the environment switch.
+    pub(in crate::app) fn from_settings(setting: bool) -> Self {
+        let mut dock = Self::from_values(
+            setting,
             dock_switch(std::env::var(DOCK_SWITCH).ok().as_deref()),
             program_from_environment(std::env::var(PROGRAM_SWITCH).ok().as_deref()),
-        )
+        );
+        dock.follows_setting = true;
+        dock
     }
 
-    /// The dock of a start that names its two values.
-    fn from_values(visible: bool, program: PathBuf) -> Self {
+    /// The dock of a start that names its values: the setting and the environment
+    /// switch, which a test gives without the environment of the test process.
+    fn from_values(setting: bool, environment: bool, program: PathBuf) -> Self {
         Self {
-            visible,
+            setting,
+            follows_setting: false,
+            environment,
+            run_switch: None,
             rect: None,
             program,
             sessions: HashMap::new(),
@@ -123,7 +145,7 @@ impl OrchestratorDock {
     }
 
     pub(in crate::app) fn new(visible: bool) -> Self {
-        Self::from_values(visible, program_from_environment(None))
+        Self::from_values(visible, false, program_from_environment(None))
     }
 
     /// The dock of a test whose program is `program`: the seam of
@@ -131,15 +153,36 @@ impl OrchestratorDock {
     /// process.
     #[cfg(test)]
     pub(in crate::app) fn with_program(visible: bool, program: PathBuf) -> Self {
-        Self::from_values(visible, program)
+        Self::from_values(visible, false, program)
     }
 
+    /// Whether the dock draws in this frame. A run that the palette did not turn
+    /// keeps the setting of Settings and the environment switch of the fixture,
+    /// so a person who changes the setting sees the dock without a restart.
     pub(in crate::app) fn visible(&self) -> bool {
-        self.visible
+        self.run_switch.unwrap_or(self.setting || self.environment)
     }
 
     pub(in crate::app) fn toggle(&mut self) {
-        self.visible = !self.visible;
+        self.run_switch = Some(!self.visible());
+    }
+
+    /// Reads the setting of Settings again. The switch of the palette keeps the
+    /// choice of this run, so the dock that a person turned over stays so until
+    /// the next start.
+    pub(in crate::app) fn follow_setting(&mut self, setting: bool) {
+        if self.follows_setting {
+            self.setting = setting;
+        }
+    }
+
+    /// The dock of a test whose switch follows the setting of Settings, as the
+    /// dock of a run does, without the environment of the test process.
+    #[cfg(test)]
+    pub(in crate::app) fn following(setting: bool) -> Self {
+        let mut dock = Self::from_values(setting, false, program_from_environment(None));
+        dock.follows_setting = true;
+        dock
     }
 
     /// The rectangle of the dock in this frame. A frame that draws no dock has
@@ -308,10 +351,33 @@ impl OrchestratorDock {
         self.sessions.get(local_id).is_some_and(Session::has_bridge)
     }
 
+    /// Whether the conversation of `local_id` runs a turn now, which the button
+    /// of the sidebar reads: a message waits for that turn.
+    pub(in crate::app) fn busy(&self, local_id: &str) -> bool {
+        self.sessions.get(local_id).is_some_and(Session::busy)
+    }
+
     /// The conversations that own a child program now, which a test reads.
     #[cfg(test)]
     pub(in crate::app) fn running_bridges(&self) -> usize {
         self.sessions.values().filter(|session| session.has_bridge()).count()
+    }
+
+    /// The messages of the person of the conversation of `local_id`, which a test
+    /// reads: the words that the dock draws in the bubble of the person.
+    #[cfg(test)]
+    pub(in crate::app) fn person_messages(&self, local_id: &str) -> Vec<String> {
+        self.sessions.get(local_id).map_or_else(Vec::new, |session| {
+            session
+                .snapshot()
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    horizon_core::agent_bridge::Entry::Person { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
     }
 }
 
@@ -329,10 +395,143 @@ fn dock_switch(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+impl HorizonApp {
+    /// Sends `text` to the orchestrator of the active workspace as the message of
+    /// the person, and starts the program of that conversation first when it has
+    /// none. It is the path of the send of the composer in the four parts that
+    /// the dock keeps: `Session::say` holds the message, `begin_start` names the
+    /// start, `program_spec` builds it, and the worker of the dock runs it. A
+    /// start opens a process, so no part of it runs on the thread of the frame.
+    ///
+    /// It answers whether a message went out: a window without an active
+    /// workspace sends nothing, and neither does one whose orchestrator works.
+    pub(in crate::app) fn say_to_active_orchestrator(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let Some((local_id, directory)) = self
+            .board
+            .active_workspace
+            .and_then(|id| self.board.workspace(id))
+            .map(|workspace| (workspace.local_id.clone(), program_directory(workspace.cwd.as_deref())))
+        else {
+            return false;
+        };
+        if self.orchestrator_dock.busy(&local_id) {
+            return false;
+        }
+        let program = self.orchestrator_dock.program.clone();
+        let needs_bridge = {
+            let session = self.orchestrator_dock.session_mut(&local_id);
+            let needs_bridge = session.say(text);
+            needs_bridge && !session.is_starting()
+        };
+        if !needs_bridge {
+            return true;
+        }
+        let Some(request) = self.orchestrator_dock.begin_start(&local_id) else {
+            return false;
+        };
+        let spec = session::program_spec(&program, &directory, request.session.clone(), &local_id);
+        self.orchestrator_dock
+            .start_bridge(spec, local_id, request.generation, repaint_wake(ctx));
+        true
+    }
+}
+
+/// The directory that the program of a conversation runs in: the directory of
+/// its workspace, or the home of the person when the workspace names none.
+fn program_directory(cwd: Option<&std::path::Path>) -> PathBuf {
+    cwd.map_or_else(
+        || std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from),
+        std::path::Path::to_path_buf,
+    )
+}
+
+/// The wake of a bridge of a conversation that the sidebar started: the next
+/// frame of this window.
+fn repaint_wake(ctx: &egui::Context) -> Arc<dyn Fn() + Send + Sync> {
+    let ctx = ctx.clone();
+    Arc::new(move || ctx.request_repaint())
+}
+
 /// The program of a start: the value of [`PROGRAM_SWITCH`] when it names one, and
 /// [`PROGRAM`] otherwise.
 fn program_from_environment(value: Option<&str>) -> PathBuf {
     value
         .filter(|value| !value.is_empty())
         .map_or_else(|| PathBuf::from(PROGRAM), PathBuf::from)
+}
+
+/// The switch of the dock of a run: the setting of Settings, the environment
+/// variable of the fixture, and the switch that the palette turned for this run.
+#[cfg(test)]
+mod switch_tests {
+    use super::OrchestratorDock;
+
+    /// A dock whose program is the default one, so no test starts a program.
+    fn dock(setting: bool, environment: bool) -> OrchestratorDock {
+        OrchestratorDock::from_values(setting, environment, std::path::PathBuf::from("claude"))
+    }
+
+    #[test]
+    fn the_setting_turns_the_dock_on() {
+        assert!(dock(true, false).visible(), "the setting is on");
+        assert!(
+            !dock(false, false).visible(),
+            "the setting is off and no variable names it"
+        );
+    }
+
+    #[test]
+    fn the_environment_variable_turns_the_dock_on_without_the_setting() {
+        assert!(dock(false, true).visible(), "the fixture names the variable");
+        assert!(dock(true, true).visible(), "both turn it on");
+    }
+
+    /// The dock of a run, whose switch is the setting of Settings.
+    fn following(setting: bool) -> OrchestratorDock {
+        OrchestratorDock::following(setting)
+    }
+
+    #[test]
+    fn the_setting_of_settings_follows_the_window_without_a_restart() {
+        let mut dock = following(false);
+        assert!(!dock.visible());
+
+        dock.follow_setting(true);
+
+        assert!(dock.visible(), "a person who turns the setting on sees the dock");
+        dock.follow_setting(false);
+        assert!(!dock.visible(), "a person who turns it off sees it go");
+    }
+
+    /// The palette turns the dock of this run over and writes no setting: a run
+    /// that the palette turned keeps that choice while the setting stays as it is.
+    #[test]
+    fn a_dock_whose_start_named_its_switch_keeps_it() {
+        let mut dock = dock(true, false);
+        dock.follow_setting(false);
+
+        assert!(
+            dock.visible(),
+            "the switch of a start that named it is no setting of Settings"
+        );
+    }
+
+    #[test]
+    fn the_palette_turns_the_dock_of_this_run_over_the_setting() {
+        let mut off = following(false);
+        off.toggle();
+        assert!(off.visible());
+        off.follow_setting(true);
+        off.follow_setting(false);
+        assert!(off.visible(), "the choice of the person of this run stays");
+        off.toggle();
+        assert!(!off.visible());
+
+        let mut named = dock(false, true);
+        named.toggle();
+        assert!(
+            !named.visible(),
+            "the palette turns off a dock that the variable turned on"
+        );
+    }
 }

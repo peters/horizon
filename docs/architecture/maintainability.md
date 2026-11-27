@@ -544,7 +544,11 @@ when it names one of those kinds.
     toolbar in `sidebar/toolbar.rs` (the Menu in `sidebar/toolbar/buttons.rs`),
     the choice of where a new workspace starts in `sidebar/new_workspace.rs` and
     the described Menu rows in
-    `sidebar/rich_menu.rs`
+    `sidebar/rich_menu.rs`. The `Agents` group of the dock is
+    `sidebar/agents.rs`: it holds the four programs, the presence that the
+    coordination worker searched once for this run, and the rows. The button
+    `+ Rent a machine` and its message are `sidebar/rent_machine.rs`, and its
+    press reaches the dock through `HorizonApp::say_to_active_orchestrator`.
   - `settings`: settings editor state and save/apply flows
   - `shared_terminals`: the join of the shared terminals. `shared_terminals.rs`
     starts and stops the live link and its pump, and does in each frame the
@@ -603,10 +607,16 @@ when it names one of those kinds.
   state of the header. `orchestrator_dock.rs` keeps the state of the run and
   queues each start and each stop on the coordination worker of
   `app::browser_host_io`. `text.rs` lays the text of the dock out. The switch of
-  this part is the environment variable `HORIZON_ORCHESTRATOR_DOCK`, the program
-  of a conversation is `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and nothing of
-  the dock is saved. The dock draws no galley and no string while the switch is
-  off.
+  this part is the setting `features.orchestrator_dock`, which the window reads on
+  every frame, and the environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns
+  the dock on as well for the fixture of the smoke test. The palette turns the
+  dock of one run over and writes no setting. The program of a conversation is
+  `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and nothing of the dock is saved.
+  The dock draws no galley and no string while the switch is off, and the `Agents`
+  group of the sidebar draws none either. `say_to_active_orchestrator` is the one
+  send of a message that the person did not type: the button
+  `+ Rent a machine` of the sidebar calls it, and it takes the four steps of the
+  send of the composer.
 
 - `app::orchestrator_dock`, `app::block_requests` and `app::block_clicks` share
   one rule with the card path: the orchestrator of a workspace is a card caller

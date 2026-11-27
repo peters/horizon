@@ -58,6 +58,13 @@ the same rules.
 - **The prompt is one line of the standard input.** The caller gives the text to
   `Bridge::send`, which builds the line with `serde_json`. The prompt never
   appears on the command line, in the process list or in a log line.
+- **One message comes from Horizon and not from a person.**
+  `HorizonApp::say_to_active_orchestrator` sends the one sentence of the sidebar
+  button `+ Rent a machine`, which is a constant of
+  `app::sidebar::rent_machine`. That sentence is the words of Horizon: it holds
+  no text of a program, of a page or of a file, so the button adds no untrusted
+  input to the bridge. It starts the program of the active workspace when that
+  workspace has none, on the worker of the dock, as the composer does.
 - **A name of a nested agent is removed.** Every inherited variable with the
   prefix `CLAUDE_CODE_` or `HORIZON_WORK_`, and the variable `CLAUDECODE`, is
   removed from the environment of the child before it starts, so a bridge inside

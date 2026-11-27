@@ -8,6 +8,8 @@ mod general;
 #[cfg(test)]
 mod machines_tests;
 #[cfg(test)]
+mod orchestrator_dock_tests;
+#[cfg(test)]
 mod panel_test_support;
 #[cfg(test)]
 mod panel_tests;

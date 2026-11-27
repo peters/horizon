@@ -1110,6 +1110,32 @@ The page that shows while the board is empty answers the size of the window.
   this Horizon keeps no machine. The row menu holds `Focus` (or `Connect` when no
   terminal is open) and `Forget this machine`, whose confirm line is the
   menu's own text.
+- The `Agents` group sits under the machine section, in the same scroll area,
+  and only while the orchestrator dock is on. Its header is the sidebar group
+  header of `Machines`: `Agents` in Inter 13 at weight 620 in `FG_SOFT`, 18 px
+  from the left edge, then the count of the rows in JetBrains Mono 11 `FG_DIM`,
+  6 px after the name. One row stands for each agent program that the
+  orchestrator can use, in this order: Claude, Codex, Pi, Gemini, as
+  `horizon_core::agents` names them. A row is 34 high with an 8 px inset and no
+  card behind the pointer, and it takes no press. The state dot is 8 px at the
+  left edge of the card: filled `PALETTE_GREEN` when a folder of `PATH` holds the
+  program, and hollow `FG_DIM` when it does not or while the search of this run
+  has no answer. The name is Inter 12.5 at weight 500 in `FG`, or `FG_DIM` when
+  this computer has no such program. The line under it is Inter 10.5 `FG_DIM` and
+  reads `on this computer`, `not found on this computer`, or `looking` until the
+  search answers. Both lines start 18 px from the left edge of the sidebar, under
+  the header.
+- The button `+ Rent a machine` stands at the end of the machine section, under
+  its rows or under the line that says where a machine comes from, and only while
+  the orchestrator dock is on. It is 30 high, the full width of the section less
+  12 at each side, radius 10, `PANEL_BG_ALT` fill with a 1 px `BORDER_SUBTLE`
+  outline, and its label is Inter 12.5 `FG`, centred. Hover: the outline is
+  `FG_DIM` and the pointer is a pointing hand. A press sends
+  `Rent a machine for this workspace. Show me the card with the type, the place and the price first.`
+  to the orchestrator of the active workspace, on the path of the send control of
+  the composer. A window without an active workspace draws the label in `FG_DIM`
+  and says `Open a workspace first` in its hover. A window whose orchestrator
+  works draws it so as well, and its hover says `The orchestrator works`.
 - The agents of a machine hang under its row, in the form and the painter of
   the panel rows of a workspace: a 1 px tree guide (`BORDER_STRONG` alpha 200)
   from the state dot of the machine, the two letters of the kind, the name of

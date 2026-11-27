@@ -433,6 +433,9 @@ pub struct HorizonApp {
     /// The frame of the orchestrator dock of this run: the switch of the
     /// experiment, the rectangle of the frame and the draft of each workspace.
     orchestrator_dock: orchestrator_dock::OrchestratorDock,
+    /// The agent programs of the `Agents` group of the sidebar, which the
+    /// coordination worker searched once for this run.
+    agent_programs: sidebar::agents::AgentPrograms,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
     renaming_panel: Option<PanelId>,
@@ -604,6 +607,11 @@ impl HorizonApp {
         // The conversations of the dock read their channels here, before the
         // shutdown of the window returns: a read takes the events from the
         // channel, so the second pass of a frame applies no event twice.
+        // The dock follows the setting of Settings on the frame that changes
+        // it, so a person who turns it on there reads its column without a
+        // restart. A switch of the palette keeps the choice of this run.
+        self.orchestrator_dock
+            .follow_setting(self.template_config.features.orchestrator_dock);
         self.poll_orchestrator_dock();
         self.apply_settings_io(ctx);
         self.poll_machine_load();

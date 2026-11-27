@@ -222,6 +222,12 @@ pub struct FeaturesConfig {
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
     pub sidebar_accordion: bool,
+    /// Whether the orchestrator dock stands at the right edge of the window: the
+    /// conversation with one agent, which does the work of the active workspace
+    /// and shows it as cards. It is experimental and off at first. The
+    /// environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns it on as well, for
+    /// the fixture of the smoke test.
+    pub orchestrator_dock: bool,
     /// Whether the program of an agent panel runs in a holder that outlives a restart of Horizon.
     pub keep_agents_through_restart: bool,
     /// What the close of the main window does, and whether it asks first: it
@@ -1116,6 +1122,30 @@ mod tests {
     fn sidebar_accordion_defaults_disabled() {
         assert!(!FeaturesConfig::default().sidebar_accordion);
         assert!(!Config::default().features.sidebar_accordion);
+    }
+
+    #[test]
+    fn the_orchestrator_dock_defaults_disabled() {
+        assert!(!FeaturesConfig::default().orchestrator_dock);
+        assert!(!Config::default().features.orchestrator_dock);
+    }
+
+    /// The dock is a new field of the `features` section, so a store of an older
+    /// Horizon has no row for it and reads it as off. The rest of the section
+    /// applies.
+    #[test]
+    fn a_store_without_the_dock_setting_reads_it_off() {
+        let config =
+            Config::from_json(r#"{"features": {"sidebar_accordion": true}}"#).expect("config should deserialize");
+
+        assert!(!config.features.orchestrator_dock);
+        assert!(config.features.sidebar_accordion, "the rest of the section applies");
+
+        let on = Config::from_json(r#"{"features": {"orchestrator_dock": true}}"#).expect("config should deserialize");
+        assert!(on.features.orchestrator_dock);
+        let document = on.to_json().expect("config should serialize");
+        let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
+        assert!(round_tripped.features.orchestrator_dock);
     }
 
     #[test]

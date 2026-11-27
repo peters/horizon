@@ -300,6 +300,11 @@ impl HorizonApp {
         }
         self.machine_rows = rows;
 
+        // A window whose dock is on offers the machine that its orchestrator
+        // rents, under the rows that the list holds. Without a machine the button
+        // follows the line that says where a machine comes from.
+        self.render_rent_machine(ui, actions);
+
         // The line that stays comes first: it names what an opened session left
         // out, and the short reason of an action belongs under it.
         if let Some(note) = self.sidebar_sticky_notice.clone() {
