@@ -313,3 +313,69 @@ fn the_version_grows_by_one_for_each_change() {
         })
     );
 }
+
+#[test]
+fn a_restored_conversation_shows_its_entries_and_runs_no_turn() {
+    let history = vec![
+        Entry::Person {
+            text: "alpha".to_owned(),
+        },
+        Entry::Agent {
+            message_id: "msg-1".to_owned(),
+            text: "bravo".to_owned(),
+        },
+    ];
+
+    let conversation = Conversation::restored(history.clone(), Some("session-1".to_owned()));
+
+    let snapshot = conversation.snapshot();
+    assert_eq!(snapshot.entries, history);
+    assert_eq!(snapshot.session_id, Some("session-1".to_owned()));
+    assert_eq!(
+        snapshot.link,
+        Link::NotStarted,
+        "no program of this run named a session"
+    );
+    assert!(!snapshot.busy, "no turn of the last run is still in flight");
+    assert_eq!(snapshot.cost_usd_total, 0.0, "a stored entry holds no cost");
+    assert_eq!(snapshot.version, 1, "a restored conversation has one version");
+}
+
+#[test]
+fn a_stored_history_goes_above_the_messages_that_the_frame_already_showed() {
+    let mut conversation = Conversation::new();
+    conversation.person_said("new");
+
+    conversation.prepend(vec![Entry::Person { text: "old".to_owned() }]);
+
+    let snapshot = conversation.snapshot();
+    assert_eq!(
+        snapshot.entries,
+        vec![
+            Entry::Person { text: "old".to_owned() },
+            Entry::Person { text: "new".to_owned() },
+        ]
+    );
+    assert!(snapshot.busy, "the message that waited for its bridge still waits");
+}
+
+#[test]
+fn a_restored_history_keeps_the_cap_of_the_conversation() {
+    let history: Vec<_> = (0..MAX_ENTRIES + 3)
+        .map(|index| Entry::Notice {
+            text: format!("entry {index}"),
+        })
+        .collect();
+
+    let conversation = Conversation::restored(history, None);
+
+    let entries = entries(&conversation);
+    assert_eq!(entries.len(), MAX_ENTRIES, "the list keeps one cap of entries");
+    assert_eq!(
+        entries.first(),
+        Some(&Entry::Notice {
+            text: "4 earlier entries were dropped".to_owned()
+        }),
+        "one notice names the entries that the cap dropped"
+    );
+}

@@ -459,6 +459,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 position: Some([0.0, 40.0]),
                 template: None,
                 layout: None,
+                orchestrator: None,
                 panels: Vec::new(),
             },
             WorkspaceState {
@@ -469,6 +470,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 position: Some([640.0, 40.0]),
                 template: None,
                 layout: None,
+                orchestrator: None,
                 panels: vec![PanelState {
                     machine_session: None,
                     local_id: "panel".to_string(),
@@ -521,6 +523,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
             position: Some([0.0, 40.0]),
             template: None,
             layout: Some(WorkspaceLayout::Grid),
+            orchestrator: None,
             panels: vec![
                 PanelState {
                     machine_session: None,
@@ -600,6 +603,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
             position: Some([0.0, 40.0]),
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![PanelState {
                 machine_session: None,
                 local_id: "ssh-panel".to_string(),
@@ -645,6 +649,20 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
     );
 }
 
+/// The editor panel of a restored board, which needs no process.
+fn notes_panel() -> PanelState {
+    PanelState {
+        local_id: "notes".to_string(),
+        name: "Notes".to_string(),
+        kind: PanelKind::Editor,
+        work_resume: crate::agent_work::ResumePolicy::default(),
+        resume: PanelResume::Fresh,
+        position: Some([0.0, 40.0]),
+        size: Some([320.0, 220.0]),
+        ..PanelState::default()
+    }
+}
+
 #[test]
 fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
     let invalid_command = "bad\0codex";
@@ -663,31 +681,9 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
             position: Some([0.0, 40.0]),
             template: None,
             layout: Some(WorkspaceLayout::Grid),
+            orchestrator: None,
             panels: vec![
-                PanelState {
-                    machine_session: None,
-                    local_id: "notes".to_string(),
-                    name: "Notes".to_string(),
-                    name_is_custom: None,
-                    kind: PanelKind::Editor,
-                    command: None,
-                    args: Vec::new(),
-                    cwd: None,
-                    ssh_connection: None,
-                    rows: 24,
-                    cols: 80,
-                    work_resume: crate::agent_work::ResumePolicy::default(),
-                    resume: PanelResume::Fresh,
-                    position: Some([0.0, 40.0]),
-                    size: Some([320.0, 220.0]),
-                    session_binding: None,
-                    template: None,
-                    editor_content: None,
-                    device_identity: None,
-                    browser_profile: None,
-                    browser_url: None,
-                    ..PanelState::default()
-                },
+                notes_panel(),
                 PanelState {
                     machine_session: None,
                     local_id: "broken-codex".to_string(),

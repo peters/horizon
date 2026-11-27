@@ -770,6 +770,7 @@ impl Board {
             workspace.place.clone_from(&workspace_state.place);
             workspace.template.clone_from(&workspace_state.template);
             workspace.layout = workspace_state.layout;
+            workspace.orchestrator.clone_from(&workspace_state.orchestrator);
         }
         self.retained_empty_workspaces.remove(&id);
         id

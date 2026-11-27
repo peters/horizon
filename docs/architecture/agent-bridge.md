@@ -17,8 +17,9 @@ which the last section of this page describes.
   standard output into events.
 - The module holds no terminal, no screen and no escape sequence. The program
   draws nothing, so no panel and no PTY is part of this path.
-- The module holds no storage and no setting. A caller gives it a
-  `ProgramSpec`, one codec and one wake function.
+- The module holds no setting. A caller gives it a `ProgramSpec`, one codec and
+  one wake function. Its only files are the stored conversation of
+  [`store`](#storage), which a caller names.
 
 ## The threads
 
@@ -154,6 +155,9 @@ The dock at the right edge of the root window is the one caller
   pass of one frame applies no event twice.
 - **The wake.** The bridge asks for the next frame of the window with a clone of
   the `egui::Context` of the dock.
+- **The session id is text of the program.** The dock keeps the id only as the
+  conversation cut it: one line of `MAX_SUMMARY_CHARS` characters. The next
+  start passes it as one argument of `--resume`, never as a word of a shell.
 - **The words of Horizon.** Three notices come from the dock and not from the
   program: `Claude Code did not start: <error of the system>`, `Stopped by you`,
   and `Claude Code reports that the plan limit is reached. Extra usage is in
@@ -161,17 +165,70 @@ The dock at the right edge of the root window is the one caller
   `ConversationSnapshot::cost_usd_total`.
 - **The end.** The close pass queues the stop of every bridge, and the
   synchronous exit waits for the worker of the dock within the bound of a stop
-  before it ends. The worker ends when the app drops it or when that wait closes
-  its queue. No program of a conversation stays after Horizon ended.
+  before it ends. Before that wait, the exit queues one last write of each
+  conversation, so the entries that its programs left open reach their files.
+  The worker ends when the app drops it or when that wait closes its queue. No
+  program of a conversation stays after Horizon ended.
+
+## Storage
+
+A restart of Horizon shows the conversation of each workspace again, and the next
+message continues the same session of the program. Two values hold that state,
+and neither is written for a start that saves nothing.
+
+| Where | What | Written by |
+|---|---|---|
+| `runtime.yaml`, field `workspaces[].orchestrator` | the session id of the program and the name of its file, such as `claude` | the session writer of the board |
+| `sessions/<session id>/conversations/<workspace local id>.jsonl` | one entry per line, with the version of the line format | the worker of the dock |
+
+- **The record is optional and needs no version change.** It carries
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`, so an older
+  build reads the file and writes it without the field, and no version of the
+  board changes. `Board` keeps the same value on its `Workspace`, so
+  `RuntimeState::from_board` writes back what the start read.
+- **A record without a session id keeps the entries.** The dock forgets the
+  session id when the program did not continue it, and the record then holds the
+  program name only: the next start shows the entries and starts a new session.
+- **The folder of a conversation belongs to the session.** It is below
+  `sessions/<session id>/`, so the delete of a saved session removes it with the
+  rest of that folder. A folder of `0700` holds files of `0600`.
+- **No frame reads or writes a file.** The load, each write, the compaction and
+  the delete are jobs of the worker thread `orchestrator-dock`, in the order that
+  the frames asked for them, and each outcome applies on a later frame
+  ([the UI thread guide](ui-thread.md)).
+- **One write for a conversation in a frame.** The dock writes the entries that
+  the events settled: a message of the person, a notice, a tool call that ended,
+  and a text of the agent when its turn ended. A text that a turn still extends
+  waits, so a partial message is never written twice. A write that waits holds
+  the next one of its conversation.
+- **The load comes first.** A start loads the file of a workspace before it
+  writes anything of that workspace, so the order of the entries in the file is
+  the order of the conversation. The entries of the file stand above a message
+  that the person already sent.
+- **A stored tool call reads as interrupted.** A call that was still running
+  when its run ended has no result: the load reports `Failed` with the result
+  `interrupted`, and the row says why.
+- **Bounds.** A load reads at most `MAX_ENTRIES` entries and drops a line that
+  does not parse, a line above `MAX_LINE_BYTES` bytes, and a line of another
+  version of the format, and it counts them. A file that holds more than twice
+  `MAX_ENTRIES` entries is rewritten with its newest `MAX_ENTRIES` after a load.
+- **Where storage is off.** The dock stores a conversation only while its
+  `storage` names the folder of a saved session, which `activate_persistent_session`
+  sets and `activate_ephemeral_session` and a session switch clear. That is the
+  rule of the terminal transcripts (`HorizonApp::transcript_root`): a start that
+  saves nothing writes no file and no record.
+- **A restored conversation of this run.** A record of another program is not
+  resumed: the name of the file of the program must be the one that the record
+  names. The entries still load.
 
 ## What is not built yet
 
-- No card, no storage and no setting of a conversation. The entries, the drafts
-  and the switch of the dock are the memory of this run.
+- No setting of a conversation. The drafts and the switch of the dock are the
+  memory of this run.
 - One program: Claude Code. Nothing chooses another program for the person, and
   the dock names no path of an installed program beyond the variable above.
-- A conversation does not resume after a restart of Horizon. The dock names
-  `SessionChoice::New` or `SessionChoice::Resume` and holds the session id of the
-  run.
-- A card, a browser tool and a wake line of a card are later slices. This module
-  calls `crate::ui_thread::blocking` nowhere: it starts no work on a frame.
+- No transcript of a conversation moves to another computer, and no card reads
+  the stored entries. A later slice that does either keeps the bounds above.
+- `crate::ui_thread::blocking` is called nowhere in this module: the bridge starts
+  no work on a frame. The store calls it at the start of each file function, so a
+  frame that reaches one reports the wait.

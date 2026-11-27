@@ -16,12 +16,21 @@
 //! Every text of the program is untrusted. It enters the conversation only as
 //! one entry of `horizon_core::agent_bridge`, which cuts it, and the dock draws
 //! it as plain text. The notices of this module are the words of Horizon.
+//!
+//! A conversation outlives the run: the file of its entries and the record of
+//! its session live in the session folder, and [`Session::restored`] brings both
+//! back on the first frame of a start. [`Storage`] holds the bookkeeping of
+//! that file, so a frame writes one batch when its events settled an entry.
 
 use std::sync::Arc;
 
+use horizon_core::OrchestratorConversationState;
 use horizon_core::agent_bridge::{
-    Bridge, BridgeEvent, BridgeIdentity, ClaudeCodec, Conversation, ConversationSnapshot, ProgramSpec, SessionChoice,
+    Bridge, BridgeEvent, BridgeIdentity, ClaudeCodec, Conversation, ConversationSnapshot, Entry, ProgramSpec,
+    SessionChoice,
 };
+
+use super::storage::Storage;
 
 /// The notice of a turn that the person stopped.
 pub(super) const STOPPED_NOTICE: &str = "Stopped by you";
@@ -29,6 +38,9 @@ pub(super) const STOPPED_NOTICE: &str = "Stopped by you";
 pub(super) const START_FAILURE: &str = "Claude Code did not start";
 /// The notice of an account that reached the limit of its plan and uses overage.
 pub(super) const LIMIT_NOTICE: &str = "Claude Code reports that the plan limit is reached. Extra usage is in use.";
+/// The notice of a stored session that the program did not continue.
+pub(super) const RESUME_FAILURE_NOTICE: &str =
+    "The earlier session could not continue. A new one starts with your next message.";
 
 /// The state of one conversation, as the second line of the header names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +96,11 @@ pub(super) struct Session {
     /// Whether the limit of the plan was already named to the person for the
     /// bridge that runs.
     limit_noticed: bool,
+    /// Whether the bridge of this conversation resumed a stored session and no
+    /// turn of it ended well yet.
+    resume_watch: bool,
+    /// The stored file of this conversation, and the jobs that change it.
+    storage: Storage,
 }
 
 impl Session {
@@ -97,7 +114,61 @@ impl Session {
             waiting: Vec::new(),
             generation: 0,
             limit_noticed: false,
+            resume_watch: false,
+            storage: Storage::default(),
         }
+    }
+
+    /// The conversation of a workspace that keeps one, as the record of its
+    /// last run names it: the session that the next message resumes, and the
+    /// entries that the worker loads from its file. A session that another
+    /// program named is not resumed, because that program does not know it.
+    pub(super) fn restored(session_id: Option<String>, program: &str, program_name: &str) -> Self {
+        let mut session = Self::new();
+        if program == program_name {
+            session.resume_id = session_id;
+        }
+        session.storage = Storage::restored();
+        session
+    }
+
+    /// The record that the runtime state of this workspace keeps, or `None`
+    /// when this conversation has nothing to resume and no file.
+    pub(super) fn record(&self, program: &str) -> Option<OrchestratorConversationState> {
+        (self.storage.keeps() || self.resume_id.is_some()).then(|| OrchestratorConversationState {
+            session_id: self.resume_id.clone(),
+            program: program.to_owned(),
+        })
+    }
+
+    /// The entries that the file of this conversation does not hold yet, with
+    /// the number of entries that it holds after the write.
+    pub(super) fn pending_append(&self, flush: bool) -> Option<(Vec<Entry>, usize)> {
+        self.storage.pending(&self.conversation, flush)
+    }
+
+    /// Records the append of the entries that reach `count`, which the worker
+    /// writes now.
+    pub(super) fn append_queued(&mut self, count: usize) {
+        self.storage.queued(count);
+    }
+
+    /// Applies the answer of the worker to the append that waited.
+    pub(super) fn append_finished(&mut self, written: bool) {
+        self.storage.finished(written);
+    }
+
+    /// Applies the entries that the worker read from the file: they stand above
+    /// the entries that this run already holds.
+    pub(super) fn loaded(&mut self, entries: Vec<Entry>) {
+        self.storage.loaded(&mut self.conversation, entries);
+    }
+
+    /// Whether a load of the stored conversation of this workspace waits on the
+    /// worker, which a test reads.
+    #[cfg(test)]
+    pub(super) fn is_loading(&self) -> bool {
+        self.storage.is_loading()
     }
 
     /// The conversation of this moment, which one frame draws.
@@ -157,6 +228,7 @@ impl Session {
             Some(session_id) => SessionChoice::Resume(session_id.clone()),
             None => SessionChoice::New(horizon_core::new_local_id()),
         };
+        self.resume_watch = matches!(session, SessionChoice::Resume(_));
         Start {
             generation: self.generation,
             session,
@@ -184,8 +256,10 @@ impl Session {
                 let waiting = std::mem::take(&mut self.waiting);
                 for text in waiting {
                     if self.bridge.as_ref().is_some_and(|bridge| bridge.send(text).is_err()) {
-                        self.bridge = None;
-                        self.phase = Phase::Ended;
+                        // The program ended before this message reached it. Its
+                        // events still hold the end of the program, and a poll of
+                        // a later frame reads them and names why it ended, so the
+                        // bridge stays until then.
                         break;
                     }
                 }
@@ -226,19 +300,43 @@ impl Session {
             return;
         }
         let mut ended = false;
+        let mut resume_failed = false;
+        let mut started = false;
         for event in events {
             match &event {
-                BridgeEvent::SessionStarted { session_id } => self.resume_id = Some(session_id.clone()),
+                BridgeEvent::SessionStarted { .. } => started = true,
                 BridgeEvent::Limit {
                     using_overage: true, ..
                 } if !self.limit_noticed => {
                     self.limit_noticed = true;
                     self.conversation.notice(LIMIT_NOTICE);
                 }
-                BridgeEvent::Ended { .. } => ended = true,
+                BridgeEvent::TurnEnded { failed, .. } => {
+                    if *failed {
+                        resume_failed |= self.resume_watch;
+                    } else {
+                        self.resume_watch = false;
+                    }
+                }
+                BridgeEvent::Ended { .. } => {
+                    ended = true;
+                    resume_failed |= self.resume_watch;
+                }
                 _ => {}
             }
             self.conversation.apply(event);
+        }
+        if started {
+            // The session id is text of the program, so the dock keeps the value
+            // that the conversation cut: one line of `MAX_SUMMARY_CHARS`
+            // characters, which the next start passes as one argument.
+            let session_id = self.conversation.snapshot().session_id.clone();
+            if session_id.as_deref().is_some_and(|id| !id.is_empty()) {
+                self.resume_id = session_id;
+            }
+        }
+        if resume_failed {
+            self.forget_resumed_session();
         }
         if ended {
             self.bridge = None;
@@ -246,11 +344,21 @@ impl Session {
         }
     }
 
+    /// Forgets the stored session that the program did not continue, and says so
+    /// in one notice. The entries of the conversation stay, and the next message
+    /// starts a new session.
+    fn forget_resumed_session(&mut self) {
+        self.resume_watch = false;
+        self.resume_id = None;
+        self.conversation.notice(RESUME_FAILURE_NOTICE);
+    }
+
     /// Takes the bridge of this conversation for the end of Horizon. The entries
     /// stay as they are: nothing draws them again.
     pub(super) fn shutdown(&mut self) -> Option<Bridge> {
         self.generation = self.generation.saturating_add(1);
         self.waiting.clear();
+        self.resume_watch = false;
         self.bridge.take()
     }
 
@@ -260,6 +368,7 @@ impl Session {
     pub(super) fn stop(&mut self) -> Option<Bridge> {
         self.generation = self.generation.saturating_add(1);
         self.waiting.clear();
+        self.resume_watch = false;
         self.conversation.apply(BridgeEvent::TurnEnded {
             failed: false,
             duration_ms: None,

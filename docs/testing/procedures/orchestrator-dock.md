@@ -31,8 +31,10 @@ gradient bar of an agent text, and the chevron of the three chips.
   `scripts/device-smoke/orchestrator_standin.py`. It answers in the line format
   of Claude Code and it starts no agent program. Section 6.12 uses a program that
   is not there.
-- A conversation is not saved. A restart of Horizon starts an empty
-  conversation.
+- Tasks OD-17 to OD-19 read the stored conversation. A saved session keeps it in
+  the folder of that session, so each of those tasks needs the state folder of
+  the fixture and two starts of the candidate. Tasks OD-1 to OD-16 use a start
+  that saves nothing, and such a start writes no conversation.
 
 ## 3. Safety
 
@@ -584,6 +586,106 @@ open, because Horizon types no wake line for an owner without a terminal.
    section Machines.
 
    Result: The button is gone.
+### 6.17 OD-17 — A restart shows the conversation and continues its session
+
+This task needs a record of the arguments of the program, because the dock
+passes the stored session id to the program as one argument.
+
+1. Write the wrapper of the stand-in into the evidence folder. It writes its
+   arguments to a log file and then runs the stand-in.
+
+   ```sh
+   cat > <evidence>/orchestrator-argv.sh <<'EOF'
+   #!/bin/sh
+   printf '%s\n' "$@" >> "<evidence>/orchestrator-argv.log"
+   exec python3 <repo>/scripts/device-smoke/orchestrator_standin.py "$@"
+   EOF
+   chmod +x <evidence>/orchestrator-argv.sh
+   ```
+
+   Result: The file is executable and the log file does not exist yet.
+
+2. Start the fixture in the state folder `<evidence>/dock-stored`, with
+   `HORIZON_ORCHESTRATOR_PROGRAM=<evidence>/orchestrator-argv.sh`. Give
+   `serve.py` the two options `--reuse-state` and `--saved-session`, so the
+   candidate saves its session in the private home.
+
+   Result: The window opens, with the dock at the right edge.
+
+3. Write `alpha` in the field of the dock and press Enter.
+
+   Result: The list shows the bubble `You said: alpha` and the answer of the
+   stand-in. The log file holds one line that reads `--session-id`, followed by
+   one line that holds a UUID.
+
+4. Close the window of the candidate in the usual way, and stop the fixture with
+   Ctrl-C.
+
+   Result: Horizon writes the board and ends. The state folder holds a session
+   folder with a `conversations` folder below it, at
+   `<state>/data/home/.horizon/sessions/<session id>/conversations/`.
+
+5. Start the fixture again on the same state folder, with `--reuse-state`,
+   `--resume-session` and the same `HORIZON_ORCHESTRATOR_PROGRAM`. Do not give
+   `--saved-session` here.
+
+   Result: The window opens. The dock shows the bubble `You said: alpha` and the
+   answer of the stand-in above the empty space, and the state chip of the header
+   reads `not connected`.
+
+6. Write `bravo` in the field of the dock and press Enter.
+
+   Result: The list shows the bubble `You said: bravo` below the entries of the
+   earlier run, and the answer of the stand-in. The log file holds one line that
+   reads `--resume`, followed by the UUID that the first start named in step 3.
+
+7. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the entries of both runs in one conversation.
+
+### 6.18 OD-18 — A start that saves nothing stores nothing
+
+1. Start the fixture in a new state folder, without `--saved-session`, and with
+   the stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`. Such a start is ephemeral.
+
+   Result: The window opens with one workspace, and the dock shows the empty
+   state.
+
+2. Write `alpha` in the field of the dock and press Enter.
+
+   Result: The list shows the bubble and the answer of the stand-in.
+
+3. Stop the fixture with Ctrl-C, and read the state folder.
+
+   ```sh
+   find <state> -name '*.jsonl' -o -name conversations -type d
+   ```
+
+   Result: The command prints no path. An unsaved start writes no conversation
+   file and no record of a session.
+
+### 6.19 OD-19 — A removed workspace removes its conversation
+
+1. Do the steps 1 to 3 of OD-17, so that the workspace keeps a conversation.
+
+2. Read the folder of the conversations of the session.
+
+   ```sh
+   ls <state>/data/home/.horizon/sessions/*/conversations
+   ```
+
+   Result: The folder holds one file that ends with `.jsonl`.
+
+3. Remove the workspace through its row in the sidebar, and confirm the removal.
+
+   Result: The workspace and its dock go, and the folder of the conversations of
+   the session shows no file of that workspace after a moment.
+
+4. Stop the fixture with Ctrl-C, and read the folder again.
+
+   Result: The folder still holds no file of that workspace. The folder of the
+   session goes whole when the person deletes that saved session, so this file
+   leaves nothing behind.
 
 ## 7. Pass criteria
 
@@ -643,6 +745,18 @@ open, because Horizon types no wake line for an owner without a terminal.
   while the dock is on. One press sends one message to the orchestrator of the
   active workspace, and the button sends nothing without an active workspace and
   while that orchestrator works.
+- A restart of Horizon on a saved session shows the entries of the earlier run,
+  and the state chip reads `not connected` above them.
+- The first message after that restart starts the program with `--resume` and the
+  session id of the earlier run.
+- A program that does not continue the stored session leaves the notice `The
+  earlier session could not continue. A new one starts with your next message.`,
+  and the message after it starts a program with `--session-id`.
+- A start that saves nothing writes no conversation file and no record of a
+  session.
+- A workspace that is removed takes its conversation file with it, and the delete
+  of a saved session takes the folder of its conversations with the rest of the
+  session folder.
 
 ## 8. Cleanup
 

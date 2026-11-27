@@ -62,8 +62,8 @@ pub(crate) fn browser_profile_state(browser: &crate::browser::BrowserPanelState,
 }
 
 pub use models::{
-    AgentSessionBinding, AgentSessionKey, BrowserHostState, BrowserProfileState, DetachedWorkspaceState, PanelState,
-    PanelTemplateRef, WorkspaceState, WorkspaceTemplateRef,
+    AgentSessionBinding, AgentSessionKey, BrowserHostState, BrowserProfileState, DetachedWorkspaceState,
+    OrchestratorConversationState, PanelState, PanelTemplateRef, WorkspaceState, WorkspaceTemplateRef,
 };
 
 pub(crate) const RUNTIME_STATE_VERSION: u32 = 3;
@@ -367,6 +367,7 @@ impl RuntimeState {
                     place: workspace.place.clone(),
                     template: workspace.template.clone(),
                     layout: workspace.layout,
+                    orchestrator: workspace.orchestrator.clone(),
                     panels,
                 }
             })

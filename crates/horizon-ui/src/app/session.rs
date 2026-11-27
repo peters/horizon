@@ -147,6 +147,11 @@ impl HorizonApp {
     pub(super) fn activate_persistent_session(&mut self, session: &ResolvedSession) {
         self.release_active_session_lease();
         self.transcript_root = Some(session.transcript_root.clone());
+        // The conversation of the dock of this session lives beside the
+        // transcripts, so a saved session keeps it and a delete of the session
+        // folder removes it.
+        let conversations = self.session_store.home().session_conversations_dir(&session.session_id);
+        self.orchestrator_dock.set_storage(Some(conversations));
         self.startup_chooser = None;
         // The lease of the session is a file of this home, so the session writer
         // takes it and its answer reaches a later frame.
@@ -174,6 +179,9 @@ impl HorizonApp {
             persistent: false,
         });
         self.transcript_root = None;
+        // A start that saves nothing keeps no conversation: no file and no
+        // record, as no transcript is kept.
+        self.orchestrator_dock.set_storage(None);
         self.startup_chooser = None;
         self.apply_runtime_state(runtime_state);
     }

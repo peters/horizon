@@ -445,6 +445,10 @@ impl HorizonApp {
         self.release_active_session_lease();
         self.active_session = None;
         self.transcript_root = None;
+        // The board of the next session brings its own conversations, so the
+        // conversations of this one go with it. Their files stay in the folder
+        // of the session that they belong to.
+        self.orchestrator_dock.set_storage(None);
         self.last_panel_output_at = None;
         self.fullscreen_panel = None;
         self.abandon_device_reveals("Device panel closed by a session switch");

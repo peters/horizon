@@ -6,4 +6,5 @@ mod chat;
 mod drafts;
 mod frame;
 mod geometry;
+mod storage;
 mod switch;

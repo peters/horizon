@@ -22,17 +22,18 @@
 //! writes the queued lines and flushes them, and a reader of the standard error
 //! keeps its last bytes. A frame calls [`Bridge::poll`] and never waits.
 //!
-//! Nothing calls this module yet: no window, no card and no setting of this
-//! slice names it, and its only callers are its tests. The card path, the
-//! storage of a conversation and the choice of the program are later slices.
+//! The dock of the window is the one caller of [`Bridge::start`] and
+//! [`Conversation`], and its worker thread runs [`store`], which keeps the
+//! entries of a workspace across a restart. The card path and the choice of the
+//! program for the person are later slices.
 
 use std::time::Duration;
-
 pub mod actor;
 mod codec;
 mod conversation;
 mod event;
 mod program;
+pub mod store;
 #[cfg(test)]
 mod tests;
 mod worker;

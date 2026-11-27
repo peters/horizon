@@ -137,6 +137,14 @@ impl HorizonHome {
         self.session_dir(session_id).join("transcripts")
     }
 
+    /// The folder that keeps one file for each stored conversation of the
+    /// orchestrator dock of a session. A saved session deletes its folder whole,
+    /// so these files go with it.
+    #[must_use]
+    pub fn session_conversations_dir(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("conversations")
+    }
+
     #[must_use]
     pub fn plugins_dir(&self) -> PathBuf {
         self.root.join("plugins")
@@ -349,6 +357,10 @@ mod tests {
         assert_eq!(
             home.session_transcripts_dir("session-1"),
             PathBuf::from("/tmp/horizon-home/sessions/session-1/transcripts")
+        );
+        assert_eq!(
+            home.session_conversations_dir("session-1"),
+            PathBuf::from("/tmp/horizon-home/sessions/session-1/conversations")
         );
         assert_eq!(
             home.claude_plugin_dir(),

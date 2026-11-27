@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::board::WorkspaceLayout;
 use crate::panel::PanelId;
 use crate::place::WorkspacePlace;
-use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
+use crate::runtime_state::{OrchestratorConversationState, WorkspaceTemplateRef, new_local_id};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
@@ -27,6 +27,9 @@ pub struct Workspace {
     pub place: WorkspacePlace,
     pub template: Option<WorkspaceTemplateRef>,
     pub layout: Option<WorkspaceLayout>,
+    /// The stored conversation of the orchestrator dock of this workspace, which
+    /// the next start shows again. A new workspace has none.
+    pub orchestrator: Option<OrchestratorConversationState>,
 }
 
 /// Predefined accent colors for workspace clusters.
@@ -56,6 +59,7 @@ impl Workspace {
             place: WorkspacePlace::default(),
             template: None,
             layout: Some(WorkspaceLayout::default()),
+            orchestrator: None,
         }
     }
 

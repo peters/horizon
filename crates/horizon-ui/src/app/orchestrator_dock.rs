@@ -19,9 +19,10 @@
 //! to its left, so the canvas ends at the left edge of the leftmost of the two.
 //! The setting `features.orchestrator_dock` turns the dock on, and the
 //! environment switch [`DOCK_SWITCH`] does the same for the fixture of the smoke
-//! test. Nothing here is saved: the switch of a run that the palette turned, the
-//! rectangle of a frame, the drafts and the conversations are the state of this
-//! run, as `sidebar_visible` and `minimap_visible` are.
+//! test. The conversation of a saved session outlives the run in the session
+//! folder ([`storage`]); the switch of a run that the palette turned, the
+//! rectangle of a frame and the drafts are the state of this run, as
+//! `sidebar_visible` and `minimap_visible` are.
 
 mod composer;
 mod empty;
@@ -29,6 +30,7 @@ mod header;
 mod layout;
 mod list;
 mod session;
+mod storage;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -86,6 +88,9 @@ pub(in crate::app) struct OrchestratorDock {
     sessions: HashMap<String, Session>,
     /// The draft of each workspace, by the same `local_id`.
     drafts: HashMap<String, String>,
+    /// The folder that keeps one conversation file for each workspace of the
+    /// session that this app opened, or `None` while nothing is saved.
+    storage: Option<PathBuf>,
     /// The worker that starts and stops the bridges of the conversations, in the
     /// order that the frames ask for them.
     worker: worker::Worker,
@@ -138,6 +143,7 @@ impl OrchestratorDock {
             program,
             sessions: HashMap::new(),
             drafts: HashMap::new(),
+            storage: None,
             worker: worker::Worker::default(),
             #[cfg(test)]
             last_frame: None,
@@ -154,6 +160,14 @@ impl OrchestratorDock {
     #[cfg(test)]
     pub(in crate::app) fn with_program(visible: bool, program: PathBuf) -> Self {
         Self::from_values(visible, false, program)
+    }
+
+    /// Replaces the program of every conversation of this dock, which a test does
+    /// in place of a whole dock, so the startup decision of the app keeps its
+    /// stored folder.
+    #[cfg(test)]
+    pub(in crate::app) fn set_program(&mut self, program: PathBuf) {
+        self.program = program;
     }
 
     /// Whether the dock draws in this frame. A run that the palette did not turn
@@ -300,8 +314,11 @@ impl OrchestratorDock {
     }
 
     /// Closes the worker of the dock for an exit that waits for it within its own
-    /// bound, so no start or stop outlives the app.
+    /// bound, so no start, stop or write outlives the app. The entries that the
+    /// exit leaves open go to their files first: a tool call that still runs
+    /// reads as interrupted on the next start.
     pub(in crate::app) fn flush_worker(&mut self) {
+        self.flush_conversation_appends();
         self.worker.flush(WORKER_FLUSH);
     }
 

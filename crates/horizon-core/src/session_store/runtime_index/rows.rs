@@ -154,6 +154,7 @@ fn without_panels(workspace: &WorkspaceState) -> WorkspaceState {
         place,
         template,
         layout,
+        orchestrator,
         panels: _,
     } = workspace;
     WorkspaceState {
@@ -164,6 +165,7 @@ fn without_panels(workspace: &WorkspaceState) -> WorkspaceState {
         place: place.clone(),
         template: template.clone(),
         layout: *layout,
+        orchestrator: orchestrator.clone(),
         panels: Vec::new(),
     }
 }

@@ -84,6 +84,7 @@ fn a_restored_panel_says_why_it_cannot_use_its_saved_directory() {
             position: Some([0.0, 40.0]),
             template: None,
             layout: Some(WorkspaceLayout::Grid),
+            orchestrator: None,
             panels: vec![shell_panel_state("shell", Some(&missing))],
         }],
         ..RuntimeState::default()

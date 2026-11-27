@@ -39,11 +39,12 @@ the same rules.
   bytes, and one summary, one refusal and one notice at `MAX_SUMMARY_CHARS`
   characters. The codec joins at most 256 message ids and at most `MAX_TEXT_BYTES`
   of one message.
-- **No text of the program reaches a log line, a path, a command line or a file.**
-  The bridge logs a start, an end and a dropped line with the reason. It writes no
-  file. A tool summary is built from one fixed key of the tool input (`command`,
-  `file_path`, or the tool name alone), and the whole input never becomes an
-  event.
+- **No text of the program reaches a log line, a path or a command line.** The
+  bridge logs a start, an end and a dropped line with the reason. It writes no
+  file of its own: the stored conversation is the file of `store`, which the
+  section below states. A tool summary is built from one fixed key of the tool
+  input (`command`, `file_path`, or the tool name alone), and the whole input
+  never becomes an event.
 - **A tool name is a claim.** The name, the summary and the result of a tool come
   from the program. The dock draws them as plain text, and no value of them
   becomes a command, a path or a setting.
@@ -122,6 +123,46 @@ rules hold for it.
 - **The words of Horizon are its own.** A notice that the dock adds, the state of
   the header and the cost are built by Horizon from typed values, and never from
   the text of a line.
+
+## The stored conversation is untrusted when it is read back
+
+The dock keeps the entries of a workspace in
+`sessions/<session id>/conversations/<workspace local id>.jsonl`, one JSON object
+per line, so a restart shows the conversation again
+([the architecture page](../../architecture/agent-bridge.md#storage)). That file
+is a file of the person's home: the process that wrote it can stop in the middle
+of a line, a damaged block reaches it, and the person can edit it. A later start
+therefore reads it as untrusted text.
+
+- **One grammar, and one version of it.** A line must be one JSON object of
+  `{"version":1,"entry":{…}}`, and the entry must be one of the four kinds of
+  `Entry`. A line that does not parse, that names another version, or that is
+  above `MAX_LINE_BYTES` bytes is dropped whole and counted. One bad line never
+  costs the file, and the load never fails because of one.
+- **The bounds of the read.** A load holds at most `MAX_ENTRIES` entries and one
+  line of `MAX_LINE_BYTES` bytes of the file at a time. A file above twice
+  `MAX_ENTRIES` entries is rewritten with its newest entries.
+- **Every text of a stored entry keeps the bound of an event.** A stored text
+  enters the conversation through `Conversation::restored`, which keeps the same
+  `MAX_ENTRIES` list and the same cut of the texts, and the dock draws every
+  stored text as plain text with the rules below.
+- **A stored tool call is a claim, not a fact.** A call that the file records as
+  running reads as failed with the result `interrupted`, and no entry of the file
+  becomes a command, a path or a control.
+- **The folder and the file are private.** The folder is `0700` and each file is
+  `0600`, as the folder of a session is, and the name of a file is built from the
+  local id of a workspace: no character of the id that a path can interpret
+  reaches the name.
+- **The record of the session id is text of the program.** `WorkspaceState
+  .orchestrator` holds the session id that the program named and the name of its
+  file. The dock keeps the value as the conversation cut it, one line of
+  `MAX_SUMMARY_CHARS` characters, and the next start passes it as one argument
+  of `--resume`. It never becomes a word of a shell, a path or a log line, and a
+  record whose program name differs from the program of this dock resumes
+  nothing.
+- **A removed workspace removes its file.** The dock removes the file of a
+  workspace that closes, on its worker, and the folder of a session goes whole
+  when the person deletes that saved session.
 
 ## What the bridge does not guarantee
 

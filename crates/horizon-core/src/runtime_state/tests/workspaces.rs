@@ -328,3 +328,43 @@ workspaces:
     assert_eq!(state.detached_workspaces[0].window.y, Some(80.0));
     assert_eq!(state.canvas_view, Some(CanvasViewState::new([24.0, -12.0], 1.5)));
 }
+
+#[test]
+fn a_conversation_record_survives_the_round_trip_through_the_board() {
+    let record = OrchestratorConversationState {
+        session_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+        program: "claude".to_string(),
+    };
+    let mut state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "chat".to_string(),
+            name: "chat".to_string(),
+            orchestrator: Some(record.clone()),
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+
+    let board = Board::from_runtime_state(&state).expect("the board restores");
+    let workspace = board.workspaces.first().expect("the board carries the workspace");
+    assert_eq!(
+        workspace.orchestrator,
+        Some(record.clone()),
+        "the board keeps the record of the conversation of a workspace"
+    );
+
+    let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    assert_eq!(
+        saved
+            .workspaces
+            .first()
+            .and_then(|workspace| workspace.orchestrator.clone()),
+        Some(record),
+        "a saved board writes back the record that the start read"
+    );
+
+    // A workspace without a conversation keeps none.
+    state.workspaces[0].orchestrator = None;
+    let board = Board::from_runtime_state(&state).expect("the board restores");
+    assert_eq!(board.workspaces[0].orchestrator, None);
+}

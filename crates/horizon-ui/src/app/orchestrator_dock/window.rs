@@ -145,11 +145,26 @@ impl HorizonApp {
     /// draws no frame: a conversation that nobody shows keeps its events. A
     /// second pass of one frame reads no event twice, because a read takes them
     /// from the channel.
+    ///
+    /// The same pass keeps the stored side in step: it loads the conversation of
+    /// a workspace that a saved board brings back, it keeps the record of each
+    /// session in the board, and it queues one write for each conversation whose
+    /// entries the file does not hold yet. Each of those jobs runs on the worker
+    /// of the dock, and its outcome applies on a later frame.
     pub(in crate::app) fn poll_orchestrator_dock(&mut self) {
         for session in self.orchestrator_dock.sessions.values_mut() {
             session.poll();
         }
         self.orchestrator_dock.poll_worker();
+        let program = self.orchestrator_dock.program_name().to_owned();
+        self.orchestrator_dock.restore_conversations(&self.board);
+        if self
+            .orchestrator_dock
+            .sync_conversation_records(&mut self.board, &program)
+        {
+            self.mark_runtime_dirty();
+        }
+        self.orchestrator_dock.queue_conversation_appends();
     }
 
     /// Sends the draft of the workspace that `local_id` names, and starts the
@@ -180,6 +195,15 @@ impl HorizonApp {
             .start_bridge(spec, local_id.to_owned(), generation, wake);
     }
 
+    /// Writes `text` in the draft of `local_id` and sends it, as a person who
+    /// typed it and pressed Enter would. A test that reads the stored side of
+    /// the dock uses it without the keyboard.
+    #[cfg(test)]
+    pub(in crate::app) fn send_orchestrator_text(&mut self, ctx: &egui::Context, local_id: &str, text: &str) {
+        self.orchestrator_dock.draft_mut(local_id).push_str(text);
+        self.send_orchestrator_message(ctx, local_id);
+    }
+
     /// Stops the bridge of the workspace that `local_id` names, on the worker of
     /// the dock, and leaves the notice of the person.
     pub(in crate::app) fn stop_orchestrator_conversation(&mut self, local_id: &str) {
@@ -195,9 +219,11 @@ impl HorizonApp {
         }
     }
 
-    /// Drops the conversation and the draft of a workspace that closes, and stops
-    /// the bridge of that conversation on the worker of the dock.
+    /// Drops the conversation and the draft of a workspace that closes, stops
+    /// the bridge of that conversation on the worker of the dock, and removes the
+    /// stored conversation of that workspace from its session folder.
     pub(in crate::app) fn forget_orchestrator_conversation(&mut self, local_id: &str) {
+        self.orchestrator_dock.delete_conversation(local_id);
         let Some(mut session) = self.orchestrator_dock.forget(local_id) else {
             return;
         };

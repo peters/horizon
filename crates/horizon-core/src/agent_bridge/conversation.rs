@@ -13,8 +13,14 @@
 //! the top of the list names how many it holds no longer. The snapshot also sums
 //! the cost of every ended turn in `cost_usd_total`, which a window shows as the
 //! cost of the conversation.
+//!
+//! An entry has a stored form, which [`super::store`] writes and reads: the
+//! derive of [`Entry`] names each kind with `kind`, and the store adds the
+//! version of its line format around it.
 
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use super::codec::{cut_bytes, tidy};
 use super::event::BridgeEvent;
@@ -33,7 +39,8 @@ pub enum Link {
 }
 
 /// The state of one tool call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolState {
     Running,
     Done,
@@ -41,7 +48,11 @@ pub enum ToolState {
 }
 
 /// One entry of a conversation.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// The stored form of an entry is one JSON object with a `kind` field, which
+/// [`super::store`] writes and reads.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Entry {
     /// A message of the person.
     Person { text: String },
@@ -138,6 +149,34 @@ impl Conversation {
         Arc::clone(&self.snapshot)
     }
 
+    /// The conversation of a stored history, which a restart shows before its
+    /// program runs: the entries, the session id that the history resumed, and
+    /// no turn in flight. The link is [`Link::NotStarted`], because no program
+    /// of this run named a session yet.
+    #[must_use]
+    pub fn restored(entries: Vec<Entry>, session_id: Option<String>) -> Self {
+        let mut conversation = Self::new();
+        let snapshot = Arc::make_mut(&mut conversation.snapshot);
+        snapshot.version = 1;
+        snapshot.session_id = session_id;
+        snapshot.entries = entries;
+        Self::trim(snapshot, &mut conversation.capped, &mut conversation.cap_text);
+        conversation
+    }
+
+    /// Puts a stored history in front of the entries that this conversation
+    /// holds. A frame that already showed a message of the person sees the
+    /// earlier entries above it.
+    pub fn prepend(&mut self, entries: Vec<Entry>) {
+        if entries.is_empty() {
+            return;
+        }
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.splice(0..0, entries);
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
     /// Appends one message of the person and marks the conversation busy.
     pub fn person_said(&mut self, text: &str) {
         let snapshot = Arc::make_mut(&mut self.snapshot);
@@ -164,7 +203,7 @@ impl Conversation {
     /// Applies one event of the program.
     pub fn apply(&mut self, event: BridgeEvent) {
         let snapshot = Arc::make_mut(&mut self.snapshot);
-        snapshot.version += 1;
+        snapshot.version = snapshot.version.saturating_add(1);
         match event {
             BridgeEvent::SessionStarted { session_id } => {
                 snapshot.link = Link::Running;

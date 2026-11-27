@@ -155,6 +155,7 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![
                 PanelState {
                     local_id: "a".to_string(),
@@ -274,6 +275,7 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![PanelState {
                 local_id: "a".to_string(),
                 name: "Claude A".to_string(),

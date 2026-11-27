@@ -69,6 +69,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![PanelState {
                 local_id: "panel".to_string(),
                 name: "Claude".to_string(),
@@ -94,6 +95,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_opencode_panel() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![PanelState {
                 local_id: "panel".to_string(),
                 name: "OpenCode".to_string(),
@@ -119,6 +121,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_pi_panel() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![PanelState {
                 local_id: "panel".to_string(),
                 name: "Pi".to_string(),
@@ -144,6 +147,7 @@ fn runtime_state_needs_bootstrap_for_a_persisted_codex_binding() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![
                 PanelState {
                     local_id: "fresh".to_string(),
@@ -701,6 +705,7 @@ fn runtime_state_skips_bootstrap_for_agents_without_exact_session_catalogs() {
             position: None,
             template: None,
             layout: None,
+            orchestrator: None,
             panels: vec![
                 PanelState {
                     local_id: "gemini".to_string(),

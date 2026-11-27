@@ -36,7 +36,29 @@ pub struct WorkspaceState {
         deserialize_with = "deserialize_workspace_layout"
     )]
     pub layout: Option<WorkspaceLayout>,
+    /// The conversation of the orchestrator dock of this workspace, which a
+    /// restart shows again. A workspace without a saved conversation writes no
+    /// field, so an older build reads the file and no version changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<OrchestratorConversationState>,
     pub panels: Vec<PanelState>,
+}
+
+/// The stored conversation of the orchestrator dock of one workspace: the
+/// session of the agent program that the next run resumes, and the program that
+/// named it.
+///
+/// A record without a session id keeps the entries of the conversation on disk
+/// and resumes nothing: the program ended before its first turn of the last run,
+/// so the next message starts a new session.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct OrchestratorConversationState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The name of the file of the program that named the session, such as
+    /// `claude`. A session of another program is not resumed.
+    pub program: String,
 }
 
 fn deserialize_workspace_layout<'de, D>(deserializer: D) -> std::result::Result<Option<WorkspaceLayout>, D::Error>
@@ -101,6 +123,7 @@ impl WorkspaceState {
                 workspace_name: workspace.name.clone(),
             }),
             layout,
+            orchestrator: None,
             panels,
         }
     }
@@ -523,6 +546,46 @@ impl AgentSessionBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workspace_without_a_conversation_writes_no_field_and_loads_without_one() {
+        let workspace = WorkspaceState {
+            local_id: "workspace-1".to_owned(),
+            name: "chat".to_owned(),
+            ..WorkspaceState::default()
+        };
+        let yaml = serde_yaml::to_string(&workspace).expect("the workspace has a stored form");
+        assert!(
+            !yaml.contains("orchestrator"),
+            "a workspace without a conversation: {yaml}"
+        );
+        let loaded: WorkspaceState = serde_yaml::from_str(&yaml).expect("the workspace loads");
+        assert_eq!(loaded.orchestrator, None);
+
+        let saved = WorkspaceState {
+            orchestrator: Some(OrchestratorConversationState {
+                session_id: Some("session-1".to_owned()),
+                program: "claude".to_owned(),
+            }),
+            ..workspace
+        };
+        let yaml = serde_yaml::to_string(&saved).expect("the workspace has a stored form");
+        assert!(yaml.contains("orchestrator"), "a workspace with a conversation: {yaml}");
+        let loaded: WorkspaceState = serde_yaml::from_str(&yaml).expect("the workspace loads");
+        assert_eq!(loaded.orchestrator, saved.orchestrator);
+    }
+
+    #[test]
+    fn a_conversation_record_without_a_session_id_holds_no_session() {
+        let record = OrchestratorConversationState {
+            session_id: None,
+            program: "claude".to_owned(),
+        };
+        let yaml = serde_yaml::to_string(&record).expect("the record has a stored form");
+        assert!(!yaml.contains("session_id"), "no session is written: {yaml}");
+        let loaded: OrchestratorConversationState = serde_yaml::from_str(&yaml).expect("the record loads");
+        assert_eq!(loaded, record);
+    }
 
     #[test]
     fn scope_comparison_ignores_order_and_metadata_but_preserves_duplicate_counts() {
