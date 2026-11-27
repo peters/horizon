@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -244,14 +244,15 @@ no setting and starts no program.
 
 ## Trusted: the caller identity
 
-The caller is the agent panel that Horizon launched, and its identity is the two
-variables that Horizon injects into that panel.
+The caller is the agent panel that Horizon launched, or the orchestrator of a
+workspace of this board, and its identity is the two variables that Horizon
+injects into that program.
 
 - The MCP server refuses a caller that has no `horizon:` actor and no live host
   instance with `caller_unavailable`.
-- The UI resolves the actor to an agent panel of its own board. A request whose
-  actor is not an agent panel of this host is `caller_unavailable`, and a request
-  of another host is `wrong_host`.
+- The UI resolves the actor to an agent panel of its own board, or to the
+  orchestrator of a workspace of that board. A request whose actor is neither is
+  `caller_unavailable`, and a request of another host is `wrong_host`.
 - One card has one owner: the actor that created it. `update`, `visibility` and
   `close` require the exact owner, and another agent of the same workspace gets
   `not_owner`. One agent owns at most eight cards in one workspace.
@@ -404,6 +405,51 @@ are written by Horizon and no document field can set them:
 A document may still choose its own words, its own ids, its tones, its order of
 components and which row of a list starts selected. None of those carry host
 state: a default row is a row id that the person can change.
+
+## The orchestrator of a workspace is a caller without a panel
+
+The program that the orchestrator dock runs speaks for one workspace. Its actor is
+`horizon:orchestrator/<local id>`, and it has no panel of the board.
+
+- **Untrusted: the actor string of a request.** It arrives in the request file
+  like every other field. The host accepts it only when it parses as an actor of
+  an orchestrator and the local id in it names a workspace of this board
+  (`crates/horizon-core/src/agent_bridge/actor.rs`,
+  `crates/horizon-ui/src/app/block_requests.rs`, `request_caller`). The form of
+  that local id admits 36 bytes of lower-case hexadecimal and hyphens and nothing
+  else, so no slash, dot, space or control character of a caller reaches the
+  host. An unknown workspace is `caller_unavailable`, and the answer names the
+  caller and no workspace.
+- **Every card document of that child is untrusted in the same way.** The bounds
+  of this page hold for it without a change, and the host checks the document in
+  the MCP server and again in the UI.
+- **The orchestrator reaches its own workspace only.** The workspace is the one
+  that the local id of its actor names, so its `list` and `inspect` read no card
+  of another workspace, and a card of another workspace is `panel_unavailable`.
+  One card has one owner, and the owner of a card of an orchestrator is that
+  actor.
+- **Its card takes a free tile.** A caller without a panel has no column and no
+  `beside` anchor, so the board puts its card on a free tile of that workspace
+  that covers no panel. The position and the size stay Horizon's, as for every
+  card.
+- **Nothing more than an agent panel is granted.** Every card operation of this
+  caller is an operation that an agent panel of the same workspace has.
+  `open_terminal`, `open_panel`, `server_link_request` and `browser_host_request`
+  need the panel of the caller, so they answer the refusal of a caller without a
+  panel, `caller_unavailable`. The machine operations and the reads of this tool
+  take no actor, as they do for a panel. The browser page tools and the Device
+  tools keep the rule of their own boundary: the actor of an orchestrator is in
+  no workspace stamp, so it controls no page and no viewer.
+- **The presence of the owner is the bridge of the dock.** `card_owner_present`
+  answers `true` while the dock holds a running bridge for that workspace, so a
+  control of the card is live only while that program runs. No other state of a
+  card changes with the caller.
+- **No wake line is typed for it.** The owner has no terminal, so Horizon writes
+  the wake line nowhere and the click waits in the queue of the card.
+- **Does not guarantee:** that the program behind the actor is the orchestrator of
+  that workspace. The identity is the variable that Horizon injected into the
+  child, and a process of the same user that writes a request file can name any
+  actor of this board, as it can for a local agent card.
 
 ## Does not guarantee
 

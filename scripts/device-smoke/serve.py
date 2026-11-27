@@ -156,7 +156,8 @@ PANEL_PROGRAM_FOLDER = 'programs'
 # The programs that a program of this folder imports, as one copy each: the file
 # agent imports the MCP client of the card agent, so a panel that runs a copy of
 # the file agent needs that second copy beside it.
-PROGRAM_IMPORTS = {FILE_AGENT_PROGRAM: (WORKTREE_CARD_PROGRAM,)}
+PROGRAM_IMPORTS = {FILE_AGENT_PROGRAM: (WORKTREE_CARD_PROGRAM,),
+                   ORCHESTRATOR_STANDIN_PROGRAM: (WORKTREE_CARD_PROGRAM,)}
 
 
 def bound_port(process, path, pattern):
@@ -679,6 +680,10 @@ def orchestrator_program_in_state(state, environments=(), folder=None):
         return None
     state = Path(state).resolve()
     copy = program_in_state(source, state / 'data' / PANEL_PROGRAM_FOLDER / ORCHESTRATOR_STANDIN_PROGRAM, state)
+    # The stand-in imports the MCP client of `card_agent.py` for the card that it
+    # draws, so that program lies beside the copy in the state folder.
+    for imported in PROGRAM_IMPORTS.get(ORCHESTRATOR_STANDIN_PROGRAM, ()):
+        program_in_state(fixture_program(imported, folder), copy.parent / imported, state)
     os.environ[ORCHESTRATOR_PROGRAM_VARIABLE] = str(copy)
     for environment in environments:
         environment[ORCHESTRATOR_PROGRAM_VARIABLE] = str(copy)

@@ -13,6 +13,7 @@ use egui::Context;
 use horizon_browser_control::block::{BlockDocument, parse_sent_document};
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_terminal;
+use horizon_core::agent_bridge::actor;
 use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
@@ -101,19 +102,28 @@ fn card_document(document: &serde_json::Value) -> Result<BlockDocument, Outcome>
     parse_sent_document(document).map_err(|error| Outcome::failed(error.code(), &error.to_string()))
 }
 
-/// Who asked for a card: an agent panel, or a session of a machine of the list.
+/// Who asked for a card: an agent panel, the orchestrator of a workspace, or a
+/// session of a machine of the list.
 #[derive(Clone, Copy)]
 pub(in crate::app) enum CardCaller<'a> {
     Panel(ActorPanel),
-    Session { machine: &'a str },
+    /// The program that the dock runs for one workspace, which has no panel.
+    Orchestrator {
+        workspace: WorkspaceId,
+    },
+    Session {
+        machine: &'a str,
+    },
 }
 
 impl CardCaller<'_> {
-    /// The agent panel of this caller, when a panel of this board asked.
+    /// The agent panel of this caller, when a panel of this board asked. The two
+    /// callers without a panel answer `None` here and are refused by every
+    /// operation that needs the panel itself, such as `open_terminal`.
     pub(super) fn panel(self) -> Option<ActorPanel> {
         match self {
             Self::Panel(panel) => Some(panel),
-            Self::Session { .. } => None,
+            Self::Orchestrator { .. } | Self::Session { .. } => None,
         }
     }
 }
@@ -240,7 +250,7 @@ impl HorizonApp {
                     root,
                     ctx,
                 ),
-                CardCaller::Session { .. } => Some(caller_unavailable()),
+                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } => Some(caller_unavailable()),
             },
             Operation::OpenPanel {
                 preset,
@@ -270,7 +280,7 @@ impl HorizonApp {
             Operation::Presets => Some(self.answer_presets()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => match caller {
                 CardCaller::Panel(actor) => self.answer_setting_request(&request.operation, actor, request, root, ctx),
-                CardCaller::Session { .. } => Some(caller_unavailable()),
+                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } => Some(caller_unavailable()),
             },
         }
     }
@@ -405,6 +415,16 @@ impl HorizonApp {
         if let Some(panel) = actor_panel(&self.board, &request.actor) {
             return Ok(CardCaller::Panel(panel));
         }
+        // The orchestrator of a workspace asks as `horizon:orchestrator/<local
+        // id>`. The id in the actor is checked against this board, and that
+        // workspace is the whole right of this caller: it has no panel.
+        if let Some(local_id) = actor::workspace_of(&request.actor) {
+            let workspace = self
+                .board
+                .workspace_id_by_local_id(local_id)
+                .ok_or_else(caller_unavailable)?;
+            return Ok(CardCaller::Orchestrator { workspace });
+        }
         let (machine, _session) = node_cards::actor_parts(&request.actor).ok_or_else(caller_unavailable)?;
         if self.machine_list.find(machine).is_none() {
             return Err(caller_unavailable());
@@ -412,10 +432,14 @@ impl HorizonApp {
         Ok(CardCaller::Session { machine })
     }
 
-    /// The workspace of the cards of `owner`: its panel's, or its machine's.
+    /// The workspace of the cards of `owner`: its panel's, the orchestrator's
+    /// workspace, or its machine's.
     pub(super) fn owner_workspace(&self, owner: &str) -> Option<WorkspaceId> {
         if let Some(panel) = actor_panel(&self.board, owner) {
             return Some(panel.workspace_id);
+        }
+        if let Some(local_id) = actor::workspace_of(owner) {
+            return self.board.workspace_id_by_local_id(local_id);
         }
         let (machine, _session) = node_cards::actor_parts(owner)?;
         self.board
@@ -485,6 +509,9 @@ impl HorizonApp {
         // The first card of a session makes the workspace of its machine.
         let workspace = match caller {
             CardCaller::Panel(panel) => panel.workspace_id,
+            // A card of an orchestrator lands in the workspace of its actor, as a
+            // card of a machine lands in the workspace of that machine.
+            CardCaller::Orchestrator { workspace } => workspace,
             CardCaller::Session { machine } => self.machine_workspace(machine, ctx),
         };
         let card_count = self

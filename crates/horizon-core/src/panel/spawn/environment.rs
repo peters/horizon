@@ -54,19 +54,14 @@ pub fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) ->
         env.insert(key.to_owned(), String::new());
     }
     if kind.is_agent() {
-        env.insert("HORIZON".to_string(), "1".to_string());
-        env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
-        env.insert(
-            crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
-            crate::browser::manifest::host_instance().to_string(),
-        );
-        // The full path of the program that runs this panel's Horizon, so a skill
-        // copies the binary of this computer instead of looking for it on a `PATH`
-        // that holds no `horizon` when the person starts it from a folder.
-        let executable = crate::browser_mcp_executable()
-            .and_then(|path| path.into_os_string().into_string().ok())
-            .unwrap_or_default();
-        env.insert(EXECUTABLE_ENV.to_string(), executable);
+        let executable = executable_path();
+        for (name, value) in agent_identity_vars(
+            browser_actor(local_id),
+            crate::browser::manifest::host_instance(),
+            &executable,
+        ) {
+            env.insert(name.to_owned(), value);
+        }
         // Every named secret whose value this computer holds, as one environment
         // variable each, so a tool that the agent starts reads its key without an
         // export in the shell of this computer. A terminal panel, and a terminal on
@@ -97,6 +92,34 @@ pub fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) ->
         env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
     }
     env
+}
+
+/// The variables that name one Horizon agent to the tools that it starts: the
+/// mark of an agent, the actor of this program, the host instance of the running
+/// Horizon and the full path of the program that runs it.
+///
+/// An agent panel and a program that the orchestrator dock runs get the same
+/// names from this function, so a tool reads one identity and the two callers
+/// cannot drift apart. A caller that is not an agent gets none of them.
+#[must_use]
+pub fn agent_identity_vars(actor: String, host_instance: &str, executable: &str) -> [(&'static str, String); 4] {
+    [
+        ("HORIZON", "1".to_string()),
+        ("HORIZON_BROWSER_ACTOR", actor),
+        (crate::browser::manifest::HOST_INSTANCE_ENV, host_instance.to_string()),
+        (EXECUTABLE_ENV, executable.to_string()),
+    ]
+}
+
+/// The full path of the program that runs this Horizon, as a string, or the
+/// empty string when this build cannot resolve its own path.
+///
+/// A skill copies the binary of this computer instead of looking for it on a
+/// `PATH` that holds no `horizon` when the person starts it from a folder.
+fn executable_path() -> String {
+    crate::browser_mcp_executable()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .unwrap_or_default()
 }
 
 /// Stable private control identity injected into one Horizon agent panel.

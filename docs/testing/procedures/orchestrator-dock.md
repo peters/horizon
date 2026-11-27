@@ -354,6 +354,71 @@ comes back as an answer.
    Result: No line names the program. Horizon ended every program of the dock
    before it exited.
 
+### 6.15 OD-15 — The orchestrator draws a card on the canvas
+
+This task needs a screen that is wide enough for the card and the dock beside the
+panels of the fixture.
+
+1. Stop the fixture and start it again with the stand-in, the switch of the dock
+   and a screen of 2400 by 1100 points, and use `--state <evidence>/dock-card`.
+
+   ```sh
+   HORIZON_ORCHESTRATOR_DOCK=1 \
+   HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py \
+     python3 scripts/device-smoke/serve.py \
+       --horizon <candidate>/horizon --native-view --screen 2400x1100 \
+       --state <evidence>/dock-card
+   ```
+
+2. Open a Device panel on the address of the fixture in the current workspace.
+
+3. Click in the field of the dock, type `draw a card`, and press Enter.
+
+   Result: The list of the dock shows the bubble `draw a card`, the text
+   `You said: draw a card`, and one text that names the id of a new card, such as
+   `I drew the card 124cef72-8cb1-483b-9665-ec8cc155c737 in this workspace. Press
+   Go or Cancel and I read it.`. The header reads
+   `Orchestrator · Claude Code · ready`. The sidebar of the workspace lists a row
+   with the mark `CARD` and the name `Plan`.
+
+4. Click the row `Plan` in the sidebar.
+
+   Result: The canvas moves to the card. The card holds the title `Plan`, heading
+   `Plan`, the subtitle `drawn by the stand-in orchestrator`, one line of text,
+   the button `Go` in the primary tone, the button `Cancel`, and the foot line
+   `Card drawn by an agent` with the time. The state chip of the title bar reads
+   `Claude listens`, with a green dot. The card covers no terminal panel of the
+   workspace.
+
+5. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the card on the canvas of the workspace of the
+   conversation, the chip `Claude listens`, and the two texts of the dock.
+
+### 6.16 OD-16 — A press reaches the orchestrator
+
+The program of the dock reads a press only through the `next_click` that it keeps
+open, because Horizon types no wake line for an owner without a terminal.
+
+1. Do the steps 1 to 4 of OD-15.
+
+2. Click the button `Go` of the card.
+
+   Result: The list of the dock shows one more text of the agent,
+   `You pressed go`, and the cost of the header grows by one turn. The state chip
+   of the card reads `Claude`, without the dot of a wait, because the one
+   `next_click` of the program ended with that press.
+
+3. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the card, the text `You pressed go` in the dock, and
+   the chip `Claude`.
+
+4. Click the button `Cancel`, and wait for the wait of the program to end.
+
+   Result: The dock adds no text, because the program holds no `next_click` any
+   more. The press waits in the queue of the card for five minutes.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.
@@ -381,6 +446,14 @@ comes back as an answer.
 - The dock draws nothing in a window where the canvas would keep less than 320
   points.
 - The text of the dock is readable in the light theme and in the dark theme.
+- A message that holds `card` draws one card of the stand-in in the workspace of
+  the conversation, and the card holds the heading, the subtitle, the text and the
+  two buttons of the stand-in.
+- A card of an orchestrator stands on a free tile of the canvas and covers no
+  panel. Its state chip reads `Claude listens` while the program holds a
+  `next_click` open, and `Claude` after the wait ends.
+- A press on a button of the card reaches the program of the dock, and the dock
+  shows the text that names the button.
 
 ## 8. Cleanup
 

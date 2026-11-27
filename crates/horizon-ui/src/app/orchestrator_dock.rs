@@ -252,6 +252,13 @@ impl OrchestratorDock {
         self.sessions.get(local_id)
     }
 
+    /// Whether a program of the dock runs for the workspace that `local_id`
+    /// names now, which is the presence of the orchestrator of that workspace:
+    /// a card of it reports that its owner is here while this answers `true`.
+    pub(in crate::app) fn running(&self, local_id: &str) -> bool {
+        self.sessions.get(local_id).is_some_and(Session::has_bridge)
+    }
+
     /// The conversations that own a child program now, which a test reads.
     #[cfg(test)]
     pub(in crate::app) fn running_bridges(&self) -> usize {
@@ -423,7 +430,7 @@ impl HorizonApp {
         let Some(request) = self.orchestrator_dock.begin_start(local_id) else {
             return;
         };
-        let spec = session::program_spec(&program, &directory, request.session.clone());
+        let spec = session::program_spec(&program, &directory, request.session.clone(), local_id);
         let wake = repaint_wake(ctx);
         let generation = request.generation;
         let local_id = local_id.to_owned();

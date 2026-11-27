@@ -7,6 +7,7 @@ gives Claude Code, and read the lines that it answers.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import unittest.mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import orchestrator_standin  # noqa: E402
 import serve  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / serve.ORCHESTRATOR_STANDIN_PROGRAM
@@ -30,9 +32,16 @@ def request(text):
 
 
 def run(turns):
-    """Every line of the program after it read one line for each text of `turns`."""
+    """Every line of the program after it read one line for each text of `turns`.
+
+    The environment names no Horizon program, so a turn that holds `card` draws
+    no card and starts no MCP server: these tests start no Horizon host.
+    """
+    environment = {name: value for name, value in os.environ.items()
+                   if name != orchestrator_standin.EXECUTABLE_ENV}
+    environment['PYTHONDONTWRITEBYTECODE'] = '1'
     answer = subprocess.run([str(SCRIPT), *HORIZON_ARGUMENTS], input=''.join(request(text) for text in turns),
-                            text=True, capture_output=True, timeout=120)
+                            text=True, capture_output=True, timeout=120, env=environment)
     if answer.returncode != 0:
         raise AssertionError(f'the stand-in ended with {answer.returncode}: {answer.stderr}')
     return [json.loads(line) for line in answer.stdout.splitlines()]
@@ -88,6 +97,35 @@ class OrchestratorStandinTests(unittest.TestCase):
         self.assertTrue(lines[0].startswith('1. '))
         self.assertTrue(lines[-1].startswith('40. '))
 
+    def test_the_card_names_the_plan_the_subtitle_the_text_and_two_buttons(self):
+        document = orchestrator_standin.card_document()
+        components = document['components']
+        self.assertEqual([component['type'] for component in components],
+                         ['heading', 'text', 'buttons'])
+        self.assertEqual(components[0]['text'], orchestrator_standin.CARD_HEADING)
+        self.assertEqual(components[0]['subtitle'], orchestrator_standin.CARD_SUBTITLE)
+        self.assertEqual(components[1]['text'], orchestrator_standin.CARD_TEXT)
+        buttons = components[2]['items']
+        self.assertEqual([button['id'] for button in buttons], ['go', 'cancel'])
+        self.assertEqual([button['label'] for button in buttons], ['Go', 'Cancel'])
+        self.assertEqual(buttons[0]['tone'], 'primary')
+
+    def test_a_turn_of_a_card_draws_nothing_without_a_program_of_horizon(self):
+        records = run(['draw a card'])
+        texts = texts_of(records)
+        self.assertEqual(texts[0], 'You said: draw a card')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, texts[1])
+        self.assertEqual(len(texts), 2, 'the answer and the notice, and no card text')
+        self.assertEqual(records[-1]['type'], 'result', 'the turn ends with its result')
+        self.assertEqual(texts_of(run(['hello there'])), ['You said: hello there'])
+
+    def test_the_command_of_the_mcp_server_is_the_program_of_horizon(self):
+        with unittest.mock.patch.dict('os.environ', {orchestrator_standin.EXECUTABLE_ENV: ''}):
+            self.assertEqual(orchestrator_standin.mcp_command(), '')
+        with unittest.mock.patch.dict('os.environ',
+                                      {orchestrator_standin.EXECUTABLE_ENV: '/opt/horizon'}):
+            self.assertEqual(orchestrator_standin.mcp_command(), '/opt/horizon --browser-mcp')
+
     def test_two_turns_of_one_program_keep_their_order(self):
         records = run(['one', 'two'])
         self.assertEqual([record.get('type') for record in records].count('result'), 2)
@@ -104,6 +142,10 @@ class OrchestratorStandinTests(unittest.TestCase):
             self.assertEqual(Path(copy).parent, state.resolve() / 'data' / serve.PANEL_PROGRAM_FOLDER)
             self.assertTrue(Path(copy).stat().st_mode & 0o100, 'the copy is executable')
             self.assertEqual(environment[serve.ORCHESTRATOR_PROGRAM_VARIABLE], str(copy))
+            beside = Path(copy).parent / serve.WORKTREE_CARD_PROGRAM
+            self.assertTrue(
+                beside.is_file(),
+                'the stand-in imports the MCP client of card_agent.py, which lies beside it')
 
 
 if __name__ == '__main__':

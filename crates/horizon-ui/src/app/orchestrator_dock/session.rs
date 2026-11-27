@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use horizon_core::agent_bridge::{
-    Bridge, BridgeEvent, ClaudeCodec, Conversation, ConversationSnapshot, ProgramSpec, SessionChoice,
+    Bridge, BridgeEvent, BridgeIdentity, ClaudeCodec, Conversation, ConversationSnapshot, ProgramSpec, SessionChoice,
 };
 
 /// The notice of a turn that the person stopped.
@@ -104,8 +104,7 @@ impl Session {
         self.conversation.snapshot()
     }
 
-    /// Whether this conversation owns a bridge now.
-    #[cfg(test)]
+    /// Whether this conversation owns a bridge now: its program runs.
     pub(super) fn has_bridge(&self) -> bool {
         self.bridge.is_some()
     }
@@ -267,9 +266,26 @@ impl Session {
 }
 
 /// The program of one conversation: Claude Code, or the program that the
-/// environment names in its place, with the same arguments.
-pub(super) fn program_spec(program: &std::path::Path, cwd: &std::path::Path, session: SessionChoice) -> ProgramSpec {
-    let mut spec = horizon_core::agent_bridge::claude(cwd, session);
+/// environment names in its place, with the same arguments and the identity of
+/// the workspace that `local_id` names.
+///
+/// The identity is the one of the active host: its actor, its host instance, its
+/// home and its executable, plus the plugin directory of Claude Code, so the
+/// program has the Horizon MCP server and the Horizon skills and draws cards in
+/// its own workspace. A local id that the actor form does not accept gives no
+/// identity, and the program then draws no card.
+pub(super) fn program_spec(
+    program: &std::path::Path,
+    cwd: &std::path::Path,
+    session: SessionChoice,
+    local_id: &str,
+) -> ProgramSpec {
+    let mut spec = if let Some(identity) = BridgeIdentity::for_workspace(local_id) {
+        horizon_core::agent_bridge::claude_for_workspace(cwd, session, &identity)
+    } else {
+        tracing::warn!(local_id, "the workspace of this conversation has no orchestrator actor");
+        horizon_core::agent_bridge::claude(cwd, session)
+    };
     spec.program = program.to_path_buf();
     spec
 }
@@ -293,6 +309,15 @@ mod tests {
     use super::{Phase, Session, Start, program_spec};
     use horizon_core::agent_bridge::{Bridge, Entry, SessionChoice};
 
+    /// A workspace local id of the form that `new_local_id` makes.
+    const WORKSPACE: &str = "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e";
+
+    /// The stand-in of a program that names its session and then waits for the
+    /// lines of the person, so a test owns a bridge without an agent program.
+    const SILENT: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
+while IFS= read -r line; do :; done
+"#;
+
     /// The bridge of a program that is not there, and the error of its start.
     fn failed_start(session: &Start) -> horizon_core::agent_bridge::BridgeError {
         Bridge::start(
@@ -300,11 +325,46 @@ mod tests {
                 std::path::Path::new("/nonexistent/horizon-stand-in"),
                 &std::env::temp_dir(),
                 session.session.clone(),
+                WORKSPACE,
             ),
             super::codec(),
             std::sync::Arc::new(|| {}),
         )
         .expect_err("a program that is not there does not start")
+    }
+
+    /// The presence of a card of the orchestrator of a workspace, which is the
+    /// bridge that the dock runs for it.
+    #[test]
+    fn the_presence_of_a_conversation_follows_its_bridge() {
+        let folder = tempfile::tempdir().expect("a folder for the stand-in");
+        let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
+            .expect("the stand-in program of the test");
+        let mut session = Session::new();
+        assert!(
+            !session.has_bridge(),
+            "a conversation that started no program owns no bridge"
+        );
+        let start = session.begin_start();
+        let bridge = Bridge::start(
+            program_spec(&program, folder.path(), start.session.clone(), WORKSPACE),
+            super::codec(),
+            std::sync::Arc::new(|| {}),
+        )
+        .expect("the stand-in program starts");
+        assert!(
+            session.adopt(start.generation, Some(Ok(bridge))).is_none(),
+            "the bridge of this generation is the bridge of this conversation"
+        );
+        assert!(session.has_bridge(), "the program of this workspace runs");
+        assert!(
+            session.stop().is_some(),
+            "the stop takes the bridge of the conversation"
+        );
+        assert!(
+            !session.has_bridge(),
+            "a stopped conversation holds no program, so its orchestrator is gone"
+        );
     }
 
     #[test]

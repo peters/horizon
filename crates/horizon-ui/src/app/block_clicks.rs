@@ -14,6 +14,7 @@ use std::time::Instant;
 use horizon_browser_control::block::ClickEvent;
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
+use horizon_core::agent_bridge::actor;
 use horizon_core::node_cards;
 use horizon_core::{
     AgentStatus, BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict,
@@ -116,6 +117,12 @@ impl HorizonApp {
         let listening = self.block_listening(panel_id);
         Some(match self.card_owner_panel(panel) {
             Some(owner) => CardChip::for_panel(self.board.panel(owner)?.kind, listening, true),
+            // The owner is the orchestrator of this workspace: its program runs in
+            // the dock with no terminal, so the chip names that program and says
+            // whether it waits, and `No agent` once the program ended.
+            None if card_owner(panel).and_then(actor::workspace_of).is_some() => {
+                CardChip::for_panel(PanelKind::Claude, listening, self.card_owner_present(panel))
+            }
             // The owner runs on a machine of the list, so the chip names that machine:
             // the session is no panel of this board.
             None if self.card_owner_present(panel) => {
@@ -135,14 +142,23 @@ impl HorizonApp {
             .is_some_and(|block| block.owner_actor.is_none())
     }
 
-    /// Whether the owner of a card is here: a panel of its workspace, or the
-    /// session of a machine that the watch reports. A session whose program is no
-    /// agent reports no row, so the list of sessions is what settles it.
+    /// Whether the owner of a card is here: a panel of its workspace, the bridge
+    /// that the dock runs for its workspace, or the session of a machine that the
+    /// watch reports. A session whose program is no agent reports no row, so the
+    /// list of sessions is what settles it.
     pub(in crate::app) fn card_owner_present(&self, panel: &Panel) -> bool {
         if self.card_owner_panel(panel).is_some() {
             return true;
         }
-        let Some((machine, session)) = card_owner(panel).and_then(node_cards::actor_parts) else {
+        let Some(owner) = card_owner(panel) else {
+            return false;
+        };
+        if let Some(local_id) = actor::workspace_of(owner) {
+            // A program of the dock has no terminal and no panel of this board, so
+            // the bridge of its conversation is its presence.
+            return self.orchestrator_dock.running(local_id);
+        }
+        let Some((machine, session)) = node_cards::actor_parts(owner) else {
             return false;
         };
         self.machine_watch

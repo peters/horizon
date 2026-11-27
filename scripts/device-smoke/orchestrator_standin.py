@@ -11,8 +11,13 @@ optional long answer, the state of the limit of the plan, and the result of the
 turn with its cost. A turn whose text holds `slow` waits two seconds before its
 answer, so a run shows the working state of the dock.
 
-The words `tool`, `long` and `slow` choose what a turn answers. The program ends
-when the standard input closes, as an agent program of a conversation does.
+The words `tool`, `long`, `slow` and `card` choose what a turn answers. A turn
+whose text holds `card` draws one card in the workspace of the conversation
+through a real `horizon --browser-mcp` child, with the identity that Horizon gave
+this program, and then keeps one `next_click` open for that card in a thread of
+its own. A press of the person answers that wait, and the thread prints the text
+of the agent and the result of that turn. The program ends when the standard
+input closes, as an agent program of a conversation does.
 
 Usage, inside the isolated fixture:
 
@@ -22,25 +27,52 @@ Usage, inside the isolated fixture:
 """
 import json
 import os
+import shlex
 import sys
+import threading
 import time
 import uuid
+
+# The MCP client of this program is the one of card_agent.py, which the fixture
+# copies beside this file, so that import leaves no __pycache__.
+sys.dont_write_bytecode = True
+
+from card_agent import Fatal, StdioMcpClient, one_line
 
 MODEL = 'claude-stand-in'
 COST_USD = 0.01
 DURATION_MS = 12
 SLOW_SECONDS = 2
 LONG_LINES = 40
-TURN_WORDS = {'tool': 'tool', 'long': 'long', 'slow': 'slow'}
+TURN_WORDS = {'tool': 'tool', 'long': 'long', 'slow': 'slow', 'card': 'card'}
 TOOL_NAME = 'Bash'
 TOOL_COMMAND = 'echo stand-in'
 TOOL_RESULT = 'stand-in'
+# The card of a turn that holds `card`: one heading with a subtitle, one text and
+# two buttons, so the person has a primary action and a way out.
+CARD_HEADING = 'Plan'
+CARD_SUBTITLE = 'drawn by the stand-in orchestrator'
+CARD_TEXT = 'This card comes from the orchestrator of this workspace, not from an agent panel.'
+CARD_BUTTONS = ({'id': 'go', 'label': 'Go', 'tone': 'primary'},
+                {'id': 'cancel', 'label': 'Cancel', 'tone': 'danger'})
+# How long the card waits for one press: five minutes, the default of the tool.
+CLICK_TIMEOUT_MILLIS = 300_000
+CARD_TIMEOUT_SECONDS = 30.0
+CARD_WAIT_TIMEOUT_SECONDS = CLICK_TIMEOUT_MILLIS / 1000.0 + 60.0
+# The variable that Horizon sets in every program it starts: the program that runs
+# this Horizon, which serves the MCP tools of the card.
+EXECUTABLE_ENV = 'HORIZON_EXECUTABLE'
+MCP_ARGUMENTS = ('--browser-mcp',)
+# One line of JSON leaves this program at a time, from the turn and from the
+# thread of a card.
+WRITE_LOCK = threading.Lock()
 
 
 def line(record):
     """Writes one JSON line of the agent, flushed for the reader of Horizon."""
-    sys.stdout.write(json.dumps(record) + '\n')
-    sys.stdout.flush()
+    with WRITE_LOCK:
+        sys.stdout.write(json.dumps(record) + '\n')
+        sys.stdout.flush()
 
 
 def init(session):
@@ -102,6 +134,94 @@ def words_of(request):
     return ''
 
 
+def card_document():
+    """The document of the one card of a `card` turn."""
+    return {'components': [
+        {'type': 'heading', 'text': CARD_HEADING, 'subtitle': CARD_SUBTITLE},
+        {'type': 'text', 'text': CARD_TEXT},
+        {'type': 'buttons', 'items': [dict(button) for button in CARD_BUTTONS]},
+    ]}
+
+
+def mcp_command():
+    """The command line of the MCP server of this Horizon, or an empty text.
+
+    Horizon sets `HORIZON_EXECUTABLE` in every program it starts, and the server
+    reads the actor and the host instance of this program from the environment
+    that it inherits.
+    """
+    executable = os.environ.get(EXECUTABLE_ENV, '').strip()
+    if not executable:
+        return ''
+    return shlex.join([executable, *MCP_ARGUMENTS])
+
+
+def create_card(command):
+    """Draws the one card of a `card` turn and answers its client and its id."""
+    client = StdioMcpClient(command)
+    try:
+        client.initialize()
+        answer = client.call_tool(
+            'block_panel',
+            {'operation': 'create', 'title': CARD_HEADING, 'document': card_document()},
+            CARD_TIMEOUT_SECONDS)
+    except Fatal:
+        client.close()
+        raise
+    panel_id = answer.get('panel_id')
+    if not isinstance(panel_id, str) or not panel_id:
+        client.close()
+        raise Fatal(f'the host answered the card without a panel id: {one_line(json.dumps(answer))}')
+    return client, panel_id
+
+
+def watch_card(session, number, client, panel_id):
+    """Keeps one `next_click` of the card open in a thread of its own.
+
+    A press of the person answers the wait, and the thread then prints the text
+    of the agent and the result of that press. Nothing waits on this thread: the
+    turn of the person goes on, and the program ends when its input closes.
+    """
+    def wait():
+        try:
+            answer = client.call_tool(
+                'block_panel',
+                {'operation': 'next_click', 'panel_id': panel_id,
+                 'timeout_millis': CLICK_TIMEOUT_MILLIS},
+                CARD_WAIT_TIMEOUT_SECONDS)
+        except Fatal as refusal:
+            client.close()
+            text(session, f'msg-{number}-press', f'The wait of the card ended: {one_line(str(refusal))}')
+            return
+        client.close()
+        click = answer.get('click') if isinstance(answer.get('click'), dict) else {}
+        component = click.get('component_id')
+        if not isinstance(component, str) or not component:
+            return
+        text(session, f'msg-{number}-press', f'You pressed {component}')
+        result(session, f'You pressed {component}', DURATION_MS)
+
+    thread = threading.Thread(target=wait, name='stand-in-card', daemon=True)
+    thread.start()
+
+
+def card_turn(session, number):
+    """Draws one card in the workspace of this conversation and listens for it."""
+    command = mcp_command()
+    if not command:
+        text(session, f'msg-{number}-card',
+             f'The stand-in draws no card: {EXECUTABLE_ENV} names no program of Horizon.')
+        return
+    try:
+        client, panel_id = create_card(command)
+    except Fatal as refusal:
+        text(session, f'msg-{number}-card', f'The stand-in drew no card: {one_line(str(refusal))}')
+        return
+    text(session, f'msg-{number}-card',
+         f'I drew the card {panel_id} in this workspace. Press Go or Cancel and I read it.')
+    watch_card(session, number, client, panel_id)
+
+
 def answer(session, number, words):
     """One turn: the init line, the answer, what the words ask for, and the result."""
     init(session)
@@ -110,6 +230,8 @@ def answer(session, number, words):
         time.sleep(SLOW_SECONDS)
     message_id = f'msg-{number}'
     text(session, message_id, f'You said: {words}')
+    if TURN_WORDS['card'] in words:
+        card_turn(session, number)
     if TURN_WORDS['tool'] in words:
         tool(session, message_id)
     if TURN_WORDS['long'] in words:

@@ -14,13 +14,38 @@ when the person presses it.
 
 The `block_panel` MCP tool manages cards. Every operation is scoped to the
 agent panel that Horizon launched and to its workspace. A caller without that
-panel gets `caller_unavailable`.
+panel gets `caller_unavailable`. The one other caller is the orchestrator of a
+workspace, which [has no panel](#when-you-are-the-orchestrator-of-a-workspace).
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`, `presets`,
 `machine_set`, `machine_delete`, `machines`, `secret_names`, `machine_key`,
 `machine_keys`, `delete_machine_key`, `server_status`, `browser_host_status`,
 `server_link_request` and `browser_host_request`.
+
+## When you are the orchestrator of a workspace
+
+The orchestrator of a workspace is the agent program that the dock runs. It has
+no terminal panel. Its actor is `horizon:orchestrator/<workspace id>`, and the
+host accepts it while a workspace of that id is on the board.
+
+- **You have no terminal.** Horizon types no wake line for you, because there is
+  no terminal to type into. Keep one `next_click` open while a card of yours waits
+  for the person. A press that no `next_click` waits for stays in the queue of the
+  card for five minutes, and nothing tells you that it came.
+- **Your cards land in your workspace.** Horizon places a card of yours on a free
+  tile of the workspace that your actor names, where it covers no panel. You have
+  no panel, so `beside` is not available to you and no card of yours stands in the
+  column of a panel.
+- **A card of yours shows its presence.** Its state chip says that the agent
+  listens while a `next_click` of yours waits, and `No agent` after your program
+  ends. The buttons of the card are live only while your program runs.
+- **No operation that needs a panel.** `open_terminal`, `open_panel`,
+  `server_link_request` and `browser_host_request` answer `caller_unavailable`,
+  because each of them opens a panel or draws a card beside the panel of the
+  caller. `machine_set`, `machine_delete`, `machines`, `machine_key`,
+  `machine_keys`, `delete_machine_key`, `presets`, `secret_names`,
+  `server_status` and `browser_host_status` work as they do for an agent panel.
 
 ## One card for one job
 

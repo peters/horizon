@@ -356,10 +356,18 @@ when it names one of those kinds.
   `event.rs`, `program.rs` owns the command line and the variables that the
   child must not inherit, `worker.rs` owns the child and its three threads, and
   `conversation.rs` holds the list that a window reads, and the cost of its
-  ended turns. The bounds of this path live in `agent_bridge.rs`; its design page
-  is [`agent-bridge.md`](agent-bridge.md), and its trust boundary is
+  ended turns. `actor.rs` builds and parses the actor of the orchestrator of one
+  workspace, and `program.rs` holds `BridgeIdentity` and `claude_for_workspace`,
+  which add the plugin directory and the identity variables of that workspace to
+  the command line of the program. The bounds of this path live in
+  `agent_bridge.rs`; its design page is [`agent-bridge.md`](agent-bridge.md), and
+  its trust boundary is
   [`agent-bridge.md`](../review/trust-boundaries/agent-bridge.md). Its one caller
-  is `app::orchestrator_dock`.
+  is `app::orchestrator_dock`. The actor form is shared with the card path, so
+  [`orchestrator-cards.md`](orchestrator-cards.md) states the caller rule and the
+  operations of that caller, and
+  [`block-panel.md`](../review/trust-boundaries/block-panel.md) states its
+  boundary.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
@@ -599,6 +607,17 @@ when it names one of those kinds.
   of a conversation is `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and nothing of
   the dock is saved. The dock draws no galley and no string while the switch is
   off.
+
+- `app::orchestrator_dock`, `app::block_requests` and `app::block_clicks` share
+  one rule with the card path: the orchestrator of a workspace is a card caller
+  without a panel. The dock answers the presence of that caller with
+  `OrchestratorDock::running`, `block_requests::request_caller` maps its actor to
+  `CardCaller::Orchestrator`, `owner_workspace` answers the workspace of its local
+  id, and `block_clicks::card_owner_present` reads it. The state chip of such a
+  card names the program of the dock and says whether it listens. The operations
+  that need the panel of a caller are refused there with the one refusal of a
+  caller without a panel, so a new operation of `block_panel` states in one match
+  arm whether an orchestrator reaches it.
 
 ## File Size Policy
 

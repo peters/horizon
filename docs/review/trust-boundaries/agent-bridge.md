@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**,crates/horizon-ui/src/app/orchestrator_dock.rs,crates/horizon-ui/src/app/orchestrator_dock/**,scripts/device-smoke/orchestrator_standin.py"
+applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**,crates/horizon-ui/src/app/orchestrator_dock.rs,crates/horizon-ui/src/app/orchestrator_dock/**,scripts/device-smoke/orchestrator_standin.py,scripts/device-smoke/serve.py"
 ---
 
 # Trust boundary of the agent bridge
@@ -66,6 +66,32 @@ the same rules.
   reader of the standard error are threads of their own. `poll` reads a channel
   with `try_iter`, and `send` queues a line. A caller runs `stop` off the frame,
   as the [UI thread guide](../../architecture/ui-thread.md) requires.
+
+## What the program of a workspace gets
+
+The dock starts one program for the orchestrator of a workspace with
+`claude_for_workspace` (`crates/horizon-core/src/agent_bridge/program.rs`).
+
+- **The identity is Horizon's own value.** The actor is built from the local id of
+  a workspace of this board (`crates/horizon-core/src/agent_bridge/actor.rs`), and
+  the host instance, the home and the executable are the values of this Horizon.
+  No text of the program and no text of a card takes part.
+- **The environment is the environment of an agent panel.** `HORIZON=1`,
+  `HORIZON_BROWSER_ACTOR`, `HORIZON_BROWSER_HOST_INSTANCE` and
+  `HORIZON_EXECUTABLE` come from the one function that an agent panel uses
+  (`crates/horizon-core/src/panel/spawn/environment.rs`,
+  `agent_identity_vars`). `HORIZON_HOME` is inherited as a panel inherits it and
+  is not written by the identity.
+- **The plugin directory is a path of this computer.** The start adds
+  `--plugin-dir` with the directory of Claude Code of this host instance, and only
+  while it is a directory. The MCP server of that plugin reads the identity from
+  the environment of the child, not from the command line.
+- **No work variable, no named secret and no work-resume plugin.** The start adds
+  none of them, so the program of the orchestrator holds no key of the person and
+  writes no ledger of a turn.
+- **The child is the same untrusted program.** Every rule of this page holds for
+  it: one grammar, bounded texts, a refused line dropped whole, and no text of it
+  in a log line, a path, a command line or a file.
 
 ## What the dock draws
 

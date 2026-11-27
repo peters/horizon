@@ -28,6 +28,7 @@
 
 use std::time::Duration;
 
+pub mod actor;
 mod codec;
 mod conversation;
 mod event;
@@ -39,7 +40,9 @@ mod worker;
 pub use codec::{ClaudeCodec, LineCodec};
 pub use conversation::{Conversation, ConversationSnapshot, Entry, LimitNote, Link, ToolState};
 pub use event::{BridgeEvent, DropReason};
-pub use program::{ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, ProgramSpec, SessionChoice, claude};
+pub use program::{
+    BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, ProgramSpec, SessionChoice, claude, claude_for_workspace,
+};
 pub use worker::{Bridge, BridgeError};
 
 /// The bytes of one line of the program. A longer line is read to its newline,

@@ -9,6 +9,11 @@
 //! A program that Horizon starts inside another agent must not inherit the
 //! identity of that agent: every name below is removed from the environment of
 //! the child before it starts, and [`apply_environment`] does that.
+//!
+//! [`claude_for_workspace`] is the program of the orchestrator dock: it speaks
+//! for one workspace with no panel, so it gets the actor of that workspace, the
+//! identity variables of an agent panel and the plugin directory of Claude Code,
+//! and no work-resume plugin.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -63,6 +68,81 @@ pub enum SessionChoice {
     New(String),
     /// The session of an earlier conversation.
     Resume(String),
+}
+
+/// What a program that speaks for one Horizon agent needs besides its command
+/// line: the actor that names it to the host, the host instance of the running
+/// Horizon, the home that holds the request queues, the program that runs this
+/// Horizon, and the plugin directory of Claude Code, which holds the Horizon MCP
+/// server, its tools and its skills.
+///
+/// An agent panel gets the same values, so a program of a bridge reads one
+/// identity and reaches the same host. The home stays a value of this identity
+/// and is not written into the environment of the child: the child inherits
+/// `HORIZON_HOME` from this Horizon exactly as a panel does, so the tools of the
+/// orchestrator resolve the folder that the host reads, and a home that this
+/// process merely resolved keeps the rule that a panel's home keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BridgeIdentity {
+    pub actor: String,
+    pub host_instance: String,
+    pub home: PathBuf,
+    pub executable: PathBuf,
+    /// The plugin directory, while it is a directory of this computer. It is
+    /// absent when the start of this Horizon could not write it, and the program
+    /// then starts with no Horizon tool at all.
+    pub plugin_dir: Option<PathBuf>,
+}
+
+impl BridgeIdentity {
+    /// The identity of the orchestrator of the workspace with `local_id` in this
+    /// Horizon, or `None` when that local id is not of the form that an actor of
+    /// an orchestrator holds (see [`super::actor`]).
+    ///
+    /// The three values of this Horizon are read once, here, and the plugin
+    /// directory is checked once: a start is not a per-frame path.
+    #[must_use]
+    pub fn for_workspace(local_id: &str) -> Option<Self> {
+        let actor = super::actor::of_workspace(local_id)?;
+        let host_instance = crate::browser::manifest::host_instance().to_string();
+        let home = crate::HorizonHome::resolve();
+        let plugin_dir = home.claude_plugin_dir_for_host(&host_instance);
+        Some(Self {
+            actor,
+            host_instance,
+            home: home.root().to_path_buf(),
+            executable: crate::browser_mcp_executable().unwrap_or_default(),
+            plugin_dir: plugin_dir.is_dir().then_some(plugin_dir),
+        })
+    }
+}
+
+/// The program of the orchestrator of one workspace, with no terminal.
+///
+/// It is [`claude`] plus the identity of that workspace: the `--plugin-dir` that
+/// an agent panel of Claude Code gets, so the program has the Horizon MCP server
+/// and the Horizon skills, and the environment that names it to that server. It
+/// adds no work-resume plugin, no `HORIZON_WORK_*` variable and no named secret,
+/// because the orchestrator of this part has no turn ledger and no panel of the
+/// board.
+#[must_use]
+pub fn claude_for_workspace(cwd: &Path, session: SessionChoice, identity: &BridgeIdentity) -> ProgramSpec {
+    let mut spec = claude(cwd, session);
+    if let Some(plugin_dir) = &identity.plugin_dir {
+        spec.args.push(OsString::from("--plugin-dir"));
+        spec.args.push(plugin_dir.clone().into_os_string());
+    }
+    let executable = identity
+        .executable
+        .clone()
+        .into_os_string()
+        .into_string()
+        .unwrap_or_default();
+    spec.env = crate::panel::spawn::agent_identity_vars(identity.actor.clone(), &identity.host_instance, &executable)
+        .into_iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect();
+    spec
 }
 
 /// The program of one Claude Code conversation, with no terminal.

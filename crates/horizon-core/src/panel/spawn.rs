@@ -15,7 +15,9 @@ mod terminal;
 pub use browser::{BrowserMachine, browser_machine, browser_panel_of_options};
 use browser::{browser_spawn_for, spawn_browser};
 use editor::{spawn_editor, waiting_editor_panel};
-pub use environment::{agent_env, browser_actor, replay_bytes_with_notice, wait_for_named_secrets};
+pub use environment::{
+    agent_env, agent_identity_vars, browser_actor, replay_bytes_with_notice, wait_for_named_secrets,
+};
 pub use launch_arguments::{AgentLaunchContext, default_shell, resolve_launch_command};
 // The platform shell name is read by the tests of this repository only.
 #[cfg(test)]
