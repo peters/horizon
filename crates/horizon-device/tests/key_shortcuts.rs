@@ -30,11 +30,11 @@ fn geometry() -> Value {
     })
 }
 
-fn request(action: Value) -> Value {
+fn request(action: &Value) -> Value {
     json!({"geometry": geometry(), "action": action})
 }
 
-fn parse(action: Value) -> Result<ActRequest, serde_json::Error> {
+fn parse(action: &Value) -> Result<ActRequest, serde_json::Error> {
     serde_json::from_value(request(action))
 }
 
@@ -43,7 +43,7 @@ fn key_action(key: &str, modifiers: &[&str]) -> Value {
 }
 
 fn assert_key_round_trip(key: &str, modifiers: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let original = request(key_action(key, modifiers));
+    let original = request(&key_action(key, modifiers));
     let parsed = serde_json::from_value::<ActRequest>(original.clone())?;
     assert!(
         matches!(&parsed.action, Action::Key { .. }),
@@ -79,8 +79,8 @@ fn lowercase_letter_chords_parse_and_round_trip() -> Result<(), Box<dyn std::err
 fn control_shift_letter_chord_preserves_modifier_order() -> Result<(), Box<dyn std::error::Error>> {
     assert_key_round_trip("p", &["control", "shift"])?;
     assert_key_round_trip("p", &["shift", "control"])?;
-    let first = serde_json::to_value(parse(key_action("p", &["control", "shift"]))?)?;
-    let second = serde_json::to_value(parse(key_action("p", &["shift", "control"]))?)?;
+    let first = serde_json::to_value(parse(&key_action("p", &["control", "shift"]))?)?;
+    let second = serde_json::to_value(parse(&key_action("p", &["shift", "control"]))?)?;
     assert_eq!(first["action"]["key"], json!("p"));
     assert_eq!(first["action"]["modifiers"], json!(["control", "shift"]));
     assert_eq!(second["action"]["modifiers"], json!(["shift", "control"]));
@@ -97,19 +97,18 @@ fn named_keys_still_parse_and_round_trip() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn unknown_key_names_and_uppercase_aliases_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
+fn unknown_key_names_and_uppercase_aliases_are_rejected() {
     for key in ["quux", "qq", "return", "escapex", "Q", "A", "Z", "control"] {
-        let result = serde_json::from_value::<ActRequest>(request(key_action(key, &["control"])));
+        let result = serde_json::from_value::<ActRequest>(request(&key_action(key, &["control"])));
         assert!(
             result.is_err(),
             "unspecified key name {key:?} must be rejected, not accepted"
         );
     }
-    Ok(())
 }
 
 #[test]
-fn geometry_and_unknown_field_guards_are_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+fn geometry_and_unknown_field_guards_are_unchanged() {
     // A named key keeps malformed geometry and unknown fields the only failures.
     let unknown_field = json!({
         "geometry": geometry(),
@@ -120,7 +119,7 @@ fn geometry_and_unknown_field_guards_are_unchanged() -> Result<(), Box<dyn std::
 
     let mut action = key_action("enter", &["control"]);
     action["repeat"] = json!(2);
-    assert!(serde_json::from_value::<ActRequest>(request(action)).is_err());
+    assert!(serde_json::from_value::<ActRequest>(request(&action)).is_err());
 
     for broken in [
         json!({"target_id": "fixture", "surface_id": "view", "width": 1280, "revision": "one"}),
@@ -130,5 +129,4 @@ fn geometry_and_unknown_field_guards_are_unchanged() -> Result<(), Box<dyn std::
         let guarded = json!({"geometry": broken, "action": key_action("enter", &[])});
         assert!(serde_json::from_value::<ActRequest>(guarded).is_err());
     }
-    Ok(())
 }

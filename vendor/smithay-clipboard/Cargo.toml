@@ -42,6 +42,8 @@ dlopen = ["wayland-backend/dlopen"]
 name = "smithay_clipboard"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2.149"

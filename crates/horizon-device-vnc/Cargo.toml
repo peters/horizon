@@ -7,6 +7,9 @@ license = "MIT"
 publish = false
 description = "Optional VNC desktop resize adapter for the device CLI and MCP tools"
 
+[lints]
+workspace = true
+
 [dependencies]
 horizon-device = { path = "../horizon-device", features = ["cli"] }
 vnc.workspace = true

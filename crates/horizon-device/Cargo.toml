@@ -13,6 +13,9 @@ publish = ["crates-io"]
 default = []
 cli = ["dep:rmcp", "dep:schemars", "dep:tokio", "dep:tempfile"]
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "horizon-device"
 path = "src/main.rs"
