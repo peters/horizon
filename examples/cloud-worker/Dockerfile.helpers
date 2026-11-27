@@ -51,7 +51,7 @@ LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
 
 # Smallest base that meets the worker contract, used to check the published layout
 # before it is pushed. It is never published.
-FROM ubuntu:24.04@sha256:73b999393d07f2bf65a40373778a44dc9a6d54ad7718d29247d8ff9413c4d6a8 AS probe
+FROM ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b AS probe
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-server openssh-client tmux git git-lfs gh ca-certificates python3 util-linux \
