@@ -10,7 +10,9 @@
 //! cut before it enters the snapshot: [`MAX_TEXT_BYTES`] bytes for the text of
 //! one message and [`MAX_SUMMARY_CHARS`] characters for a notice. The list keeps
 //! [`MAX_ENTRIES`] entries; older entries leave, and one [`Entry::Notice`] at
-//! the top of the list names how many it holds no longer.
+//! the top of the list names how many it holds no longer. The snapshot also sums
+//! the cost of every ended turn in `cost_usd_total`, which a window shows as the
+//! cost of the conversation.
 
 use std::sync::Arc;
 
@@ -75,6 +77,8 @@ pub struct ConversationSnapshot {
     pub entries: Vec<Entry>,
     pub busy: bool,
     pub limit: Option<LimitNote>,
+    /// The sum of the cost of every ended turn of this program.
+    pub cost_usd_total: f64,
 }
 
 impl ConversationSnapshot {
@@ -87,6 +91,7 @@ impl ConversationSnapshot {
             entries: Vec::new(),
             busy: false,
             limit: None,
+            cost_usd_total: 0.0,
         }
     }
 }
@@ -141,6 +146,18 @@ impl Conversation {
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
     }
 
+    /// Appends one line that Horizon writes for the person, such as the notice
+    /// of a turn that the person stopped. The text is cut to
+    /// [`MAX_SUMMARY_CHARS`] characters and the busy state does not change.
+    pub fn notice(&mut self, text: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.push(Entry::Notice {
+            text: tidy(text, MAX_SUMMARY_CHARS),
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
     /// Applies one event of the program.
     pub fn apply(&mut self, event: BridgeEvent) {
         let snapshot = Arc::make_mut(&mut self.snapshot);
@@ -177,8 +194,14 @@ impl Conversation {
                     resets_at_unix,
                 });
             }
-            BridgeEvent::TurnEnded { failed, .. } => {
+            BridgeEvent::TurnEnded { failed, cost_usd, .. } => {
                 snapshot.busy = false;
+                if let Some(cost_usd) = cost_usd
+                    && cost_usd.is_finite()
+                    && cost_usd > 0.0
+                {
+                    snapshot.cost_usd_total += cost_usd;
+                }
                 if failed {
                     snapshot.entries.push(Entry::Notice {
                         text: "the turn failed".to_owned(),

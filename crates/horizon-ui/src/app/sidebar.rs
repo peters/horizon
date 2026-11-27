@@ -667,10 +667,19 @@ impl HorizonApp {
         if let Some(workspace_id) = actions.close_all_in_workspace {
             self.close_workspace_panels(workspace_id);
         }
-        if let Some(workspace_id) = actions.remove_empty_workspace
-            && self.board.remove_empty_workspace(workspace_id)
-        {
-            self.mark_runtime_dirty();
+        if let Some(workspace_id) = actions.remove_empty_workspace {
+            let local_id = self
+                .board
+                .workspace(workspace_id)
+                .map(|workspace| workspace.local_id.clone());
+            if self.board.remove_empty_workspace(workspace_id) {
+                self.mark_runtime_dirty();
+                // A workspace that goes takes its conversation and its draft with
+                // it: a later row with the same name is another workspace.
+                if let Some(local_id) = local_id {
+                    self.forget_orchestrator_conversation(&local_id);
+                }
+            }
         }
         if let Some(workspace_id) = actions.clear_layout
             && self.workspace_can_arrange_panels(workspace_id)

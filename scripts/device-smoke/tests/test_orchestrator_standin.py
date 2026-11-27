@@ -1,0 +1,110 @@
+"""The stand-in program of a dock conversation answers in the Claude Code format.
+
+The dock of the fixture starts `orchestrator_standin.py` as the program of one
+conversation. These tests run the file itself, with the arguments that Horizon
+gives Claude Code, and read the lines that it answers.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+import unittest.mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import serve  # noqa: E402
+
+SCRIPT = Path(__file__).resolve().parents[1] / serve.ORCHESTRATOR_STANDIN_PROGRAM
+HORIZON_ARGUMENTS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
+                     '--verbose', '--session-id', '00000000-0000-4000-8000-000000000001']
+
+
+def request(text):
+    """One line of the person, in the shape of the standard input of the program."""
+    return json.dumps({'type': 'user', 'message': {'role': 'user', 'content': [
+        {'type': 'text', 'text': text}]}}) + '\n'
+
+
+def run(turns):
+    """Every line of the program after it read one line for each text of `turns`."""
+    answer = subprocess.run([str(SCRIPT), *HORIZON_ARGUMENTS], input=''.join(request(text) for text in turns),
+                            text=True, capture_output=True, timeout=120)
+    if answer.returncode != 0:
+        raise AssertionError(f'the stand-in ended with {answer.returncode}: {answer.stderr}')
+    return [json.loads(line) for line in answer.stdout.splitlines()]
+
+
+def texts_of(records):
+    """The texts of the agent of one run, in order."""
+    found = []
+    for record in records:
+        if record.get('type') != 'assistant':
+            continue
+        for block in record['message']['content']:
+            if block.get('type') == 'text':
+                found.append(block['text'])
+    return found
+
+
+class OrchestratorStandinTests(unittest.TestCase):
+    def test_the_program_is_executable_and_ignores_the_arguments_of_claude_code(self):
+        self.assertTrue(SCRIPT.stat().st_mode & 0o100, 'the program is executable')
+        self.assertEqual(SCRIPT.stat().st_mode & 0o444, 0o444, 'every reader runs the program')
+
+    def test_one_turn_names_the_session_and_answers_with_the_text_of_the_person(self):
+        records = run(['hello there'])
+        kinds = [(record.get('type'), record.get('subtype')) for record in records]
+        self.assertEqual(kinds[0], ('system', 'init'))
+        self.assertEqual(kinds[-1], ('result', 'success'))
+        self.assertEqual(texts_of(records), ['You said: hello there'])
+        self.assertIn('rate_limit_event', [kind for kind, _ in kinds])
+        result = records[-1]
+        self.assertFalse(result['is_error'])
+        self.assertGreater(result['duration_ms'], 0)
+        self.assertAlmostEqual(result['total_cost_usd'], 0.01)
+        self.assertAlmostEqual(sum(model['costUSD'] for model in result['model_usage_since_last_result'].values()), 0.01)
+
+    def test_the_word_tool_adds_a_call_of_bash_and_its_result(self):
+        records = run(['use a tool please'])
+        calls = [block for record in records if record.get('type') == 'assistant'
+                 for block in record['message']['content'] if block.get('type') == 'tool_use']
+        self.assertEqual([call['name'] for call in calls], ['Bash'])
+        self.assertEqual(calls[0]['input']['command'], 'echo stand-in')
+        results = [block for record in records if record.get('type') == 'user'
+                   for block in record['message']['content'] if block.get('type') == 'tool_result']
+        self.assertEqual([result['tool_use_id'] for result in results], [calls[0]['id']])
+        self.assertFalse(results[0]['is_error'])
+
+    def test_the_word_long_adds_forty_numbered_lines(self):
+        records = run(['long answer please'])
+        texts = texts_of(records)
+        self.assertEqual(len(texts), 2, 'the answer and the long text')
+        lines = texts[1].splitlines()
+        self.assertEqual(len(lines), 40)
+        self.assertTrue(lines[0].startswith('1. '))
+        self.assertTrue(lines[-1].startswith('40. '))
+
+    def test_two_turns_of_one_program_keep_their_order(self):
+        records = run(['one', 'two'])
+        self.assertEqual([record.get('type') for record in records].count('result'), 2)
+        self.assertEqual(texts_of(records), ['You said: one', 'You said: two'])
+
+    def test_the_fixture_names_the_copy_of_the_program_in_its_state_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            (state / 'data').mkdir()
+            environment = {}
+            with unittest.mock.patch.dict('os.environ', {serve.ORCHESTRATOR_PROGRAM_VARIABLE: str(SCRIPT)}):
+                copy = serve.orchestrator_program_in_state(state, (environment,))
+            self.assertIsNotNone(copy, 'the fixture copies the stand-in of the dock')
+            self.assertEqual(Path(copy).parent, state.resolve() / 'data' / serve.PANEL_PROGRAM_FOLDER)
+            self.assertTrue(Path(copy).stat().st_mode & 0o100, 'the copy is executable')
+            self.assertEqual(environment[serve.ORCHESTRATOR_PROGRAM_VARIABLE], str(copy))
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,12 +1,13 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**"
+applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**,crates/horizon-ui/src/app/orchestrator_dock.rs,crates/horizon-ui/src/app/orchestrator_dock/**,scripts/device-smoke/orchestrator_standin.py"
 ---
 
 # Trust boundary of the agent bridge
 
 Horizon runs one agent program with no terminal, sends the messages of the person
 to it as JSON lines, and reads its JSON lines as typed events. The program is
-Claude Code, and nothing calls the module yet.
+Claude Code, and its one caller is the orchestrator dock of the window
+(`crates/horizon-ui/src/app/orchestrator_dock/`).
 
 The program is another process of this computer, and its output is a text that no
 part of Horizon controls. Every byte of its standard output and of its standard
@@ -44,8 +45,8 @@ the same rules.
   `file_path`, or the tool name alone), and the whole input never becomes an
   event.
 - **A tool name is a claim.** The name, the summary and the result of a tool come
-  from the program. A later slice must draw them as plain text, and no value of
-  them may become a command, a path or a setting.
+  from the program. The dock draws them as plain text, and no value of them
+  becomes a command, a path or a setting.
 
 ## What the bridge guarantees
 
@@ -65,6 +66,26 @@ the same rules.
   reader of the standard error are threads of their own. `poll` reads a channel
   with `try_iter`, and `send` queues a line. A caller runs `stop` off the frame,
   as the [UI thread guide](../../architecture/ui-thread.md) requires.
+
+## What the dock draws
+
+The dock is another reader of the untrusted text of the program, so the same
+rules hold for it.
+
+- **The text of the program is plain text.** A text of the agent is one label:
+  no markdown, no link and no path in it becomes active. The person selects and
+  copies it, and nothing else reads it.
+- **One frame lays out a bounded number of entries.** The list lays out at most
+  the last 200 entries of the conversation, and one notice above them names the
+  entries that it does not draw. The conversation itself keeps
+  `MAX_ENTRIES` entries, and each text of it is cut before it enters the
+  snapshot.
+- **No entry becomes a control.** An entry draws no button, no card and no
+  click target, and no text of the program reaches a path, a command line, a log
+  line or a file.
+- **The words of Horizon are its own.** A notice that the dock adds, the state of
+  the header and the cost are built by Horizon from typed values, and never from
+  the text of a line.
 
 ## What the bridge does not guarantee
 

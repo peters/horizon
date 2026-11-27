@@ -7,8 +7,8 @@ this slice.
 
 The module is `crates/horizon-core/src/agent_bridge/`. Its page
 [`docs/review/trust-boundaries/agent-bridge.md`](../review/trust-boundaries/agent-bridge.md)
-states its trust boundary. Nothing uses the module yet: its only callers are its
-tests.
+states its trust boundary. Its one caller is the orchestrator dock of the window,
+which the last section of this page describes.
 
 ## Purpose
 
@@ -115,12 +115,53 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
   standard error of Claude Code was empty. The bridge still reads both, because
   another program or a later version can write there.
 
+## The window: the orchestrator dock
+
+The dock at the right edge of the root window is the one caller
+(`crates/horizon-ui/src/app/orchestrator_dock/`). The design of the column is in
+[`docs/design/guidelines.md`](../design/guidelines.md#orchestrator-dock).
+
+- **One conversation for one workspace.** The key is the `local_id` of the
+  workspace, which a restart keeps; a `WorkspaceId` is new at every start. A
+  conversation holds one `Conversation` of this module, its bridge while its
+  program runs, the session id that the program named, and the messages of the
+  person that wait for a bridge. A conversation that the dock does not show keeps
+  running and keeps its entries.
+- **A message starts the program.** A message of the person appends
+  `Entry::Person` and clears the draft. A workspace without a bridge starts one
+  first: `claude(<directory of the workspace>, SessionChoice::New(<uuid>))`, or
+  `Resume(<session id>)` when an earlier bridge of this run named a session. The
+  variable `HORIZON_ORCHESTRATOR_PROGRAM` replaces the path of the program and
+  keeps its arguments; the fixture and the tests use it for a stand-in.
+- **No frame starts a process.** `Bridge::start` and `Bridge::stop` run on the
+  coordination worker of `app::browser_host_io`, which the exit already waits
+  for within its bound. Each start carries the generation of its conversation, so
+  a bridge that a stop or a closed workspace made stale is stopped instead of
+  kept. The messages that waited go out on the frame that keeps the bridge.
+- **A frame reads the events.** `poll_orchestrator_dock` runs in `update_ui` and
+  in the pass of a window that draws no frame, and it applies every event of every
+  bridge with `try_iter`. A read takes the events from the channel, so a second
+  pass of one frame applies no event twice.
+- **The wake.** The bridge asks for the next frame of the window with a clone of
+  the `egui::Context` of the dock.
+- **The words of Horizon.** Three notices come from the dock and not from the
+  program: `Claude Code did not start: <error of the system>`, `Stopped by you`,
+  and `Claude Code reports that the plan limit is reached. Extra usage is in
+  use.` once for each bridge. The header shows the cost of every ended turn from
+  `ConversationSnapshot::cost_usd_total`.
+- **The end.** The close pass queues the stop of every bridge before the exit
+  waits for the coordination work it already asked for, and the synchronous exit
+  does the same when no frame ran. No program of a conversation stays after
+  Horizon ended.
+
 ## What is not built yet
 
-- No window, no card, no storage and no setting. No user of this module exists.
-- One program: Claude Code. Nothing chooses the program for the person, and
-  `ProgramSpec` holds no path of an installed program.
-- A conversation does not resume after a restart of Horizon. The caller chooses
-  `SessionChoice::New` or `SessionChoice::Resume` and holds the session id.
-- A card, a browser tool and a wake line of a card are later slices. The module
+- No card, no storage and no setting of a conversation. The entries, the drafts
+  and the switch of the dock are the memory of this run.
+- One program: Claude Code. Nothing chooses another program for the person, and
+  the dock names no path of an installed program beyond the variable above.
+- A conversation does not resume after a restart of Horizon. The dock names
+  `SessionChoice::New` or `SessionChoice::Resume` and holds the session id of the
+  run.
+- A card, a browser tool and a wake line of a card are later slices. This module
   calls `crate::ui_thread::blocking` nowhere: it starts no work on a frame.

@@ -601,6 +601,10 @@ impl HorizonApp {
         // answered; a finished job wakes this context to apply its outcome.
         self.browser_create_host.io.wake_with(ctx);
         self.apply_browser_host_io();
+        // The conversations of the dock read their channels here, before the
+        // shutdown of the window returns: a read takes the events from the
+        // channel, so the second pass of a frame applies no event twice.
+        self.poll_orchestrator_dock();
         self.apply_settings_io(ctx);
         self.poll_machine_load();
         self.poll_server_sync();

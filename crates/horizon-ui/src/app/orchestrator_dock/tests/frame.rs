@@ -7,7 +7,8 @@ use horizon_core::{RuntimeState, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::composer::{FIELD_HINT, FIELD_ID};
-use crate::app::orchestrator_dock::header::{NO_WORKSPACE_LINE, STATE_LINE};
+use crate::app::orchestrator_dock::header::NO_WORKSPACE_LINE;
+use crate::app::orchestrator_dock::session::Phase;
 use crate::app::orchestrator_dock::{LastFrame, OrchestratorDock};
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
@@ -40,6 +41,21 @@ impl Window {
     /// the orchestrator dock as `dock_on` names it, after the frames that settle
     /// its view.
     pub(super) fn new(size: [f32; 2], workspaces: Vec<WorkspaceState>, dock_on: bool) -> Self {
+        Self::build(size, workspaces, OrchestratorDock::new(dock_on))
+    }
+
+    /// The same window, whose orchestrator runs the program of `program`: the
+    /// seam of `HORIZON_ORCHESTRATOR_PROGRAM`, without the environment of the
+    /// test process.
+    pub(super) fn with_program(size: [f32; 2], workspaces: Vec<WorkspaceState>, program: &std::path::Path) -> Self {
+        Self::build(
+            size,
+            workspaces,
+            OrchestratorDock::with_program(true, program.to_path_buf()),
+        )
+    }
+
+    fn build(size: [f32; 2], workspaces: Vec<WorkspaceState>, dock: OrchestratorDock) -> Self {
         let (temp, ctx, app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState {
                 workspaces,
@@ -57,11 +73,32 @@ impl Window {
         window.app.initial_pan_done = true;
         window.app.startup_workspace_organization_pending = false;
         window.app.root_viewport_stabilizer = None;
-        window.app.orchestrator_dock = OrchestratorDock::new(dock_on);
+        window.app.orchestrator_dock = dock;
         for _ in 0..3 {
             let _ = window.frame(Vec::new());
         }
         window
+    }
+
+    /// Runs frames until `wanted` holds for the app, and names what the test
+    /// waited for when the bound ends first.
+    pub(super) fn wait_for(&mut self, what: &str, wanted: impl Fn(&HorizonApp) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !wanted(&self.app) {
+            assert!(std::time::Instant::now() < deadline, "the test waited for {what}");
+            let _ = self.frame(Vec::new());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// The app of this window, which a test reads and acts on.
+    pub(super) fn app(&mut self) -> &mut HorizonApp {
+        &mut self.app
+    }
+
+    /// The context of this window, whose memory a test reads for the focus.
+    pub(super) fn ctx(&self) -> &egui::Context {
+        &self.ctx
     }
 
     pub(super) fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -219,10 +256,11 @@ fn the_canvas_ends_at_the_dock_and_the_minimap_stays_on_the_canvas() {
         .find(|text| text.text == "dock-work" && dock.contains_rect(text.rect))
         .unwrap_or_else(|| panic!("the header draws the workspace name in the dock {dock:?}: {drawn:?}"));
     assert!(dock.contains_rect(name.rect));
+    let state_line = Phase::NotConnected.line(false);
     let state = drawn
         .iter()
-        .find(|text| text.text == STATE_LINE)
-        .unwrap_or_else(|| panic!("the header draws {STATE_LINE:?}: {drawn:?}"));
+        .find(|text| text.text == state_line)
+        .unwrap_or_else(|| panic!("the header draws {state_line:?}: {drawn:?}"));
     assert!(
         dock.contains_rect(state.rect),
         "the state line {:?} of the dock {dock:?}",
@@ -253,7 +291,12 @@ fn the_canvas_and_the_minimap_keep_their_numbers_with_the_dock_off() {
     );
 
     let drawn = texts(&output);
-    for text in [STATE_LINE, FIELD_HINT, "Say what you want done.", NO_WORKSPACE_LINE] {
+    for text in [
+        Phase::NotConnected.line(false),
+        FIELD_HINT,
+        "Say what you want done.",
+        NO_WORKSPACE_LINE,
+    ] {
         assert!(
             !drawn.iter().any(|drawn| drawn.text == text),
             "a dock that is off draws no {text:?}"
@@ -279,7 +322,11 @@ fn the_dock_of_a_narrow_window_leaves_the_canvas_whole() {
         canvas,
         Rect::from_min_max(Pos2::new(210.0, 46.0), Pos2::new(800.0, 600.0))
     );
-    assert!(!texts(&output).iter().any(|drawn| drawn.text == STATE_LINE));
+    assert!(
+        !texts(&output)
+            .iter()
+            .any(|drawn| drawn.text == Phase::NotConnected.line(false))
+    );
 }
 
 #[test]

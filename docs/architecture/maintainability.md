@@ -355,11 +355,11 @@ when it names one of those kinds.
   the JSON line format of the program and builds the typed events of
   `event.rs`, `program.rs` owns the command line and the variables that the
   child must not inherit, `worker.rs` owns the child and its three threads, and
-  `conversation.rs` holds the list that a window will read. The bounds of this
-  path live in `agent_bridge.rs`; its design page is
-  [`agent-bridge.md`](agent-bridge.md), and its trust boundary is
-  [`agent-bridge.md`](../review/trust-boundaries/agent-bridge.md). Nothing calls
-  it yet.
+  `conversation.rs` holds the list that a window reads, and the cost of its
+  ended turns. The bounds of this path live in `agent_bridge.rs`; its design page
+  is [`agent-bridge.md`](agent-bridge.md), and its trust boundary is
+  [`agent-bridge.md`](../review/trust-boundaries/agent-bridge.md). Its one caller
+  is `app::orchestrator_dock`.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
@@ -580,15 +580,25 @@ when it names one of those kinds.
   sentence, `app::panels::mic` draws the icon of the title bar, and
   `app::settings::speech` is the **Speech** tab.
 
-- `app::orchestrator_dock` is the frame of the conversation dock at the right
-  edge of the root window. `orchestrator_dock/layout.rs` holds the width rule,
-  the rectangle of a frame and `leftmost_panel`, which decides where the canvas
-  ends beside the dock and an open Settings panel. `header.rs` shows the tile,
-  the name and the state of the active workspace. `composer.rs` draws the field
-  of the draft of each workspace, the disabled send control and the three chips.
-  `text.rs` lays the text of the dock out. The switch of this part is the
-  environment variable `HORIZON_ORCHESTRATOR_DOCK`, and nothing of the dock is
-  saved. The dock draws no galley and no string while the switch is off.
+- `app::orchestrator_dock` is the conversation dock at the right edge of the root
+  window, and the one caller of `horizon_core::agent_bridge`. `layout.rs` holds
+  the width rule, the rectangle of a frame and `leftmost_panel`, which decides
+  where the canvas ends beside the dock and an open Settings panel. `header.rs`
+  shows the tile, the name, the state and the cost of the active workspace.
+  `list.rs` draws the entries of the conversation: the bubble of the person, the
+  text of the agent, one row of a tool and one notice, and it bounds what one
+  frame lays out. `composer.rs` draws the field of the draft of each workspace,
+  the send or stop control and the three chips, and it takes the plain Enter
+  while the field holds the keys. `session.rs` is the conversation of one
+  workspace: its entries, its bridge, the messages that wait for that bridge, the
+  generation that makes a late start stale, the three notices of Horizon and the
+  state of the header. `orchestrator_dock.rs` keeps the state of the run and
+  queues each start and each stop on the coordination worker of
+  `app::browser_host_io`. `text.rs` lays the text of the dock out. The switch of
+  this part is the environment variable `HORIZON_ORCHESTRATOR_DOCK`, the program
+  of a conversation is `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and nothing of
+  the dock is saved. The dock draws no galley and no string while the switch is
+  off.
 
 ## File Size Policy
 

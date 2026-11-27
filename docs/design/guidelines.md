@@ -1211,12 +1211,42 @@ start.
   padding. A 1 px `BORDER_SUBTLE` line is under it. The tile of the active
   workspace is 26 by 26 points. The name is 13.5 Semibold `FG` and ends with an
   ellipsis. The line under the name is 11.5 Regular `FG_SOFT` and reads
-  `Orchestrator · not connected`. With no active workspace, there is no tile,
-  the name line reads `No work item is open`, and there is no second line.
+  `Orchestrator · Claude Code · <state>`, where the state is `not connected`,
+  `starting`, `ready`, `working`, `stopped` or `ended`. With no active
+  workspace, there is no tile, the name line reads `No work item is open`, and
+  there is no second line.
+- The cost of the conversation stands at the right edge of the header when it is
+  above zero: the sum of the ended turns with two decimals and `USD`, as
+  `0.03 USD`, at 11 JetBrains Mono and `FG_SOFT`.
 - The empty state is vertically centred between the header and the composer,
   with 28 points of horizontal padding. Its title is `Say what you want done.`
   at 15 Bold `FG`. The two sentences under the title are 13.5 Regular `FG_SOFT`.
-  They wrap at a line height of 1.55 times the size.
+  They wrap at a line height of 1.55 times the size. It draws only while the
+  conversation of the workspace holds no entry.
+- The list is a vertical scroll area between the header and the composer, with
+  16 points of padding and 16 points between two entries. New entries stand at
+  the bottom, and the list follows the bottom while the person has not scrolled
+  up. One frame lays out at most the last 200 entries, and one notice above them
+  names the entries that it does not draw.
+- An entry of the person is a bubble at the right of the list, at most 86
+  percent of the list width: a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE`
+  outline, radius 12, a padding of 12 by 9 points, and the text at 13.5 `FG`
+  with a line height of 1.5 times the size, wrapped.
+- An entry of the agent stands at the left of the list, at most 96 percent of
+  its width: a bar of 3 points of `ACCENT` with radius 2 along the text, 10
+  points of air, and the text at 13.5 `FG` with a line height of 1.55 times the
+  size, wrapped. The text is plain text: no markdown, no link and no path is
+  active, and the person selects and copies it.
+- An entry of a tool is one row, indented 13 points: a dot of 6 points, the name
+  of the tool at 12 JetBrains Mono `FG_SOFT`, and the summary at 12 JetBrains
+  Mono `FG_DIM`, cut with an ellipsis to one line. The dot is `ACCENT` while the
+  tool runs, `PALETTE_GREEN` when it ends and `PALETTE_RED` when it fails. Two
+  tool rows that follow each other stand 4 points apart.
+- An entry of a notice of Horizon is centred at 10.5 JetBrains Mono `FG_DIM`,
+  with a 1 px `BORDER_SUBTLE` line at each side that takes the free width.
+- While a turn is busy and no text of the agent came for it, one row stands at
+  the left: the spinner of the interface and `working` at 12 `FG_DIM` after it.
+  Only a frame that draws this row asks for the frame of the next step.
 - The composer keeps the bottom edge of the dock. From its top down: a 1 px
   `BORDER_SUBTLE` line, 12 points of padding, one row of the field and the send
   control, 10 points of gap, the row of the chips, and 14 points of padding to the
@@ -1228,8 +1258,13 @@ start.
   grows to 6 rows upward, and it clips a longer draft. The row of the chips keeps
   its place at the bottom.
 - The send control is 32 by 32 points at radius 9, and it is 8 points right of the
-  field. Its vertical centre is the centre of a field of one row. In this part
-  the control is disabled, and its hover text is `The orchestrator is not
+  field. Its vertical centre is the centre of a field of one row. Enter in the
+  field sends the draft, Shift+Enter makes a new line, and a click on the
+  control sends it. A draft of white space only sends nothing. While the
+  conversation is busy the control shows a filled square instead of the arrow
+  and a press stops the program of that conversation; the field keeps the keys,
+  and Enter then sends nothing. With no active workspace both controls are
+  disabled, and the hover text of the control is `The orchestrator is not
   connected yet`.
 - The three read-only chips are under the field, left aligned and 8 points apart.
   They wrap to the next row when the dock is too narrow for them. A chip has

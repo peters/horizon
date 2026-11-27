@@ -131,6 +131,9 @@ impl HorizonApp {
         self.board.attach_output_wake(&self.output_wake);
         self.queue_panel_starts();
         self.apply_browser_host_io();
+        // A conversation of the dock answers while the window draws nothing, so
+        // its events wait for no frame of this window.
+        self.poll_orchestrator_dock();
         // A hidden window gets no frame, so the request of a second start that
         // shows it runs here.
         self.poll_folder_requests(ctx);

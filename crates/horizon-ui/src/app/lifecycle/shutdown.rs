@@ -40,6 +40,9 @@ impl HorizonApp {
         // A card socket of a machine session serves no frame and no worker: a
         // stop ends its loop, removes its socket and joins its thread.
         self.node_cards.stop_all();
+        // Every conversation of the dock ends its program on the coordination
+        // worker, which the frames of this exit wait for within their bound.
+        self.stop_orchestrator_bridges();
         let mut progress = self
             .pending_session_switch
             .take()
@@ -163,6 +166,9 @@ impl HorizonApp {
         // A card socket of a machine session serves no frame and no worker: a
         // stop ends its loop, removes its socket and joins its thread.
         self.node_cards.stop_all();
+        // An exit that reached this path without the frames of a close still
+        // stops every program of the dock, before the flush below waits for it.
+        self.stop_orchestrator_bridges();
         self.exit_cleanup_complete = true;
         // Outcomes that the flush applies can still change the board, so they
         // land before the saves below.

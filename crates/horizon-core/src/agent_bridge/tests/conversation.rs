@@ -48,6 +48,7 @@ fn a_text_with_a_known_message_id_replaces_the_earlier_text() {
             entries: snapshot.entries.clone(),
             busy: false,
             limit: None,
+            cost_usd_total: 0.0,
         },
         *snapshot
     );
@@ -134,6 +135,39 @@ fn the_list_keeps_its_bound_and_one_notice_of_what_it_dropped() {
         kept.first(),
         Some(&Entry::Notice {
             text: "5 earlier entries were dropped".to_owned()
+        })
+    );
+}
+
+#[test]
+fn the_cost_of_every_ended_turn_is_summed_and_a_turn_without_a_cost_adds_nothing() {
+    let mut conversation = Conversation::new();
+    for cost_usd in [Some(0.004_168), Some(0.006_879), None, Some(0.01)] {
+        conversation.apply(BridgeEvent::TurnEnded {
+            failed: false,
+            duration_ms: Some(5),
+            cost_usd,
+        });
+    }
+    assert!(
+        (conversation.snapshot().cost_usd_total - 0.021_047).abs() < 1e-9,
+        "the cost total is {}",
+        conversation.snapshot().cost_usd_total
+    );
+}
+
+#[test]
+fn a_notice_of_the_window_is_an_entry_and_keeps_the_busy_state() {
+    let mut conversation = Conversation::new();
+    conversation.person_said("alpha");
+    let version = conversation.snapshot().version;
+    conversation.notice("Stopped by you");
+    assert!(conversation.snapshot().busy);
+    assert_eq!(conversation.snapshot().version, version + 1);
+    assert_eq!(
+        conversation.snapshot().entries.last(),
+        Some(&Entry::Notice {
+            text: "Stopped by you".to_owned()
         })
     );
 }

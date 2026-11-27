@@ -20,6 +20,14 @@ pub(super) fn line(ui: &Ui, text: &str, size: f32, weight: Weight, color: Color3
     layout(ui, job, weight)
 }
 
+/// One line of `text` in the monospace font of the interface, cut with an
+/// ellipsis at `max_width`. A tool name, a tool summary and a notice are system
+/// lines, so they keep the fixed advance of `JetBrains Mono`.
+pub(super) fn mono_line(ui: &Ui, text: &str, size: f32, color: Color32, max_width: f32) -> Arc<Galley> {
+    let job = single_line_label_job(text, &FontId::monospace(size), color, max_width);
+    layout(ui, job, Weight::Regular)
+}
+
 /// `text` wrapped at `max_width` in `size * line_height_factor` rows.
 pub(super) fn paragraph(
     ui: &Ui,

@@ -139,11 +139,16 @@ ATTENTION_KIND_SCRIPT = {
     'pi': ATTENTION_STANDIN_PROGRAM,
     'codex': ATTENTION_CODEX_STANDIN_PROGRAM,
 }
+# The stand-in of the program of a conversation of the orchestrator dock. A run
+# names it in the variable below, not in a panel command.
+ORCHESTRATOR_STANDIN_PROGRAM = 'orchestrator_standin.py'
+ORCHESTRATOR_PROGRAM_VARIABLE = 'HORIZON_ORCHESTRATOR_PROGRAM'
 PANEL_PROGRAMS = (
     WORKTREE_CARD_PROGRAM,
     ATTENTION_STANDIN_PROGRAM,
     ATTENTION_CODEX_STANDIN_PROGRAM,
     FILE_AGENT_PROGRAM,
+    ORCHESTRATOR_STANDIN_PROGRAM,
 )
 PANEL_PROGRAM_FOLDER = 'programs'
 
@@ -650,6 +655,34 @@ def body_in_state(destination, body, state):
 def program_in_state(source, destination, state):
     """Write a copy of `source` as the program that a panel of this fixture runs."""
     return body_in_state(destination, Path(source).read_text(), state)
+
+
+def orchestrator_program_in_state(state, environments=(), folder=None):
+    """Give the dock's conversation its stand-in from the state folder.
+
+    A procedure names the program of the dock in `HORIZON_ORCHESTRATOR_PROGRAM` of
+    the shell that starts the fixture, and the sandbox binds the private home over
+    the home of the person: a checkout under that home does not exist inside the
+    run. The state folder is bound on every run, so a value that names the stand-in
+    of this fixture is replaced by the copy inside it, in the environment of this
+    process and in each environment of `environments`. Any other value stays.
+    """
+    value = os.environ.get(ORCHESTRATOR_PROGRAM_VARIABLE)
+    if not value:
+        return None
+    source = fixture_program(ORCHESTRATOR_STANDIN_PROGRAM, folder).resolve()
+    try:
+        named = Path(value).resolve(strict=True)
+    except OSError:
+        return None
+    if named != source:
+        return None
+    state = Path(state).resolve()
+    copy = program_in_state(source, state / 'data' / PANEL_PROGRAM_FOLDER / ORCHESTRATOR_STANDIN_PROGRAM, state)
+    os.environ[ORCHESTRATOR_PROGRAM_VARIABLE] = str(copy)
+    for environment in environments:
+        environment[ORCHESTRATOR_PROGRAM_VARIABLE] = str(copy)
+    return copy
 
 
 def fixture_program(name, folder=None):
@@ -1922,6 +1955,9 @@ def main():
         extra_ro_binds.append(args.tools.resolve())
     box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds, reuse=args.reuse_state,
                           host_audio=host_audio)
+    # The stand-in of the dock runs from the state folder, because the sandbox
+    # hides a checkout under the home of the person.
+    orchestrator_program_in_state(args.state, (box.host_env, box.sandbox_env))
     sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
     data = box.data
     namespace = box.namespace

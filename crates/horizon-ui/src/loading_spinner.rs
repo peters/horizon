@@ -12,12 +12,22 @@ const ROTATION_PERIOD: f64 = 1.2;
 const ROTATION_PERIOD_F32: f32 = 1.2;
 const LABEL_SPACING: f32 = 10.0;
 
+/// The room that the arc of the spinner takes in the middle of a row.
+pub const ARC_SPAN: f32 = SPINNER_RADIUS * 2.0;
+
 /// Paints a centered loading spinner with an optional label below it.
 ///
 /// The spinner is a rotating arc that animates continuously. Pass a stable
 /// `Id` so the animation phase persists across frames.
 pub fn show(ui: &mut egui::Ui, id: Id, label: Option<&str>) {
     show_colored(ui, id, label, theme::ACCENT());
+}
+
+/// Paints the rotating arc of [`show`] in the middle of `center`, for a row that
+/// holds a text beside it, and asks for the frame of its next step.
+pub fn paint_arc_at(ui: &egui::Ui, center: Pos2, color: Color32) {
+    paint_arc(ui, Id::NULL, center, color);
+    ui.ctx().request_repaint_after(Duration::from_millis(32));
 }
 
 /// Like [`show`] but lets the caller pick the arc color.

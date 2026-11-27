@@ -6,12 +6,21 @@
 //! and the send control on one row, and the row of the chips under them. A field
 //! that grows takes the room upward and never moves the chips.
 //!
-//! The field of this part writes the draft of the person and sends nothing, so
-//! the send control is disabled and says why in its hover text.
+//! The field writes the draft of the person. Enter sends it and Shift+Enter
+//! makes a new line, so the return key of the text edit is Shift+Enter and this
+//! module takes the plain Enter itself, while the field holds the keyboard. A
+//! draft of white space only sends nothing.
+//!
+//! While the conversation of the workspace is busy, the send control becomes the
+//! stop control, and Enter sends nothing: the field keeps the keys, and the
+//! person reads and writes the draft of a turn that runs.
 
 use std::sync::Arc;
 
-use egui::{Align2, FontId, Galley, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{
+    Align2, Event, FontId, Galley, Id, Key, KeyboardShortcut, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui,
+    UiBuilder, WidgetInfo, pos2, vec2,
+};
 
 use crate::theme;
 use crate::typeface::Weight;
@@ -45,7 +54,10 @@ const SEND_SIDE: f32 = 32.0;
 const SEND_GAP: f32 = 8.0;
 const SEND_RADIUS: u8 = 9;
 const SEND_GLYPH: &str = "\u{2191}";
+const STOP_GLYPH: &str = "\u{25a0}";
+const CONTROL_GLYPH_SIZE: f32 = 14.0;
 const SEND_NAME: &str = "Send";
+const STOP_NAME: &str = "Stop";
 const SEND_HOVER: &str = "The orchestrator is not connected yet";
 const CHIP_RADIUS: u8 = 8;
 const CHIP_PADDING_X: f32 = 10.0;
@@ -60,6 +72,16 @@ const CHIPS: [(&str, &str); 3] = [
     ("Workers", "not chosen"),
     ("Place", "this computer"),
 ];
+
+/// What the person asked for with the field and its control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum Asked {
+    Nothing,
+    /// Send the draft.
+    Send,
+    /// Stop the turn of the conversation.
+    Stop,
+}
 
 /// The rectangles of the composer, worked out before it draws: the whole
 /// composer, the field, the send control at the right of the field, and the room
@@ -100,16 +122,24 @@ pub(super) fn parts(ui: &Ui, content: Rect, draft: &str) -> Parts {
     }
 }
 
-/// Draws the composer that [`parts`] worked out, with its line above it.
-pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bool) {
+/// Draws the composer that [`parts`] worked out, with its line above it, and
+/// answers what the person asked for.
+pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bool, busy: bool) -> Asked {
     ui.painter().hline(
         parts.rect.x_range(),
         parts.rect.min.y,
         Stroke::new(LINE_HEIGHT, theme::BORDER_SUBTLE()),
     );
-    field(ui, parts.field, draft, enabled);
-    send_control(ui, parts.send);
+    let sent = field(ui, parts.field, draft, enabled, enabled && !busy);
+    let control = control(ui, parts.send, enabled, busy);
     chips(ui, parts.chips);
+    if control {
+        Asked::Stop
+    } else if sent {
+        Asked::Send
+    } else {
+        Asked::Nothing
+    }
 }
 
 /// The width of the field: the row of the composer minus the send control and
@@ -151,7 +181,7 @@ fn draft_galley(ui: &Ui, draft: &str, width: f32) -> Arc<Galley> {
 /// frame of the field on the rectangle that it worked out, and the text edit sits
 /// inside it, so a draft that is longer than the field is clipped instead of
 /// moving the parts under it.
-fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool) {
+fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool, sends: bool) -> bool {
     ui.painter().rect(
         rect,
         FIELD_RADIUS,
@@ -160,6 +190,7 @@ fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool) {
         StrokeKind::Inside,
     );
     let text = rect.shrink2(vec2(f32::from(FIELD_MARGIN_X), f32::from(FIELD_MARGIN_Y)));
+    let enter = sends && ui.memory(|memory| memory.has_focus(Id::unique(FIELD_ID))) && plain_enter(ui);
     let edit = egui::TextEdit::multiline(&mut *draft)
         .id(Id::unique(FIELD_ID))
         .hint_text(FIELD_HINT)
@@ -167,6 +198,9 @@ fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool) {
         .text_color(theme::FG())
         .desired_width(text.width())
         .desired_rows(FIELD_MIN_ROWS)
+        // Shift+Enter makes a new line: the return key of the edit is that one,
+        // so the plain Enter reaches the rule of the send.
+        .return_key(Some(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter)))
         // The whole field takes the pointer, so a click anywhere in it gives the
         // text edit the keyboard.
         .min_size(text.size())
@@ -178,10 +212,31 @@ fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool) {
     } else {
         field_ui.add_enabled(false, edit);
     }
+    enter
 }
 
-/// The send control of this part: a disabled button that says why.
-fn send_control(ui: &Ui, rect: Rect) {
+/// Whether this frame holds a press of Enter alone, without Shift, Alt or the
+/// command key. The press stays in the events of the frame, so a widget that
+/// reads it still does.
+fn plain_enter(ui: &Ui) -> bool {
+    ui.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                Event::Key {
+                    key: Key::Enter,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if !modifiers.shift && !modifiers.alt && !modifiers.command
+            )
+        })
+    })
+}
+
+/// The control of the composer: the send control, or the stop control while the
+/// conversation is busy. It answers whether the person pressed it.
+fn control(ui: &Ui, rect: Rect, enabled: bool, busy: bool) -> bool {
     let painter = ui.painter();
     painter.rect_filled(rect, SEND_RADIUS, theme::PANEL_BG_ALT());
     painter.rect_stroke(
@@ -193,13 +248,19 @@ fn send_control(ui: &Ui, rect: Rect) {
     painter.text(
         rect.center(),
         Align2::CENTER_CENTER,
-        SEND_GLYPH,
-        FontId::proportional(14.0),
-        theme::FG_DIM(),
+        if busy { STOP_GLYPH } else { SEND_GLYPH },
+        FontId::proportional(CONTROL_GLYPH_SIZE),
+        if enabled { theme::FG() } else { theme::FG_DIM() },
     );
-    let response = ui.interact(rect, Id::unique(SEND_ID), Sense::hover());
-    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, false, SEND_NAME));
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(rect, Id::unique(SEND_ID), sense);
+    let name = if busy { STOP_NAME } else { SEND_NAME };
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, enabled, name));
+    if enabled {
+        return response.clicked();
+    }
     let _ = response.on_hover_text(SEND_HOVER);
+    false
 }
 
 /// One chip: its rectangle, and the two lines that it shows.
