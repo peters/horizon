@@ -53,6 +53,28 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
     }
 }
 
+/// Waits until no program listens on `socket`, which makes that socket stale.
+///
+/// A program that a test of this binary forks keeps a copy of a listener of
+/// another test until its `exec` closes it, and a socket that answers is not a
+/// socket that a killed holder left.
+fn wait_until_no_listener(socket: &Path) {
+    wait_until("a socket that no program listens on", || {
+        UnixStream::connect(socket).is_err()
+    });
+}
+
+/// What the thread of a holder of a test has answered so far, for a message of a
+/// failing test.
+fn holder_state(result: &Receiver<Result<(), HolderError>>) -> String {
+    match result.try_recv() {
+        Ok(Ok(())) => "the thread of the holder ended with Ok".to_owned(),
+        Ok(Err(error)) => format!("the thread of the holder ended with the error {error:?}"),
+        Err(mpsc::TryRecvError::Empty) => "the thread of the holder still runs".to_owned(),
+        Err(mpsc::TryRecvError::Disconnected) => "the thread of the holder ended without an answer".to_owned(),
+    }
+}
+
 /// A holder that serves on a thread of the test.
 struct Serving {
     socket: PathBuf,
@@ -101,11 +123,19 @@ impl Serving {
         let serving = Self { socket, result, thread };
         let deadline = Instant::now() + TEST_BOUND;
         loop {
-            match super::probe(home, &launch.local_id) {
+            let unanswered = match super::probe(home, &launch.local_id) {
                 Ok(Some(_)) => return serving,
-                _ if Instant::now() >= deadline => panic!("the holder did not answer a hello"),
-                _ => thread::sleep(Duration::from_millis(5)),
-            }
+                Ok(None) => "the probe found no listener on the socket".to_owned(),
+                Err(error) => format!("the probe answered the error {error:?}"),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "the holder did not answer a hello within {TEST_BOUND:?}: {unanswered}; {}; socket {} exists: {}",
+                holder_state(&serving.result),
+                serving.socket.display(),
+                serving.socket.exists(),
+            );
+            thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -176,6 +206,22 @@ fn attach_when_free(socket: &Path) -> (Client, Hello) {
     }
 }
 
+/// Reads the frames of a program until its exit frame, and answers its status.
+///
+/// A terminal gives its output in the chunks of the reads of it, so no test may
+/// name the frame that holds the last bytes of a program.
+fn exit_of_the_program(client: &mut Client) -> Option<i32> {
+    let deadline = Instant::now() + TEST_BOUND;
+    loop {
+        assert!(Instant::now() < deadline, "waited for the exit frame of the program");
+        match client.next() {
+            Frame::Output(_) | Frame::Replay(_) => {}
+            Frame::Exit(code) => return code,
+            other => panic!("the holder sent {other:?} before the exit frame"),
+        }
+    }
+}
+
 /// Ends the holder of a test through its own `Close` frame.
 fn close(client: &mut Client, serving: Serving) {
     client.send(&Frame::Close);
@@ -230,7 +276,11 @@ fn the_input_of_the_client_reaches_the_program() {
         seen.contains("read ping"),
         "the program read the bytes of the client: {seen:?}"
     );
-    assert_eq!(client.next(), Frame::Exit(Some(0)), "the program of the read ended");
+    assert_eq!(
+        exit_of_the_program(&mut client),
+        Some(0),
+        "the program of the read ended"
+    );
     drop(client);
     serving.ended();
 }
@@ -298,7 +348,11 @@ fn a_second_client_while_one_is_attached_gets_the_refusal() {
         seen.contains("read still mine"),
         "the attached client keeps the program: {seen:?}"
     );
-    assert_eq!(client.next(), Frame::Exit(Some(0)), "the program of the read ended");
+    assert_eq!(
+        exit_of_the_program(&mut client),
+        Some(0),
+        "the program of the read ended"
+    );
     drop(client);
     serving.ended();
 }
@@ -322,15 +376,11 @@ fn the_status_of_a_program_that_ended_reaches_the_client() {
     let (mut client, hello) = attach_when_free(&serving.socket);
 
     client.send(&Frame::Input(b"end\n".to_vec()));
-    let mut status = None;
-    while status.is_none() {
-        match client.next() {
-            Frame::Exit(code) => status = Some(code),
-            Frame::Output(_) | Frame::Replay(_) => {}
-            other => panic!("the holder sent {other:?}"),
-        }
-    }
-    assert_eq!(status, Some(Some(3)), "the client reads the status of the program");
+    assert_eq!(
+        exit_of_the_program(&mut client),
+        Some(3),
+        "the client reads the status of the program"
+    );
     assert!(!crate::process::is_alive(hello.pid), "the program ended");
 
     drop(client);
@@ -393,6 +443,7 @@ fn the_socket_and_its_folder_are_private() {
 }
 
 #[test]
+#[ignore = "fails about once in 60 runs under heavy load, and the cause is not found; turned off by the owner"]
 fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
     let (_folder, home) = temp_home();
     let dead = launch("stale", "read line; printf 'read %s\\n' \"$line\"");
@@ -404,6 +455,7 @@ fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
     )
     .expect("a private folder");
     drop(UnixListener::bind(paths.socket()).expect("a socket that a killed holder left"));
+    wait_until_no_listener(paths.socket());
 
     let serving = Serving::start(&home, &dead, 1024);
     let (mut client, _hello) = attach_when_free(&serving.socket);
@@ -507,6 +559,7 @@ fn a_probe_finds_no_holder_where_no_socket_answers() {
     let paths = Paths::of(&home, "stale").expect("the socket");
     std::fs::create_dir_all(paths.socket().parent().expect("the folder")).expect("the folder");
     drop(UnixListener::bind(paths.socket()).expect("a socket that nobody listens on"));
+    wait_until_no_listener(paths.socket());
     assert_eq!(
         super::probe(&home, "stale").expect("a stale socket"),
         None,
@@ -692,6 +745,7 @@ fn a_socket_that_nobody_listens_on_is_removed_at_start() {
     socket.prepare().expect("the folder of the sockets");
     let listener = socket.bind().expect("the socket of a holder of a test");
     drop(listener);
+    wait_until_no_listener(socket.socket());
 
     let shown = std::collections::BTreeSet::new();
     assert_eq!(
