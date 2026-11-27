@@ -232,7 +232,8 @@ fn limit(value: &Value) -> Vec<BridgeEvent> {
 }
 
 /// The events of one `result` line, which ends a turn. Its `total_cost_usd` is
-/// the cost of the whole process, so the cost of this turn is the sum of the
+/// the cost of the whole conversation, so a resumed process inherits the cost of
+/// the turns that it did not serve; the cost of this one turn is the sum of the
 /// `costUSD` of the models of `model_usage_since_last_result`.
 fn turn_ended(value: &Value) -> Vec<BridgeEvent> {
     let cost_usd = value

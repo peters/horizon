@@ -6,4 +6,5 @@
 
 mod codec;
 mod conversation;
+mod replay;
 mod worker;

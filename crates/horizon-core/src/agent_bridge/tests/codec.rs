@@ -170,7 +170,7 @@ fn a_rate_limit_line_gives_the_window_of_the_account() {
 
 #[test]
 fn a_result_line_ends_the_turn_with_its_own_cost() {
-    let line = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":1479,"total_cost_usd":0.75,"model_usage_since_last_result":{"first-model":{"costUSD":0.25},"second-model":{"costUSD":0.5}}}"#;
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":1479,"total_cost_usd":1.75,"model_usage_since_last_result":{"first-model":{"costUSD":0.25},"second-model":{"costUSD":0.5}}}"#;
     assert_eq!(
         parse(line),
         vec![BridgeEvent::TurnEnded {
@@ -235,6 +235,36 @@ fn a_json_line_without_a_type_is_a_shape_that_the_codec_does_not_know() {
             "{line}"
         );
     }
+}
+
+#[test]
+fn a_thinking_block_of_a_message_gives_no_text_and_keeps_the_text_of_its_message() {
+    let mut codec = ClaudeCodec::new();
+    let thinking = r#"{"type":"assistant","message":{"id":"msg-1","content":[{"type":"thinking","thinking":"a private note","signature":"a-signature"}]}}"#;
+    assert!(codec.parse(thinking).is_empty(), "{thinking}");
+    let text = r#"{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"alpha"}]}}"#;
+    assert_eq!(
+        codec.parse(text),
+        vec![BridgeEvent::AgentText {
+            message_id: "msg-1".to_owned(),
+            text: "alpha".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn a_text_delta_gives_no_event_so_the_whole_message_stays_one_text() {
+    let mut codec = ClaudeCodec::new();
+    let delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"al"}},"session_id":"a-session"}"#;
+    assert!(codec.parse(delta).is_empty(), "{delta}");
+    let whole = r#"{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"alpha"}]}}"#;
+    assert_eq!(
+        codec.parse(whole),
+        vec![BridgeEvent::AgentText {
+            message_id: "msg-1".to_owned(),
+            text: "alpha".to_owned(),
+        }]
+    );
 }
 
 #[test]
