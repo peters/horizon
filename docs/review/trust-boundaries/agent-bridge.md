@@ -64,8 +64,11 @@ the same rules.
   an agent panel does not speak as that panel.
 - **No line of the program waits on a frame.** The reader, the writer and the
   reader of the standard error are threads of their own. `poll` reads a channel
-  with `try_iter`, and `send` queues a line. A caller runs `stop` off the frame,
-  as the [UI thread guide](../../architecture/ui-thread.md) requires.
+  with `try_iter`, and `send` queues a line. A caller runs `start` and `stop` off
+  the frame, on the worker thread `orchestrator-dock` of the dock
+  (`app/orchestrator_dock/worker.rs`), which is separate from the coordination
+  worker of the browser jobs. The [UI thread
+  guide](../../architecture/ui-thread.md) requires that rule.
 
 ## What the program of a workspace gets
 

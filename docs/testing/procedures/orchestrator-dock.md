@@ -17,7 +17,10 @@ and the conversation that it runs. It proves that the dock draws only after the
 switch turns it on, that the canvas ends at its left edge, that the minimap stays
 on the canvas, that each workspace keeps its own draft and its own conversation,
 and that a message of the person reaches an agent program with no terminal and
-comes back as an answer.
+comes back as an answer. It also proves the look of the dock: the field with its
+control inside it, the example rows of the empty state, the state chip of the
+header with the cost beside it, the request and the result of a tool row, the
+gradient bar of an agent text, and the chevron of the three chips.
 
 ## 2. Applicability
 
@@ -98,42 +101,54 @@ comes back as an answer.
 
    Result: The tile of the active workspace is on the left. The name of that
    workspace is beside it. The line under the name reads
-   `Orchestrator · Claude Code · not connected`. There is no cost at the right
-   edge of the header.
+   `Orchestrator · Claude Code on this computer`. A chip stands at the right edge
+   of the header, on the row of the name, with a hollow dot and the words
+   `not connected`. There is no cost left of the chip.
 
 3. Read the three parts of the dock from the top down.
 
    Result: The header is at the top. The empty state stands in the middle, with
-   its title `Say what you want done.` and the two sentences under it. The
-   composer is at the bottom edge of the dock.
+   its title `Say what you want done.`, the two sentences under it and the two
+   example rows under them. The composer is at the bottom edge of the dock.
 
 4. Look at the composer.
 
-   Result: The field is at the left, 16 points from the left edge of the dock. The
-   hint `Write to the orchestrator` starts 14 points from the left edge of the
-   field and 12 points under its top edge. The send control is a square of 32
-   points at the right of the field, and its centre is the centre of the field.
-   The three chips stand under the field, left aligned, 8 points apart, and their
-   bottom edge is 14 points above the bottom edge of the dock.
+   Result: The field takes the full width of the composer, which keeps about 16
+   points of room at each side of the dock. The field is 48 points high. The hint
+   `Write to the orchestrator` starts 14 points from the left edge of the field
+   and 12 points under its top edge. The control is a square of 34 points inside
+   the field at its right end, 7 points from its right inner edge, and its centre
+   is the centre of the field. The control has a grey fill, a soft outline and a
+   dim arrow, because the draft is empty. The three chips stand under the field,
+   left aligned, 8 points apart, and their bottom edge is 14 points above the
+   bottom edge of the dock. A small chevron points down 6 points right of the
+   value of each chip.
 
-5. Look at the canvas beside the dock.
+5. Point at the control, and then at a chip.
+
+   Result: The hover text of the control reads
+   `The orchestrator is not connected yet`. The hover text of the chip reads
+   `Choice comes later`, and the chip does not change.
+
+6. Look at the canvas beside the dock.
 
    Result: The canvas ends at the left edge of the dock. No panel and no part of
    the canvas decoration is under the dock.
 
-6. Look at the bottom right corner of the canvas.
+7. Look at the bottom right corner of the canvas.
 
    Result: The default window of the fixture is 1480 points wide, so the canvas
    beside the dock is about 870 points wide, which is less than the 996 points
    that the minimap needs. No minimap draws. Section 6.1 shows the minimap of a
    canvas that is wide enough.
 
-7. Close every workspace, or open a new session with no workspace. Look at the
+8. Close every workspace, or open a new session with no workspace. Look at the
    header of the dock.
 
    Result: The header shows no tile. The name line reads `No work item is open`.
-   There is no second line. The field is disabled, and the hover text of the
-   control reads `The orchestrator is not connected yet`.
+   There is no second line and no chip. The field is disabled, the control keeps
+   the grey fill, the soft outline and the dim arrow, and its hover text reads
+   `The orchestrator is not connected yet`.
 
 ### 6.3 OD-3 — The command palette toggles the dock
 
@@ -191,7 +206,8 @@ comes back as an answer.
 
    Result: The text stands in the field at the bottom of the dock. No character
    goes to a terminal panel. The second line of the header still reads
-   `Orchestrator · Claude Code · not connected`, because no message went out.
+   `Orchestrator · Claude Code on this computer` and the chip still reads
+   `not connected`, because no message went out.
 
 2. Select a second workspace in the sidebar. Click in the field of the dock.
 
@@ -205,11 +221,35 @@ comes back as an answer.
 4. Type five more lines in the field, then five lines again.
 
    Result: The field grows one row for each line, and its top edge moves up. The
-   send control keeps its centre on the centre of the first row. The chips keep
-   their place at the bottom of the dock. After six rows the field stops growing
-   and it clips the lines under the sixth row.
+   control stays at the bottom right of the field, 7 points above its bottom inner
+   edge. The chips keep their place at the bottom of the dock. After six rows the
+   field stops growing and it clips the lines under the sixth row.
 
-### 6.7 OD-7 — Light and dark theme
+### 6.7 OD-6b — The example rows of the empty state
+
+1. Start with an empty conversation and no workspace with a message. Read the
+   two rows under the sentences of the empty state.
+
+   Result: The first row reads `Fix #1987 on a rented machine`. The second row
+   reads `Why is the cold start slow? Measure it first.` Each row takes the width
+   of the empty state, 12 points under the sentences, and the rows are 8 points
+   apart. Point at a row.
+
+   Result: The outline of the row becomes stronger and the pointer is a pointing
+   hand.
+
+2. Click the first row.
+
+   Result: The text of the row stands in the field and the outline of the field
+   becomes the accent colour, because the field holds the keyboard. The control
+   becomes a filled accent square with a dark arrow. No bubble and no answer
+   appear, because nothing was sent, and the empty state stays.
+
+3. Type one word in the field, then click the second row.
+
+   Result: The row does nothing. The field keeps the word that the person typed.
+
+### 6.8 OD-7 — Light and dark theme
 
 1. Open **Menu › Settings**, and choose the light theme under Appearance.
 
@@ -219,18 +259,23 @@ comes back as an answer.
 2. Choose the dark theme.
 
    Result: The dock is a dark surface, above the canvas surface. The tile, the
-   name and the chips stay readable.
+   name, the chip and the chevrons of the chips stay readable.
 
-### 6.8 OD-8 — A message and the answer
+### 6.9 OD-8 — A message and the answer
 
-1. Click in the field of the dock. Type `hello there`. Press Enter.
+1. Click in the field of the dock. Read the outline of the field, then type
+   `hello there`. Press Enter.
 
-   Result: The field is empty. A bubble with `hello there` stands at the right
-   half of the list, with a `PANEL_BG_ALT` fill and a soft outline. The second
-   line of the header reads `Orchestrator · Claude Code · working`, and then
-   `ready`. A text `You said: hello there` stands at the left half, with a bar of
-   3 points of the accent colour at its left. `0.01 USD` stands at the right edge
-   of the header.
+   Result: The outline of the field is the accent colour while it holds the
+   keyboard. The field is empty after the Enter. A bubble with `hello there`
+   stands at the right half of the list, with a `PANEL_BG_ALT` fill and a soft
+   outline. The chip of the header reads `working`, and then `ready` with a green
+   dot. The second line of the header keeps
+   `Orchestrator · Claude Code on this computer`. A text `You said: hello there`
+   stands at the left half, with a bar of 3 points at its left. The top of the bar
+   is the accent colour, and its bottom is the mauve of the workspace accents,
+   because the bar is a vertical gradient. `0.01 USD` stands 10 points left of the
+   chip, on its centre line.
 
 2. Click in the field and press Enter without text.
 
@@ -245,15 +290,22 @@ comes back as an answer.
    Result: The field is empty. One bubble holds two lines, `one` and `two`, and
    the answer to that message follows it.
 
-### 6.9 OD-9 — A tool call
+### 6.10 OD-9 — A tool call
 
 1. Type `use a tool please` and press Enter.
 
    Result: A row stands under the text of the agent, indented 13 points. It shows
-   a green dot, the name `Bash` in the monospace font, and the summary
-   `stand-in` in the dim colour.
+   a green dot, the name `Bash` in the monospace font, and the command
+   `echo stand-in` in the dim colour. The row shows no second line, because the
+   call is done.
 
-### 6.10 OD-10 — A long answer and the scroll
+2. Type `fail please` and press Enter.
+
+   Result: A row shows a red dot, the name `Bash` and the command `exit 3`. Under
+   the command, in the same column, one red line reads `the command failed`. The
+   second line of the result is not drawn.
+
+### 6.11 OD-10 — A long answer and the scroll
 
 1. Type `long answer please` and press Enter. Then type `and again` and press
    Enter.
@@ -269,28 +321,31 @@ comes back as an answer.
    bottom while the person reads above it. Turn the wheel down to the bottom, and
    send one more message. The list follows the bottom again.
 
-### 6.11 OD-11 — Stop a turn
+### 6.12 OD-11 — Stop a turn
 
 1. Type `slow answer please` and press Enter.
 
-   Result: The second line of the header reads `Orchestrator · Claude Code ·
-   working`. A row with the spinner and `working` stands at the left of the list.
-   The send control of the composer shows a filled square.
+   Result: The chip of the header reads `working`. A row with the spinner and
+   `working` stands at the left of the list. The control of the composer shows a
+   filled square, with a grey fill, a strong outline and the square in the
+   foreground colour.
 
 2. Press the control before the answer comes. The answer of this turn comes after
    2 seconds.
 
    Result: A notice `Stopped by you` stands in the middle of the list, with a line
-   at each side. The second line of the header reads `Orchestrator · Claude Code ·
-   stopped`. No answer of that turn appears. The field keeps the keys, and the
-   control shows the arrow again.
+   at each side. The chip of the header reads `stopped`, with a hollow dot. No
+   answer of that turn appears. The field keeps the keys, and the control shows
+   the arrow again. While the stop waits, the pointer of the person still moves
+   the dock and a click on an example row still fills an empty draft: the stop
+   does not hold the frame, and it does not hold a browser job.
 
 3. Type `after the stop` and press Enter.
 
-   Result: A new turn starts. The answer arrives, and the second line of the
-   header returns to `ready`.
+   Result: A new turn starts. The answer arrives, and the chip of the header
+   returns to `ready`.
 
-### 6.12 OD-12 — A program that does not start
+### 6.13 OD-12 — A program that does not start
 
 1. Stop the fixture. Start it again with the same arguments, and give the
    variable a path that is not a program:
@@ -304,16 +359,16 @@ comes back as an answer.
 2. Click in the field, type `hello there`, and press Enter.
 
    Result: A notice in the middle of the list reads
-   `Claude Code did not start: No such file or directory (os error 2)`. The second
-   line of the header reads `Orchestrator · Claude Code · ended`. The control
-   shows the arrow again.
+   `Claude Code did not start: No such file or directory (os error 2)`. The chip
+   of the header reads `ended`, with a red dot. The control shows the arrow
+   again.
 
 3. Send one more message.
 
    Result: Horizon tries to start the program again. The notice appears once
    more, and no other entry is added.
 
-### 6.13 OD-13 — Two workspaces
+### 6.14 OD-13 — Two workspaces
 
 1. Send `a question of the first workspace` in the first workspace.
 
@@ -321,8 +376,8 @@ comes back as an answer.
    workspace` there. Select the first workspace again.
 
    Result: The dock shows the conversation of the first workspace, with its
-   message and its answer, and no entry of the second workspace. The second line
-   of the header reads the state of the first conversation.
+   message and its answer, and no entry of the second workspace. The chip of the
+   header reads the state of the first conversation.
 
 3. Select the second workspace.
 
@@ -335,7 +390,7 @@ comes back as an answer.
    Result: The answer of the second conversation arrived while the first
    workspace was active. The dock shows it.
 
-### 6.14 OD-14 — The end of Horizon leaves no program
+### 6.15 OD-14 — The end of Horizon leaves no program
 
 1. Send one message and wait for the answer.
 
@@ -424,8 +479,21 @@ open, because Horizon types no wake line for an owner without a terminal.
 - The dock draws only after the switch turns it on.
 - The header is at the top of the dock, the empty state is in the middle, and the
   composer keeps the bottom edge.
-- The field stands at the bottom of the dock, the send control stands on the row
-  of the field at its right, and the three chips stand under the field.
+- The field takes the full width of the composer and stands at its bottom edge.
+  The control stands inside the field at its right end, and the three chips stand
+  under the field.
+- The control shows the accent form only while a draft can go out. It shows the
+  grey form while the draft is empty or there is no workspace, and the stop form
+  while a turn runs.
+- The empty state draws the title, the two sentences and the two example rows. A
+  click on a row fills an empty draft and sends nothing.
+- The header draws the state in a chip at its right edge, and the cost left of the
+  chip on the same centre line. The second line names the program and no state.
+- A tool row draws the request of the tool. A failed call draws the first line of
+  its result under the request, and a call that is done draws no such line.
+- The bar of an agent text is a vertical gradient from the accent to the mauve of
+  the workspace accents.
+- Each of the three chips shows a chevron and the hover text `Choice comes later`.
 - The canvas ends at the left edge of the dock, and at the left edge of the
   Settings panel when both show.
 - The minimap keeps the rule of the minimap: it draws only in a canvas of at

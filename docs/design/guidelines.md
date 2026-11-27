@@ -1211,18 +1211,45 @@ start.
   padding. A 1 px `BORDER_SUBTLE` line is under it. The tile of the active
   workspace is 26 by 26 points. The name is 13.5 Semibold `FG` and ends with an
   ellipsis. The line under the name is 11.5 Regular `FG_SOFT` and reads
-  `Orchestrator · Claude Code · <state>`, where the state is `not connected`,
-  `starting`, `ready`, `working`, `stopped` or `ended`. With no active
-  workspace, there is no tile, the name line reads `No work item is open`, and
-  there is no second line.
-- The cost of the conversation stands at the right edge of the header when it is
-  above zero: the sum of the ended turns with two decimals and `USD`, as
-  `0.03 USD`, at 11 JetBrains Mono and `FG_SOFT`.
+  `Orchestrator · Claude Code on this computer`. It takes the whole width of the
+  header, because the chip and the cost stand above it on the row of the name.
+  With no active workspace, there is no tile, the name line reads
+  `No work item is open`, and there is no second line and no chip.
+- A state chip stands at the right edge of the header, on the row of the name. It
+  has the form of the chip of a card: 20 points high, radius 8, a `BG_ELEVATED`
+  fill, a 1 px `BORDER_SUBTLE` outline, 8 points of horizontal inset, a dot of 6
+  points 4 points left of the text, and the text at 10.5 JetBrains Mono
+  `FG_SOFT`. The chip draws the same painter as the chip of a card
+  (`block_widget/chip.rs`). The text and the dot of each state are:
+
+  | State | Text | Dot |
+  |---|---|---|
+  | no bridge yet | `not connected` | hollow `FG_SOFT` |
+  | start on the worker | `starting` | filled `PALETTE_YELLOW` |
+  | bridge runs, no turn | `ready` | filled `PALETTE_GREEN` |
+  | a turn runs | `working` | filled `ACCENT` |
+  | the person stopped it | `stopped` | hollow `FG_SOFT` |
+  | the program ended | `ended` | filled `PALETTE_RED` |
+
+- The cost of the conversation stands 10 points left of the chip, on the same
+  centre line, while it is above zero: the sum of the ended turns with two
+  decimals and `USD`, as `0.03 USD`, at 11 JetBrains Mono and `FG_SOFT`. A header
+  that is too narrow for the name, the cost and the chip cuts the name with an
+  ellipsis first, and then hides the cost. The chip stays.
 - The empty state is vertically centred between the header and the composer,
   with 28 points of horizontal padding. Its title is `Say what you want done.`
   at 15 Bold `FG`. The two sentences under the title are 13.5 Regular `FG_SOFT`.
   They wrap at a line height of 1.55 times the size. It draws only while the
   conversation of the workspace holds no entry.
+- Two example rows stand under the two sentences, 12 points below them and 8
+  points apart: `Fix #1987 on a rented machine` and `Why is the cold start slow?
+  Measure it first.` A row takes the full width of the empty state block, with
+  radius 10, a `PANEL_BG` fill, a 1 px `BORDER_SUBTLE` outline, a padding of 12
+  by 9 points, and its text at 12.5 Regular `FG` on one line with an ellipsis. A
+  pointer over a row outlines it in `FG_DIM` and shows the pointing hand. A click
+  puts the text of that row into an empty draft of the active workspace and gives
+  the keyboard to the field. A draft that holds text stays as the person wrote
+  it. The click sends nothing.
 - The list is a vertical scroll area between the header and the composer, with
   16 points of padding and 16 points between two entries. New entries stand at
   the bottom, and the list follows the bottom while the person has not scrolled
@@ -1233,45 +1260,67 @@ start.
   outline, radius 12, a padding of 12 by 9 points, and the text at 13.5 `FG`
   with a line height of 1.5 times the size, wrapped.
 - An entry of the agent stands at the left of the list, at most 96 percent of
-  its width: a bar of 3 points of `ACCENT` with radius 2 along the text, 10
-  points of air, and the text at 13.5 `FG` with a line height of 1.55 times the
-  size, wrapped. The text is plain text: no markdown, no link and no path is
-  active, and the person selects and copies it.
+  its width: a bar of 3 points along the full height of the text, 10 points of
+  air, and the text at 13.5 `FG` with a line height of 1.55 times the size,
+  wrapped. The bar is a vertical gradient from `ACCENT` at its top to
+  `workspace_accent(6)`, the mauve of the workspace accents, at its bottom. It is
+  a mesh of two colours with a round cap of 1.5 points at each end. The text is
+  plain text: no markdown, no link and no path is active, and the person selects
+  and copies it.
 - An entry of a tool is one row, indented 13 points: a dot of 6 points, the name
-  of the tool at 12 JetBrains Mono `FG_SOFT`, and the summary at 12 JetBrains
-  Mono `FG_DIM`, cut with an ellipsis to one line. The dot is `ACCENT` while the
-  tool runs, `PALETTE_GREEN` when it ends and `PALETTE_RED` when it fails. Two
-  tool rows that follow each other stand 4 points apart.
+  of the tool at 12 JetBrains Mono `FG_SOFT`, and what the tool was asked to do
+  at 12 JetBrains Mono `FG_DIM`, cut with an ellipsis to one line. The dot is
+  `ACCENT` while the tool runs, `PALETTE_GREEN` when it ends and `PALETTE_RED`
+  when it fails. A tool that failed draws the first line of its result under the
+  request, in the column of the request: 11.5 JetBrains Mono `PALETTE_RED`, one
+  line with an ellipsis. A tool that is done draws no such line. Two tool rows
+  that follow each other stand 4 points apart.
 - An entry of a notice of Horizon is centred at 10.5 JetBrains Mono `FG_DIM`,
   with a 1 px `BORDER_SUBTLE` line at each side that takes the free width.
 - While a turn is busy and no text of the agent came for it, one row stands at
   the left: the spinner of the interface and `working` at 12 `FG_DIM` after it.
   Only a frame that draws this row asks for the frame of the next step.
 - The composer keeps the bottom edge of the dock. From its top down: a 1 px
-  `BORDER_SUBTLE` line, 12 points of padding, one row of the field and the send
-  control, 10 points of gap, the row of the chips, and 14 points of padding to the
-  bottom edge. The left and right padding is 16 points.
-- The field is a multiline text edit. Its hint is `Write to the orchestrator`.
-  Its text is 13.5 `FG`, with a margin of 14 points at each side and 12 points
-  above and below it. Its fill is `BG`, its outline is 1 px `BORDER_STRONG`, and
-  its radius is 12. It is at least 44 points high. It opens with one row and it
-  grows to 6 rows upward, and it clips a longer draft. The row of the chips keeps
-  its place at the bottom.
-- The send control is 32 by 32 points at radius 9, and it is 8 points right of the
-  field. Its vertical centre is the centre of a field of one row. Enter in the
-  field sends the draft, Shift+Enter makes a new line, and a click on the
-  control sends it. A draft of white space only sends nothing. While the
-  conversation is busy the control shows a filled square instead of the arrow
-  and a press stops the program of that conversation; the field keeps the keys,
-  and Enter then sends nothing. With no active workspace both controls are
-  disabled, and the hover text of the control is `The orchestrator is not
-  connected yet`.
+  `BORDER_SUBTLE` line, 12 points of padding, the field, 10 points of gap, the
+  row of the chips, and 14 points of padding to the bottom edge. The left and
+  right padding is 16 points.
+- The field takes the full width of the composer. It is a multiline text edit at
+  radius 12, with a `BG` fill and a 1 px `BORDER_STRONG` outline, which becomes a
+  1 px `ACCENT` outline while the field holds the keyboard. Its hint is
+  `Write to the orchestrator`. Its text is 13.5 `FG`, with a margin of 14 points
+  at its left and 12 points above and below it. The text ends 8 points before the
+  control. The field is at least 48 points high, which holds one row. It grows to
+  6 rows upward, and it clips a longer draft. The row of the chips keeps its
+  place at the bottom.
+- The control stands inside the field at its right end: 34 by 34 points at
+  radius 9, 7 points from the right inner edge of the field. Its vertical centre
+  is the centre of a field of one row, and a taller draft keeps it 7 points above
+  the bottom inner edge. The control shows what a press will do:
+  - A draft that can go out, and no turn that runs: a filled `ACCENT`, the arrow
+    glyph in `BG`, and the pointing hand. A pointer over it fills it with
+    `blend(ACCENT, FG, 0.12)`.
+  - An empty draft, or no active workspace: a `PANEL_BG_ALT` fill, a 1 px
+    `BORDER_SUBTLE` outline and the arrow glyph in `FG_DIM`. With no active
+    workspace the hover text is `The orchestrator is not connected yet`.
+  - A turn that runs: the stop form of a filled square, a `PANEL_BG_ALT` fill, a
+    1 px `BORDER_STRONG` outline and the glyph in `FG`.
+
+  Enter in the field sends the draft, Shift+Enter makes a new line, and a click on
+  the control sends it. A draft of white space only sends nothing. While the
+  conversation is busy a press stops the program of that conversation; the field
+  keeps the keys, and Enter then sends nothing.
 - The three read-only chips are under the field, left aligned and 8 points apart.
   They wrap to the next row when the dock is too narrow for them. A chip has
   radius 8, a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and a padding of
   10 by 5 points. Its label line is 10.5 `FG_DIM` and its value line is 12.5 `FG`.
-  The rows are `Orchestrator` / `Claude Code`, `Workers` / `not chosen` and
-  `Place` / `this computer`.
+  A chevron of 5 points in `FG_DIM` stands 6 points right of the value, because a
+  later part makes the chips a choice. The chips are read-only in this part, and
+  the hover text of each of them is `Choice comes later`. The rows are
+  `Orchestrator` / `Claude Code`, `Workers` / `not chosen` and `Place` / `this
+  computer`.
+- The start and the stop of a bridge run on the worker of the dock, a thread named
+  `orchestrator-dock`, and never on the frame. The worker is separate from the
+  coordination worker of the browser jobs, so a stop never delays a browser job.
 - The minimap hangs on the bottom right corner of the canvas. The dock and an
   open Settings panel never stand on it. The map keeps the rule of the minimap:
   it draws only in a canvas of at least three times its width and twice its

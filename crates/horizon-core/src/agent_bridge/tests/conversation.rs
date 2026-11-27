@@ -84,16 +84,44 @@ fn a_tool_walks_from_running_to_done_or_to_failed() {
             Entry::Tool {
                 tool_id: "tool-1".to_owned(),
                 name: "Bash".to_owned(),
-                summary: "alpha".to_owned(),
+                summary: "echo alpha".to_owned(),
+                result: Some("alpha".to_owned()),
                 state: ToolState::Done,
             },
             Entry::Tool {
                 tool_id: "tool-2".to_owned(),
                 name: "Read".to_owned(),
                 summary: "/tmp/alpha.txt".to_owned(),
+                result: None,
                 state: ToolState::Failed,
             },
         ]
+    );
+}
+
+#[test]
+fn the_result_of_a_tool_is_its_first_line_and_the_summary_keeps_the_command() {
+    let conversation = conversation(vec![
+        BridgeEvent::ToolStarted {
+            tool_id: "tool-1".to_owned(),
+            name: "Bash".to_owned(),
+            summary: "exit 1".to_owned(),
+        },
+        BridgeEvent::ToolEnded {
+            tool_id: "tool-1".to_owned(),
+            failed: true,
+            summary: "line one\nline two".to_owned(),
+        },
+    ]);
+    assert_eq!(
+        entries(&conversation),
+        vec![Entry::Tool {
+            tool_id: "tool-1".to_owned(),
+            name: "Bash".to_owned(),
+            summary: "exit 1".to_owned(),
+            result: Some("line one".to_owned()),
+            state: ToolState::Failed,
+        }]
     );
 }
 

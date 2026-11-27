@@ -14,7 +14,8 @@
 //! itself keeps [`horizon_core::agent_bridge::MAX_ENTRIES`] entries.
 
 use egui::{
-    Align, FontId, Label, Rangef, Rect, RichText, Sense, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, pos2, vec2,
+    Align, FontId, Label, Mesh, Rangef, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder,
+    pos2, vec2,
 };
 use horizon_core::agent_bridge::{Entry, ToolState};
 
@@ -53,8 +54,14 @@ const AGENT_LINE_HEIGHT: f32 = 1.55;
 const TOOL_INDENT: f32 = 13.0;
 const TOOL_DOT: f32 = 6.0;
 const TOOL_FONT_SIZE: f32 = 12.0;
+/// The font of the line of a result under a tool row that failed.
+const TOOL_RESULT_FONT_SIZE: f32 = 11.5;
+/// The air between a tool row and the line of its result.
+const TOOL_RESULT_GAP: f32 = 2.0;
 const TOOL_GAP_AFTER_DOT: f32 = 8.0;
 const TOOL_GAP_AFTER_NAME: f32 = 8.0;
+/// The mauve of the workspace accents, which the bar of an agent text ends at.
+const AGENT_BAR_END_ACCENT: usize = 6;
 
 const NOTICE_FONT_SIZE: f32 = 10.5;
 const NOTICE_GAP: f32 = 8.0;
@@ -137,8 +144,12 @@ fn entry_row(ui: &mut Ui, entry: &Entry, width: f32) {
         Entry::Person { text } => person_row(ui, text, width),
         Entry::Agent { text, .. } => agent_row(ui, text, width),
         Entry::Tool {
-            name, summary, state, ..
-        } => tool_row(ui, name, summary, *state, width),
+            name,
+            summary,
+            result,
+            state,
+            ..
+        } => tool_row(ui, name, summary, result.as_deref(), *state, width),
         Entry::Notice { text } => notice_row(ui, text, width),
     }
 }
@@ -177,7 +188,9 @@ fn person_row(ui: &mut Ui, text: &str, width: f32) {
 }
 
 /// One text of the agent: the accent bar at the left of the list, and the text
-/// beside it, selectable, as plain text.
+/// beside it, selectable, as plain text. The bar runs the full height of the text
+/// and steps from the accent at its top to the mauve of the workspace accents at
+/// its bottom.
 fn agent_row(ui: &mut Ui, text: &str, width: f32) {
     let indent = AGENT_BAR_WIDTH + AGENT_GAP;
     let text_width = (width * AGENT_SHARE - indent).max(1.0);
@@ -193,10 +206,9 @@ fn agent_row(ui: &mut Ui, text: &str, width: f32) {
     );
     let height = galley.size().y;
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    ui.painter().rect_filled(
+    agent_bar(
+        ui.painter(),
         Rect::from_min_size(row.min, vec2(AGENT_BAR_WIDTH, height)),
-        AGENT_BAR_RADIUS,
-        theme::ACCENT(),
     );
     let text_rect = Rect::from_min_size(pos2(row.min.x + indent, row.min.y), vec2(text_width, height));
     let mut text_ui = ui.new_child(
@@ -207,27 +219,69 @@ fn agent_row(ui: &mut Ui, text: &str, width: f32) {
     text_ui.add(Label::new(rich).selectable(true).wrap());
 }
 
-/// One tool call: the dot of its state, its name and its summary, on one line.
-fn tool_row(ui: &mut Ui, name: &str, summary: &str, state: ToolState, width: f32) {
+/// The bar of one agent text: a mesh of two colours that runs the full height of
+/// the text, with a round cap at each end for its radius.
+fn agent_bar(painter: &egui::Painter, rect: Rect) {
+    let top = theme::ACCENT();
+    let bottom = theme::workspace_accent(AGENT_BAR_END_ACCENT);
+    let cap = (f32::from(AGENT_BAR_RADIUS)).min(AGENT_BAR_WIDTH / 2.0);
+    let body = Rect::from_min_max(pos2(rect.min.x, rect.min.y + cap), pos2(rect.max.x, rect.max.y - cap));
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(body.left_top(), top);
+    mesh.colored_vertex(body.right_top(), top);
+    mesh.colored_vertex(body.left_bottom(), bottom);
+    mesh.colored_vertex(body.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    painter.add(Shape::mesh(mesh));
+    painter.circle_filled(pos2(rect.center().x, body.min.y), cap, top);
+    painter.circle_filled(pos2(rect.center().x, body.max.y), cap, bottom);
+}
+
+/// One tool call: the dot of its state, its name and what it was asked to do on
+/// one line, and, for a call that failed, the first line of its result under
+/// them.
+fn tool_row(ui: &mut Ui, name: &str, summary: &str, result: Option<&str>, state: ToolState, width: f32) {
     let name_left = TOOL_INDENT + TOOL_DOT + TOOL_GAP_AFTER_DOT;
     let name_galley = text::mono_line(ui, name, TOOL_FONT_SIZE, theme::FG_SOFT(), (width - name_left).max(1.0));
     let summary_left = name_left + name_galley.size().x + TOOL_GAP_AFTER_NAME;
     let summary_width = width - summary_left;
     let summary_galley =
         (summary_width > 1.0).then(|| text::mono_line(ui, summary, TOOL_FONT_SIZE, theme::FG_DIM(), summary_width));
-    let height = name_galley.size().y.max(TOOL_DOT);
+    let result_galley = match (state, result) {
+        (ToolState::Failed, Some(result)) if summary_width > 1.0 => Some(text::mono_line(
+            ui,
+            result,
+            TOOL_RESULT_FONT_SIZE,
+            theme::PALETTE_RED(),
+            summary_width,
+        )),
+        _ => None,
+    };
+    let line_height = name_galley.size().y.max(TOOL_DOT);
+    let height = match &result_galley {
+        Some(result) => line_height + TOOL_RESULT_GAP + result.size().y,
+        None => line_height,
+    };
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let painter = ui.painter();
     painter.circle_filled(
-        pos2(row.min.x + TOOL_INDENT + TOOL_DOT / 2.0, row.center().y),
+        pos2(row.min.x + TOOL_INDENT + TOOL_DOT / 2.0, row.min.y + line_height / 2.0),
         TOOL_DOT / 2.0,
         dot_color(state),
     );
-    let top = row.center().y - name_galley.size().y / 2.0;
+    let top = row.min.y + (line_height - name_galley.size().y) / 2.0;
     let name_rect = Rect::from_min_size(pos2(row.min.x + name_left, top), name_galley.size());
     painter.galley(name_rect.min, name_galley, theme::FG_SOFT());
     if let Some(galley) = summary_galley {
         painter.galley(pos2(row.min.x + summary_left, top), galley, theme::FG_DIM());
+    }
+    if let Some(galley) = result_galley {
+        painter.galley(
+            pos2(row.min.x + summary_left, row.min.y + line_height + TOOL_RESULT_GAP),
+            galley,
+            theme::PALETTE_RED(),
+        );
     }
 }
 

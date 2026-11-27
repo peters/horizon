@@ -48,6 +48,13 @@ const TOOL_CALL: &str = r#"  printf '{"type":"assistant","message":{"id":"tools-
   printf '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu-%s","type":"tool_result","content":"stand-in","is_error":false}]}}\n' "$n"
 "#;
 
+/// The tool call of a turn that fails, which a stand-in prints in place of
+/// [`TOOL_CALL`]: the agent calls `Bash` with a command that ends in an error, and
+/// the result says why on two lines.
+const FAILING_TOOL_CALL: &str = r#"  printf '{"type":"assistant","message":{"id":"tools-%s","content":[{"type":"tool_use","id":"toolu-%s","name":"Bash","input":{"command":"exit 3"}}]}}\n' "$n" "$n"
+  printf '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu-%s","type":"tool_result","content":"the command failed\\nsecond line","is_error":true}]}}\n' "$n"
+"#;
+
 /// The stand-in of a program that names its session and then answers nothing.
 const SILENT: &str = r#"echo $$ > '@PID@'
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"@SESSION@"}'
@@ -62,10 +69,17 @@ fn stand_in(folder: &Path, body: &str) -> PathBuf {
 /// The body of a stand-in that answers every line, with `tool` tool calls, an
 /// overage state of `overage` and the cost of `cost` for each turn.
 fn answering(pid: &Path, tool: bool, overage: bool, cost: f64) -> String {
+    answering_with(pid, if tool { TOOL_CALL } else { "" }, overage, cost)
+}
+
+/// The body of a stand-in that answers every line, with the lines of `tool` in
+/// place of its tool call, an overage state of `overage` and the cost of `cost`
+/// for each turn.
+fn answering_with(pid: &Path, tool: &str, overage: bool, cost: f64) -> String {
     ANSWERING
         .replace("@PID@", &pid.display().to_string())
         .replace("@SESSION@", SESSION)
-        .replace("@TOOL@", if tool { TOOL_CALL } else { "" })
+        .replace("@TOOL@", tool)
         .replace("@OVERAGE@", if overage { "true" } else { "false" })
         .replace("@COST@", &format!("{cost}"))
 }
@@ -102,9 +116,10 @@ fn entries_of(app: &HorizonApp, local_id: &str) -> Vec<Entry> {
         .unwrap_or_default()
 }
 
-/// The second line of the header of the conversation of `local_id`.
-fn state_of(app: &HorizonApp, local_id: &str) -> Option<&'static str> {
-    app.orchestrator_dock.session(local_id).map(Session::state_line)
+/// The state of the conversation of `local_id`, which the chip of the header
+/// names.
+fn state_of(app: &HorizonApp, local_id: &str) -> Option<Phase> {
+    app.orchestrator_dock.session(local_id).map(Session::phase)
 }
 
 /// Clicks the field of the dock, which gives it the keyboard.
@@ -234,7 +249,7 @@ fn enter_sends_the_draft_and_shift_enter_makes_a_new_line() {
     );
     assert_eq!(
         state_of(window.app(), "chat"),
-        Some(Phase::Starting.line(false)),
+        Some(Phase::Starting),
         "the start of the bridge waits on the worker"
     );
 
@@ -247,7 +262,7 @@ fn enter_sends_the_draft_and_shift_enter_makes_a_new_line() {
                 .session("chat")
                 .is_some_and(|session| session.snapshot().busy)
     });
-    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Running.line(false)));
+    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Running));
     let _ = pid;
 }
 
@@ -320,12 +335,67 @@ fn the_bubble_of_the_person_lies_at_the_right_and_the_text_of_the_agent_at_the_l
         person.rect,
         agent.rect
     );
-    let summary = drawn_text(&drawn, "stand-in");
+    let summary = drawn_text(&drawn, "echo stand-in");
     assert!(
         summary.rect.min.x > tool.rect.min.x,
         "the summary {:?} follows the name {:?}",
         summary.rect,
         tool.rect
+    );
+    assert!(
+        !drawn.iter().any(|text| text.text == "stand-in"),
+        "a tool that is done draws no line of its result"
+    );
+}
+
+#[test]
+fn a_failed_tool_keeps_its_command_and_draws_the_first_line_of_its_result() {
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let pid = folder.path().join("pid");
+    let program = stand_in(folder.path(), &answering_with(&pid, FAILING_TOOL_CALL, false, 0.01));
+    let mut window = window_of(&program);
+
+    send(&mut window, "use a tool please");
+    window.wait_for("the failed tool call", |app| {
+        entries_of(app, "chat")
+            .iter()
+            .any(|entry| matches!(entry, Entry::Tool { state, .. } if *state == ToolState::Failed))
+    });
+
+    let entries = entries_of(window.app(), "chat");
+    let Some(Entry::Tool {
+        summary, result, state, ..
+    }) = entries.iter().find(|entry| matches!(entry, Entry::Tool { .. }))
+    else {
+        panic!("the conversation holds the tool call: {entries:?}");
+    };
+    assert_eq!(*state, ToolState::Failed);
+    assert_eq!(summary, "exit 3", "the row keeps the command that it was asked to run");
+    assert_eq!(
+        result.as_deref(),
+        Some("the command failed"),
+        "the row holds the first line of the result"
+    );
+
+    let drawn = drawn(&mut window);
+    let command = drawn_text(&drawn, "exit 3");
+    let line = drawn_text(&drawn, "the command failed");
+    assert!(
+        line.rect.min.y > command.rect.max.y,
+        "the result {:?} stands under the command {:?}",
+        line.rect,
+        command.rect
+    );
+    assert!(
+        line.rect.min.x >= command.rect.min.x - 0.5,
+        "the result {:?} stands under the summary {:?}",
+        line.rect,
+        command.rect
+    );
+    assert_eq!(line.color, Some(crate::theme::PALETTE_RED()));
+    assert!(
+        !drawn.iter().any(|text| text.text == "second line"),
+        "the row draws one line of the result"
     );
 }
 
@@ -354,7 +424,7 @@ fn a_program_that_does_not_start_leaves_a_notice_and_the_next_send_tries_again()
         notice.len() > "Claude Code did not start: ".len(),
         "the notice names the error of the system: {notice}"
     );
-    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Ended.line(false)));
+    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Ended));
 
     // The same path is a program now, so the next send starts a bridge.
     let pid = folder.path().join("pid");
@@ -365,7 +435,7 @@ fn a_program_that_does_not_start_leaves_a_notice_and_the_next_send_tries_again()
             .iter()
             .any(|entry| matches!(entry, Entry::Agent { .. }))
     });
-    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Running.line(false)));
+    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Running));
 }
 
 #[test]
@@ -402,7 +472,7 @@ fn the_frame_returns_at_once_while_the_start_of_the_child_is_held() {
     );
     assert_eq!(
         state_of(window.app(), "chat"),
-        Some(Phase::Starting.line(false)),
+        Some(Phase::Starting),
         "the start waits on the worker and the message waits with it"
     );
     assert!(
@@ -430,7 +500,9 @@ fn the_stop_control_ends_a_turn_and_leaves_no_process() {
     send(&mut window, "a turn that never ends");
     let child = child_of(&pid);
     window.wait_for("the working state of the conversation", |app| {
-        state_of(app, "chat") == Some(Phase::Running.line(true))
+        app.orchestrator_dock
+            .session("chat")
+            .is_some_and(|session| session.phase() == Phase::Running && session.busy())
     });
 
     press_control(&mut window);
@@ -439,7 +511,7 @@ fn the_stop_control_ends_a_turn_and_leaves_no_process() {
             .iter()
             .any(|entry| matches!(entry, Entry::Notice { text } if text == STOPPED_NOTICE))
     });
-    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Stopped.line(false)));
+    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Stopped));
     assert!(
         !window
             .app()
@@ -450,6 +522,70 @@ fn the_stop_control_ends_a_turn_and_leaves_no_process() {
     );
     #[cfg(target_os = "linux")]
     wait_until_no_process("the stop of the program", child);
+    let _ = child;
+}
+
+#[test]
+fn a_held_stop_never_holds_a_job_of_the_browser_worker() {
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let pid = folder.path().join("pid");
+    let program = stand_in(folder.path(), &silent(&pid));
+    let mut window = window_of(&program);
+
+    send(&mut window, "a turn that never ends");
+    let child = child_of(&pid);
+    window.wait_for("the working state of the conversation", |app| {
+        app.orchestrator_dock
+            .session("chat")
+            .is_some_and(|session| session.phase() == Phase::Running && session.busy())
+    });
+
+    // The worker of the dock holds the stop until the test releases it.
+    let (release, released) = mpsc::channel::<()>();
+    let (held, holding) = mpsc::channel::<()>();
+    window.app().orchestrator_dock.worker.write(move || {
+        let _ = held.send(());
+        let _ = released.recv();
+    });
+    holding
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the worker of the dock holds the stop");
+    let releasing = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = release.send(());
+    });
+
+    // The frame that asks for the stop returns at once, and so does a job of the
+    // browser worker: the stop waits on a worker of its own.
+    let started = Instant::now();
+    press_control(&mut window);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the frame of the stop took {:?} while the worker of the dock held it",
+        started.elapsed()
+    );
+    let (done, ran) = mpsc::channel::<()>();
+    window.app().browser_create_host.io.write(move || {
+        let _ = done.send(());
+    });
+    let frame_started = Instant::now();
+    let _ = window.frame(Vec::new());
+    assert!(
+        frame_started.elapsed() < Duration::from_secs(2),
+        "the frame took {:?} while the stop waited",
+        frame_started.elapsed()
+    );
+    ran.recv_timeout(Duration::from_secs(5))
+        .expect("a job of the browser worker runs while the stop waits");
+
+    window.wait_for("the stopped conversation", |app| {
+        entries_of(app, "chat")
+            .iter()
+            .any(|entry| matches!(entry, Entry::Notice { text } if text == STOPPED_NOTICE))
+    });
+    releasing.join().expect("the thread that releases the worker");
+    #[cfg(target_os = "linux")]
+    wait_until_no_process("the stop after the held job", child);
     let _ = child;
 }
 
@@ -567,7 +703,7 @@ fn a_conversation_that_is_forgotten_stops_its_program_and_drops_its_entries() {
 }
 
 #[test]
-fn the_cost_of_the_turns_stands_at_the_right_edge_of_the_header() {
+fn the_cost_of_the_turns_stands_left_of_the_chip_of_the_header() {
     let folder = tempfile::tempdir().expect("a folder of the test");
     let pid = folder.path().join("pid");
     let program = stand_in(folder.path(), &answering(&pid, false, false, 0.01));
@@ -596,6 +732,7 @@ fn the_cost_of_the_turns_stands_at_the_right_edge_of_the_header() {
         .expect("the dock of a wide window");
     let drawn = drawn(&mut window);
     let cost = drawn_text(&drawn, "0.02 USD");
+    let chip = drawn_text(&drawn, "ready");
     assert!(
         dock.contains_rect(cost.rect),
         "the cost {:?} stands in the dock {dock:?}",
@@ -605,6 +742,21 @@ fn the_cost_of_the_turns_stands_at_the_right_edge_of_the_header() {
         cost.rect.max.x > dock.center().x,
         "the cost {:?} stands at the right edge of the dock {dock:?}",
         cost.rect
+    );
+    // The chip stands at the right edge with the cost 10 points left of it, on
+    // the same centre line, and the second line drops the state word.
+    assert!(
+        cost.rect.max.x <= chip.rect.min.x - 20.0,
+        "the cost {:?} stands left of the chip {:?}",
+        cost.rect,
+        chip.rect
+    );
+    assert!((cost.rect.center().y - chip.rect.center().y).abs() <= 0.5);
+    assert!(chip.rect.max.x <= dock.max.x - 15.0);
+    let line = drawn_text(&drawn, crate::app::orchestrator_dock::header::PROGRAM_LINE);
+    assert!(
+        line.rect.max.x < cost.rect.min.x,
+        "the second line ends before the cost"
     );
 }
 

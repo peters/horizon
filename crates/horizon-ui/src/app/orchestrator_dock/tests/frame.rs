@@ -7,8 +7,7 @@ use horizon_core::{RuntimeState, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::composer::{FIELD_HINT, FIELD_ID};
-use crate::app::orchestrator_dock::header::NO_WORKSPACE_LINE;
-use crate::app::orchestrator_dock::session::Phase;
+use crate::app::orchestrator_dock::header::{NO_WORKSPACE_LINE, PROGRAM_LINE};
 use crate::app::orchestrator_dock::{LastFrame, OrchestratorDock};
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
@@ -34,6 +33,7 @@ pub(super) struct Window {
 pub(super) struct Drawn {
     pub(super) text: String,
     pub(super) rect: Rect,
+    pub(super) color: Option<egui::Color32>,
 }
 
 impl Window {
@@ -138,6 +138,7 @@ pub(super) fn texts(output: &egui::FullOutput) -> Vec<Drawn> {
             egui::Shape::Text(text) => out.push(Drawn {
                 text: text.galley.text().to_owned(),
                 rect: Rect::from_min_size(text.pos, text.galley.size()),
+                color: text.galley.job.sections.first().map(|section| section.format.color),
             }),
             egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, out)),
             _ => {}
@@ -157,6 +158,33 @@ fn button(pos: Pos2, pressed: bool) -> Event {
         pressed,
         modifiers: Modifiers::NONE,
     }
+}
+
+/// The rectangle shapes of `output` at `rect`: the fill of the control and, when
+/// it has one, its outline.
+fn control_shapes(output: &egui::FullOutput, rect: Rect) -> Vec<egui::epaint::RectShape> {
+    fn walk(shape: &egui::Shape, rect: Rect, out: &mut Vec<egui::epaint::RectShape>) {
+        match shape {
+            egui::Shape::Rect(shape) if (shape.rect.min - rect.min).length() <= 0.5 => out.push(shape.clone()),
+            egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, rect, out)),
+            _ => (),
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, rect, &mut found);
+    }
+    assert!(!found.is_empty(), "the control draws its rectangle {rect:?}");
+    found
+}
+
+/// The colour of the glyph `text` inside `rect` of `output`.
+fn glyph_color(output: &egui::FullOutput, rect: Rect, text: &str) -> egui::Color32 {
+    texts(output)
+        .into_iter()
+        .find(|drawn| drawn.text == text && rect.contains_rect(drawn.rect))
+        .and_then(|drawn| drawn.color)
+        .unwrap_or_else(|| panic!("the control draws the glyph {text:?} in {rect:?}"))
 }
 
 /// The rectangle of the dock of the last frame of `window`.
@@ -256,11 +284,10 @@ fn the_canvas_ends_at_the_dock_and_the_minimap_stays_on_the_canvas() {
         .find(|text| text.text == "dock-work" && dock.contains_rect(text.rect))
         .unwrap_or_else(|| panic!("the header draws the workspace name in the dock {dock:?}: {drawn:?}"));
     assert!(dock.contains_rect(name.rect));
-    let state_line = Phase::NotConnected.line(false);
     let state = drawn
         .iter()
-        .find(|text| text.text == state_line)
-        .unwrap_or_else(|| panic!("the header draws {state_line:?}: {drawn:?}"));
+        .find(|text| text.text == PROGRAM_LINE)
+        .unwrap_or_else(|| panic!("the header draws {PROGRAM_LINE:?}: {drawn:?}"));
     assert!(
         dock.contains_rect(state.rect),
         "the state line {:?} of the dock {dock:?}",
@@ -291,12 +318,7 @@ fn the_canvas_and_the_minimap_keep_their_numbers_with_the_dock_off() {
     );
 
     let drawn = texts(&output);
-    for text in [
-        Phase::NotConnected.line(false),
-        FIELD_HINT,
-        "Say what you want done.",
-        NO_WORKSPACE_LINE,
-    ] {
+    for text in [PROGRAM_LINE, FIELD_HINT, "Say what you want done.", NO_WORKSPACE_LINE] {
         assert!(
             !drawn.iter().any(|drawn| drawn.text == text),
             "a dock that is off draws no {text:?}"
@@ -322,11 +344,7 @@ fn the_dock_of_a_narrow_window_leaves_the_canvas_whole() {
         canvas,
         Rect::from_min_max(Pos2::new(210.0, 46.0), Pos2::new(800.0, 600.0))
     );
-    assert!(
-        !texts(&output)
-            .iter()
-            .any(|drawn| drawn.text == Phase::NotConnected.line(false))
-    );
+    assert!(!texts(&output).iter().any(|drawn| drawn.text == PROGRAM_LINE));
 }
 
 #[test]
@@ -485,29 +503,227 @@ fn the_chips_stand_under_the_field_inside_the_dock() {
 }
 
 #[test]
-fn the_send_control_stands_on_the_row_of_the_field_at_its_right() {
+fn the_send_control_stands_inside_the_field_at_its_right_end() {
     let (window, output) = frame_with_draft("");
     let dock = dock_of(&window);
     let parts = parts_of(&window);
     let drawn = texts(&output);
 
     assert!(dock.contains_rect(parts.send), "the send control {:?}", parts.send);
+    // The control stands inside the field, 7 points from its right inner edge.
     assert!(
-        parts.send.min.x >= parts.field.max.x,
-        "the send control {:?} stands at the right of the field {:?}",
+        parts.field.contains_rect(parts.send),
+        "the send control {:?} stands inside the field {:?}",
         parts.send,
         parts.field
     );
-    // The control shares the row of a field of one row: its vertical centre is the
-    // centre of that field, and it stands inside the span of the field.
-    assert!(parts.send.min.y >= parts.field.min.y && parts.send.max.y <= parts.field.max.y);
+    assert!((parts.field.max.x - parts.send.max.x - 7.0).abs() <= 0.5);
+    // The control is 34 by 34 and shares the centre line of a field of one row.
+    assert!((parts.send.width() - 34.0).abs() <= 0.5 && (parts.send.height() - 34.0).abs() <= 0.5);
     assert!((parts.send.center().y - parts.field.center().y).abs() <= 0.5);
+    assert!(
+        (parts.field.height() - 48.0).abs() <= 0.5,
+        "a field of one row is 48 high"
+    );
+    // The field takes the full width of the composer, which keeps 16 points of
+    // room at each side of its content.
+    assert!((parts.field.min.x - parts.composer.min.x - 16.0).abs() <= 0.5);
+    assert!((parts.composer.max.x - parts.field.max.x - 16.0).abs() <= 0.5);
+    // The panel of the dock keeps its own line inside that room.
+    assert!(parts.field.min.x - dock.min.x >= 16.0 && parts.field.min.x - dock.min.x <= 19.0);
+    assert!(dock.max.x - parts.field.max.x >= 16.0 && dock.max.x - parts.field.max.x <= 19.0);
     let glyph = drawn
         .iter()
         .find(|text| text.text == "\u{2191}" && parts.send.contains_rect(text.rect))
         .cloned()
         .unwrap_or_else(|| panic!("the send control {:?} draws its glyph: {drawn:?}", parts.send));
     assert!(parts.send.contains_rect(glyph.rect));
+    // A taller draft keeps the control at the bottom right of the field.
+    let (tall_window, _) = frame_with_draft("one\ntwo\nthree");
+    let tall = parts_of(&tall_window);
+    assert!(tall.send.min.y > tall.field.min.y);
+    assert!((tall.field.max.y - tall.send.max.y - 7.0).abs() <= 0.5);
+}
+
+#[test]
+fn the_control_shows_what_a_press_will_do() {
+    // (a) A draft that can go out: the accent fill and the arrow in the
+    // background colour. A pointer on it blends it toward the foreground.
+    let (mut window, output) = frame_with_draft("hello");
+    let parts = parts_of(&window);
+    let shapes = control_shapes(&output, parts.send);
+    assert_eq!(shapes.len(), 1, "the accent form draws its fill and no outline");
+    assert_eq!(shapes[0].fill, crate::theme::ACCENT());
+    assert_eq!(glyph_color(&output, parts.send, "\u{2191}"), crate::theme::BG());
+    let _ = window.frame(vec![Event::PointerMoved(parts.send.center())]);
+    let hovered = control_shapes(&window.frame(Vec::new()), parts.send);
+    assert_eq!(
+        hovered[0].fill,
+        crate::theme::blend(crate::theme::ACCENT(), crate::theme::FG(), 0.12)
+    );
+
+    // (b) An empty draft, and a window with no workspace: the quiet form.
+    let mut quiet = vec![frame_with_draft("").0, Window::new(WIDE, Vec::new(), true)];
+    for mut window in quiet.drain(..) {
+        let output = window.frame(Vec::new());
+        let parts = parts_of(&window);
+        let shapes = control_shapes(&output, parts.send);
+        assert_eq!(shapes[0].fill, crate::theme::PANEL_BG_ALT());
+        assert_eq!(shapes[1].stroke.color, crate::theme::BORDER_SUBTLE());
+        assert_eq!(
+            glyph_color(&output, parts.send, "\u{2191}"),
+            crate::theme::FG_DIM(),
+            "a draft that cannot go out keeps the dim arrow"
+        );
+    }
+
+    // (c) A busy conversation: the stop form, a filled square in the foreground.
+    let (mut window, _) = frame_with_draft("");
+    window
+        .app()
+        .orchestrator_dock
+        .session_mut("dock-work")
+        .say("a turn that runs");
+    let output = window.frame(Vec::new());
+    let parts = parts_of(&window);
+    let shapes = control_shapes(&output, parts.send);
+    assert_eq!(shapes[0].fill, crate::theme::PANEL_BG_ALT());
+    assert_eq!(shapes[1].stroke.color, crate::theme::BORDER_STRONG());
+    assert_eq!(
+        glyph_color(&output, parts.send, "\u{25a0}"),
+        crate::theme::FG(),
+        "the stop form draws the filled square in the foreground"
+    );
+}
+
+#[test]
+fn the_two_example_rows_stand_between_the_sentences_and_the_composer() {
+    let (window, output) = frame_with_draft("");
+    let dock = dock_of(&window);
+    let parts = parts_of(&window);
+    let drawn = texts(&output);
+
+    let title = drawn_text(&drawn, "Say what you want done.");
+    let body = drawn
+        .iter()
+        .find(|text| text.text.starts_with("The orchestrator reads the repository"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the frame draws the sentences of the empty state: {drawn:?}"));
+    let first = drawn_text(&drawn, "Fix #1987 on a rented machine");
+    let second = drawn_text(&drawn, "Why is the cold start slow? Measure it first.");
+
+    // The title, the sentences and the two rows follow each other, 8 and 12
+    // points apart, inside the room between the header and the composer.
+    assert!(title.rect.max.y <= body.rect.min.y);
+    assert!(body.rect.min.y - title.rect.max.y <= 9.0);
+    assert!(body.rect.max.y < first.rect.min.y);
+    assert!(parts.body.contains_rect(first.rect) && parts.body.contains_rect(second.rect));
+    assert!(first.rect.max.y < second.rect.min.y);
+    assert!(second.rect.max.y < parts.composer.min.y);
+    assert!(dock.contains_rect(second.rect));
+    // Both rows begin at the left edge of the empty state block, and they take
+    // its full width.
+    assert!((first.rect.min.x - second.rect.min.x).abs() <= 0.5);
+    assert!(first.rect.min.x - dock.min.x >= 27.0);
+}
+
+#[test]
+fn a_click_on_an_example_fills_an_empty_draft_and_sends_nothing() {
+    let mut window = Window::new(WIDE, vec![editor_workspace_state("dock-work", [40.0, 40.0])], true);
+    window.focus_workspace("dock-work");
+    let output = window.frame(Vec::new());
+    let example = drawn_text(&texts(&output), "Fix #1987 on a rented machine");
+    let at = example.rect.center();
+    let _ = window.frame(vec![Event::PointerMoved(at), button(at, true)]);
+    let _ = window.frame(vec![button(at, false)]);
+
+    assert_eq!(
+        window.app().orchestrator_dock.draft("dock-work"),
+        "Fix #1987 on a rented machine",
+        "the click puts the text of the example into the empty draft"
+    );
+    assert!(
+        window
+            .ctx()
+            .memory(|memory| memory.has_focus(egui::Id::unique(FIELD_ID))),
+        "the field takes the keyboard after the click"
+    );
+    assert!(
+        window.app().orchestrator_dock.session("dock-work").is_none(),
+        "the click sends nothing"
+    );
+}
+
+#[test]
+fn a_click_on_an_example_keeps_the_draft_of_the_person() {
+    let (mut window, output) = frame_with_draft("mine");
+    let example = drawn_text(&texts(&output), "Why is the cold start slow? Measure it first.");
+    let at = example.rect.center();
+    let _ = window.frame(vec![Event::PointerMoved(at), button(at, true)]);
+    let _ = window.frame(vec![button(at, false)]);
+
+    assert_eq!(
+        window.app().orchestrator_dock.draft("dock-work"),
+        "mine",
+        "a draft that holds text stays as the person wrote it"
+    );
+    assert!(
+        !window
+            .ctx()
+            .memory(|memory| memory.has_focus(egui::Id::unique(FIELD_ID)))
+    );
+}
+
+#[test]
+fn the_header_names_the_state_in_a_chip_at_its_right_edge() {
+    let (window, output) = frame_with_draft("");
+    let dock = dock_of(&window);
+    let drawn = texts(&output);
+
+    let chip = drawn_text(&drawn, "not connected");
+    let line = drawn_text(&drawn, PROGRAM_LINE);
+    assert!(
+        dock.contains_rect(chip.rect),
+        "the chip {:?} of the dock {dock:?}",
+        chip.rect
+    );
+    assert!(
+        chip.rect.max.x > dock.max.x - 40.0,
+        "the chip {:?} stands at the right edge of the dock {dock:?}",
+        chip.rect
+    );
+    assert!(
+        !drawn.iter().any(|text| text.text.contains("\u{b7} not connected")),
+        "the state word left the second line"
+    );
+    assert!(!line.text.contains("not connected"));
+    assert!(line.rect.max.x < chip.rect.min.x);
+}
+
+#[test]
+fn the_chip_stays_in_a_dock_of_the_least_width() {
+    let mut window = Window::new(
+        [1200.0, 900.0],
+        vec![editor_workspace_state(
+            "a name that is far too long for the header",
+            [40.0, 40.0],
+        )],
+        true,
+    );
+    window.focus_workspace("a name that is far too long for the header");
+    let output = window.frame(Vec::new());
+    let dock = dock_of(&window);
+    assert!((dock.width() - 360.0).abs() <= 0.5, "the least dock is 360 wide");
+    let drawn = texts(&output);
+    let chip = drawn_text(&drawn, "not connected");
+    let name = drawn
+        .iter()
+        .find(|text| dock.contains_rect(text.rect) && text.text.starts_with("a name that is"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the header draws the name: {drawn:?}"));
+    assert!(name.rect.max.x <= chip.rect.min.x - 7.0);
+    assert!(chip.rect.max.x <= dock.max.x - 15.0);
+    assert!(dock.contains_rect(chip.rect));
 }
 
 #[test]

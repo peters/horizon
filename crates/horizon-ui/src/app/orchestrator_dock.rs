@@ -9,10 +9,11 @@
 //! `try_iter`. A conversation that the dock does not show keeps running.
 //!
 //! The start of a bridge starts a process and a stop can wait, so neither runs on
-//! the thread of a frame: both go to the coordination worker of
-//! [`super::browser_host_io`], which the exit already waits for. The messages of
-//! the person wait in [`session::Session`] until the bridge of their workspace is
-//! up.
+//! the thread of a frame: both go to the worker of [`worker`], a thread of the
+//! dock named `orchestrator-dock`. That worker is separate from the coordination
+//! worker of [`super::browser_host_io`], so a stop that waits never takes the
+//! room of a browser job. The messages of the person wait in
+//! [`session::Session`] until the bridge of their workspace is up.
 //!
 //! The dock keeps the right edge of the window, and an open Settings panel stands
 //! to its left, so the canvas ends at the left edge of the leftmost of the two.
@@ -21,6 +22,7 @@
 //! `minimap_visible` are.
 
 mod composer;
+mod empty;
 mod header;
 mod layout;
 mod list;
@@ -28,21 +30,17 @@ mod session;
 #[cfg(test)]
 mod tests;
 mod text;
+mod window;
+mod worker;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
-use egui::{Rect, Stroke, Ui, pos2};
-use horizon_core::agent_bridge::{Bridge, BridgeError};
+use egui::Rect;
+use horizon_core::agent_bridge::{Bridge, BridgeError, ProgramSpec};
 
-use crate::app::settings::settings_panel_default_width;
-use crate::app::util::viewport_local_rect;
-use crate::app::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
-use crate::theme;
-use crate::typeface::Weight;
-
-use self::layout::{dock_fits, dock_rect, dock_width};
 use self::session::{Session, Start};
 
 /// The environment switch of this part. `1` turns the dock on; a setting replaces
@@ -56,16 +54,9 @@ pub(in crate::app) const PROGRAM_SWITCH: &str = "HORIZON_ORCHESTRATOR_PROGRAM";
 const PROGRAM: &str = "claude";
 /// The panel id of the dock, which egui remembers the place of.
 const DOCK_PANEL_ID: &str = "orchestrator_dock";
-/// The empty state of the dock: the least horizontal padding, the title and the
-/// two sentences under it.
-const EMPTY_PADDING_X: f32 = 28.0;
-const EMPTY_TITLE: &str = "Say what you want done.";
-const EMPTY_TITLE_SIZE: f32 = 15.0;
-const EMPTY_BODY: &str = "The orchestrator reads the repository, makes a plan and shows it as cards. \
-                          It asks before a machine is rented.";
-const EMPTY_BODY_SIZE: f32 = 13.5;
-const EMPTY_BODY_LINE_HEIGHT: f32 = 1.55;
-const EMPTY_GAP: f32 = 8.0;
+/// The room that the exit waits for the worker of the dock: the bound of a stop,
+/// as the exit waits for the coordination worker.
+const WORKER_FLUSH: Duration = Duration::from_secs(2);
 
 /// The state of the dock of this run.
 pub(in crate::app) struct OrchestratorDock {
@@ -81,6 +72,9 @@ pub(in crate::app) struct OrchestratorDock {
     sessions: HashMap<String, Session>,
     /// The draft of each workspace, by the same `local_id`.
     drafts: HashMap<String, String>,
+    /// The worker that starts and stops the bridges of the conversations, in the
+    /// order that the frames ask for them.
+    worker: worker::Worker,
     /// The rectangles that the dock worked out in the last frame of a test, which
     /// the tests of the layout read.
     #[cfg(test)]
@@ -122,6 +116,7 @@ impl OrchestratorDock {
             program,
             sessions: HashMap::new(),
             drafts: HashMap::new(),
+            worker: worker::Worker::default(),
             #[cfg(test)]
             last_frame: None,
         }
@@ -226,6 +221,60 @@ impl OrchestratorDock {
         self.sessions.remove(local_id)
     }
 
+    /// Starts the bridge of the conversation of `local_id` on the worker of the
+    /// dock, and keeps the bridge of the answer to `generation`. A start opens a
+    /// process, so a frame never waits for it.
+    fn start_bridge(
+        &mut self,
+        spec: ProgramSpec,
+        local_id: String,
+        generation: u64,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.worker.then(
+            move || Bridge::start(spec, session::codec(), wake),
+            move |dock, outcome| {
+                if let Some(bridge) = dock.adopt(&local_id, generation, outcome) {
+                    // The answer belongs to a start that the person replaced: its
+                    // bridge serves nobody and is stopped here.
+                    dock.worker.write(move || bridge.stop());
+                }
+            },
+        );
+    }
+
+    /// Stops `bridge` on the worker of the dock: a stop closes the input, waits
+    /// for the program and ends it, so a frame never runs it.
+    fn stop_bridge(&mut self, bridge: Bridge) {
+        self.worker.write(move || bridge.stop());
+    }
+
+    /// Applies, in order, the outcomes of the worker of the dock.
+    fn poll_worker(&mut self) {
+        for apply in self.worker.take_finished() {
+            apply(self);
+        }
+    }
+
+    /// Closes the worker of the dock for an exit that waits for it within its own
+    /// bound, so no start or stop outlives the app.
+    pub(in crate::app) fn flush_worker(&mut self) {
+        self.worker.flush(WORKER_FLUSH);
+    }
+
+    /// Keeps the text of the example that the person clicked in the draft of
+    /// `local_id`, when that draft holds no text yet. The answer says whether the
+    /// draft took it: then the field takes the keyboard. The click sends nothing.
+    fn pick_example(&mut self, local_id: &str, text: &str) -> bool {
+        let draft = self.drafts.entry(local_id.to_owned()).or_default();
+        if !draft.trim().is_empty() {
+            return false;
+        }
+        draft.clear();
+        draft.push_str(text);
+        true
+    }
+
     /// Keeps the rectangles of this frame for the tests of the layout.
     #[cfg(test)]
     fn set_last_frame(&mut self, parts: layout::Parts, composer: composer::Parts) {
@@ -286,218 +335,4 @@ fn program_from_environment(value: Option<&str>) -> PathBuf {
     value
         .filter(|value| !value.is_empty())
         .map_or_else(|| PathBuf::from(PROGRAM), PathBuf::from)
-}
-
-/// The wake of the bridge of a conversation: the next frame of this window.
-fn repaint_wake(ctx: &egui::Context) -> Arc<dyn Fn() + Send + Sync> {
-    let ctx = ctx.clone();
-    Arc::new(move || ctx.request_repaint())
-}
-
-/// The directory that the orchestrator of a workspace runs in: the directory of
-/// that workspace, or the home of the person when the workspace names none.
-fn program_directory(board: &horizon_core::Board, local_id: &str) -> PathBuf {
-    board
-        .workspace_id_by_local_id(local_id)
-        .and_then(|id| board.workspace(id))
-        .and_then(|workspace| workspace.cwd.clone())
-        .unwrap_or_else(|| std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from))
-}
-
-impl HorizonApp {
-    /// The rectangle that the dock takes in this frame, before it draws: the right
-    /// edge of the window, from under the toolbar to its bottom. The answer is
-    /// `None` while the switch is off, a panel is fullscreen, or the canvas would
-    /// keep less than its least width beside the dock.
-    fn orchestrator_dock_rect(&self, ui: &Ui) -> Option<Rect> {
-        if !self.orchestrator_dock.visible() || self.fullscreen_panel.is_some() {
-            return None;
-        }
-        let viewport = viewport_local_rect(ui.ctx());
-        let available = ui.available_rect_before_wrap();
-        let width = dock_width(viewport.width()).min(available.width());
-        let sidebar_width = if self.sidebar_visible { SIDEBAR_WIDTH } else { 0.0 };
-        let settings_width = self
-            .settings
-            .as_ref()
-            .map_or(0.0, |_| settings_panel_default_width(viewport.width()));
-        dock_fits(viewport.width(), sidebar_width, settings_width, width)
-            .then(|| dock_rect(Rect::from_min_max(viewport.min, available.max), width))
-    }
-
-    /// Takes the rectangle of the dock for this frame and draws its frame. The
-    /// rectangle is taken before any panel draws, so the canvas and the minimap of
-    /// this frame read it.
-    pub(in crate::app) fn render_orchestrator_dock(&mut self, ui: &mut Ui) {
-        let dock_rect = self.orchestrator_dock_rect(ui);
-        self.orchestrator_dock.set_frame_rect(dock_rect);
-        let Some(rect) = dock_rect else {
-            return;
-        };
-        let board = &self.board;
-        let dock = &mut self.orchestrator_dock;
-        let mut asked = composer::Asked::Nothing;
-        egui::Panel::right(DOCK_PANEL_ID)
-            .exact_size(rect.width())
-            .frame(
-                egui::Frame::default()
-                    .fill(theme::BG_ELEVATED())
-                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
-            )
-            .show(ui, |ui| {
-                ui.shrink_clip_rect(ui.max_rect());
-                // The toolbar of the window draws over the top of every panel, so
-                // the content of the dock starts under it.
-                let content = Rect::from_min_max(
-                    pos2(ui.max_rect().min.x, ui.max_rect().min.y + TOOLBAR_HEIGHT),
-                    ui.max_rect().max,
-                );
-                let workspace = board.active_workspace.and_then(|id| board.workspace(id));
-                let local_id = workspace.map(|workspace| workspace.local_id.as_str());
-                let session = local_id.and_then(|local_id| dock.sessions.get(local_id));
-                let snapshot = session.map(Session::snapshot);
-                // A window without an active workspace has no second line.
-                let state = workspace.map(|_| header::State::of(session));
-                let busy = snapshot.as_ref().is_some_and(|snapshot| snapshot.busy);
-                // The header and the composer are bottom and top edges of the dock,
-                // so they are worked out first and the list takes the room between
-                // them. A part that drew top down would move the parts under it.
-                let header_height = header::height(ui, content.width(), workspace, state);
-                let draft = local_id.map_or("", |local_id| dock.draft(local_id));
-                let composer = composer::parts(ui, content, draft);
-                let parts = layout::parts(content, header_height, composer.rect.height());
-                header::render(ui, parts.header, workspace, state);
-                let mut empty = String::new();
-                let draft = match local_id {
-                    Some(local_id) => dock.drafts.entry(local_id.to_owned()).or_default(),
-                    None => &mut empty,
-                };
-                asked = composer::render(ui, &composer, draft, local_id.is_some(), busy);
-                match snapshot {
-                    Some(snapshot) if !snapshot.entries.is_empty() => list::render(
-                        ui,
-                        parts.body,
-                        &snapshot.entries,
-                        list::waits_for_text(&snapshot.entries, snapshot.busy),
-                    ),
-                    _ => empty_state(ui, parts.body),
-                }
-                #[cfg(test)]
-                dock.set_last_frame(parts, composer);
-            });
-        let Some(local_id) = self
-            .board
-            .active_workspace
-            .and_then(|id| self.board.workspace(id))
-            .map(|workspace| workspace.local_id.clone())
-        else {
-            return;
-        };
-        match asked {
-            composer::Asked::Send => self.send_orchestrator_message(ui.ctx(), &local_id),
-            composer::Asked::Stop => self.stop_orchestrator_conversation(&local_id),
-            composer::Asked::Nothing => {}
-        }
-    }
-
-    /// Reads every bridge of the dock, and applies its events to the conversation
-    /// of its workspace. A frame calls it, and so does the pass of a window that
-    /// draws no frame: a conversation that nobody shows keeps its events. A
-    /// second pass of one frame reads no event twice, because a read takes them
-    /// from the channel.
-    pub(in crate::app) fn poll_orchestrator_dock(&mut self) {
-        for session in self.orchestrator_dock.sessions.values_mut() {
-            session.poll();
-        }
-    }
-
-    /// Sends the draft of the workspace that `local_id` names, and starts the
-    /// bridge of that conversation first when it has none.
-    fn send_orchestrator_message(&mut self, ctx: &egui::Context, local_id: &str) {
-        let Some(text) = self.orchestrator_dock.take_draft(local_id) else {
-            return;
-        };
-        let directory = program_directory(&self.board, local_id);
-        let program = self.orchestrator_dock.program.clone();
-        let needs_bridge = {
-            let session = self.orchestrator_dock.session_mut(local_id);
-            let needs_bridge = session.say(&text);
-            needs_bridge && !session.is_starting()
-        };
-        if !needs_bridge {
-            return;
-        }
-        let Some(request) = self.orchestrator_dock.begin_start(local_id) else {
-            return;
-        };
-        let spec = session::program_spec(&program, &directory, request.session.clone(), local_id);
-        let wake = repaint_wake(ctx);
-        let generation = request.generation;
-        let local_id = local_id.to_owned();
-        // A start is a process, so it never runs on the thread of this frame.
-        self.browser_create_host.io.then(
-            move || Bridge::start(spec, session::codec(), wake),
-            move |app: &mut HorizonApp, outcome| {
-                if let Some(bridge) = app.orchestrator_dock.adopt(&local_id, generation, outcome) {
-                    app.browser_create_host.io.write(move || bridge.stop());
-                }
-            },
-        );
-    }
-
-    /// Stops the bridge of the workspace that `local_id` names, on the
-    /// coordination worker, and leaves the notice of the person.
-    pub(in crate::app) fn stop_orchestrator_conversation(&mut self, local_id: &str) {
-        let Some(bridge) = self.orchestrator_dock.stop(local_id) else {
-            return;
-        };
-        self.browser_create_host.io.write(move || bridge.stop());
-    }
-
-    /// Stops every bridge of the dock, which the exit waits for within its bound.
-    pub(in crate::app) fn stop_orchestrator_bridges(&mut self) {
-        for bridge in self.orchestrator_dock.stop_all() {
-            self.browser_create_host.io.write(move || bridge.stop());
-        }
-    }
-
-    /// Drops the conversation and the draft of a workspace that closes, and stops
-    /// the bridge of that conversation on the worker.
-    pub(in crate::app) fn forget_orchestrator_conversation(&mut self, local_id: &str) {
-        let Some(mut session) = self.orchestrator_dock.forget(local_id) else {
-            return;
-        };
-        if let Some(bridge) = session.shutdown() {
-            self.browser_create_host.io.write(move || bridge.stop());
-        }
-    }
-}
-
-/// The empty state of the dock: how the orchestrator works, centred in the `body`
-/// between the header and the composer.
-fn empty_state(ui: &Ui, body: Rect) {
-    let text_width = body.width() - 2.0 * EMPTY_PADDING_X;
-    if text_width <= 0.0 || body.height() <= 0.0 {
-        return;
-    }
-    let title = text::line(ui, EMPTY_TITLE, EMPTY_TITLE_SIZE, Weight::Bold, theme::FG(), text_width);
-    let body_text = text::paragraph(
-        ui,
-        EMPTY_BODY,
-        EMPTY_BODY_SIZE,
-        Weight::Regular,
-        theme::FG_SOFT(),
-        text_width,
-        EMPTY_BODY_LINE_HEIGHT,
-    );
-    let title_height = title.size().y;
-    let height = title_height + EMPTY_GAP + body_text.size().y;
-    let left = body.min.x + EMPTY_PADDING_X;
-    let top = body.center().y - height / 2.0;
-    if top < body.min.y || top + height > body.max.y {
-        return;
-    }
-    let painter = ui.painter();
-    painter.galley(pos2(left, top), title, theme::FG());
-    painter.galley(pos2(left, top + title_height + EMPTY_GAP), body_text, theme::FG_SOFT());
 }

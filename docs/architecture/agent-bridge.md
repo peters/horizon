@@ -76,6 +76,12 @@ else: `command` for `Bash`, `file_path` for a file tool, and the tool name for
 every other tool. Control characters become one space, and the summary is cut to
 `MAX_SUMMARY_CHARS`. The whole tool input never reaches an event.
 
+`ToolEnded.summary` is the first line of the result. The conversation keeps the
+two texts apart: `Entry::Tool.summary` stays the request of the start, such as
+the command of a `Bash` call, and `Entry::Tool.result` holds the first line of
+the result, cut like a summary. A tool that failed therefore says what it was
+asked to do and why it failed.
+
 `TurnEnded.cost_usd` is the cost of one turn. Claude Code reports
 `total_cost_usd` for the whole process, so the codec sums the `costUSD` of the
 models of `model_usage_since_last_result`.
@@ -133,11 +139,15 @@ The dock at the right edge of the root window is the one caller
   `Resume(<session id>)` when an earlier bridge of this run named a session. The
   variable `HORIZON_ORCHESTRATOR_PROGRAM` replaces the path of the program and
   keeps its arguments; the fixture and the tests use it for a stand-in.
-- **No frame starts a process.** `Bridge::start` and `Bridge::stop` run on the
-  coordination worker of `app::browser_host_io`, which the exit already waits
-  for within its bound. Each start carries the generation of its conversation, so
-  a bridge that a stop or a closed workspace made stale is stopped instead of
-  kept. The messages that waited go out on the frame that keeps the bridge.
+- **No frame starts a process.** `Bridge::start` and `Bridge::stop` run on one
+  worker of the dock, a thread named `orchestrator-dock`
+  (`app/orchestrator_dock/worker.rs`). It is separate from the coordination
+  worker of `app::browser_host_io`, because a stop can wait up to five seconds
+  and would otherwise hold a browser job. The jobs run in the order that the
+  frames ask for them, and their outcomes reach the UI on a later frame, in the
+  same order. Each start carries the generation of its conversation, so a bridge
+  that a stop or a closed workspace made stale is stopped instead of kept. The
+  messages that waited go out on the frame that keeps the bridge.
 - **A frame reads the events.** `poll_orchestrator_dock` runs in `update_ui` and
   in the pass of a window that draws no frame, and it applies every event of every
   bridge with `try_iter`. A read takes the events from the channel, so a second
@@ -149,10 +159,10 @@ The dock at the right edge of the root window is the one caller
   and `Claude Code reports that the plan limit is reached. Extra usage is in
   use.` once for each bridge. The header shows the cost of every ended turn from
   `ConversationSnapshot::cost_usd_total`.
-- **The end.** The close pass queues the stop of every bridge before the exit
-  waits for the coordination work it already asked for, and the synchronous exit
-  does the same when no frame ran. No program of a conversation stays after
-  Horizon ended.
+- **The end.** The close pass queues the stop of every bridge, and the
+  synchronous exit waits for the worker of the dock within the bound of a stop
+  before it ends. The worker ends when the app drops it or when that wait closes
+  its queue. No program of a conversation stays after Horizon ended.
 
 ## What is not built yet
 

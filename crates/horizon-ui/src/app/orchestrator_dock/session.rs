@@ -46,15 +46,16 @@ pub(super) enum Phase {
 }
 
 impl Phase {
-    /// The second line of the header: the program, and this state.
-    pub(super) fn line(self, busy: bool) -> &'static str {
+    /// The words of the chip at the right edge of the header. The line under the
+    /// name keeps the program only.
+    pub(super) fn word(self, busy: bool) -> &'static str {
         match self {
-            Self::NotConnected => "Orchestrator \u{b7} Claude Code \u{b7} not connected",
-            Self::Starting => "Orchestrator \u{b7} Claude Code \u{b7} starting",
-            Self::Running if busy => "Orchestrator \u{b7} Claude Code \u{b7} working",
-            Self::Running => "Orchestrator \u{b7} Claude Code \u{b7} ready",
-            Self::Stopped => "Orchestrator \u{b7} Claude Code \u{b7} stopped",
-            Self::Ended => "Orchestrator \u{b7} Claude Code \u{b7} ended",
+            Self::NotConnected => "not connected",
+            Self::Starting => "starting",
+            Self::Running if busy => "working",
+            Self::Running => "ready",
+            Self::Stopped => "stopped",
+            Self::Ended => "ended",
         }
     }
 }
@@ -114,9 +115,14 @@ impl Session {
         self.phase == Phase::Starting
     }
 
-    /// The second line of the header.
-    pub(super) fn state_line(&self) -> &'static str {
-        self.phase.line(self.snapshot().busy)
+    /// The state of this conversation, which the chip of the header names.
+    pub(super) fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Whether a turn of this conversation runs.
+    pub(super) fn busy(&self) -> bool {
+        self.snapshot().busy
     }
 
     /// The cost of the ended turns of this conversation, which the header shows
@@ -368,28 +374,18 @@ while IFS= read -r line; do :; done
     }
 
     #[test]
-    fn the_header_names_the_state_of_the_conversation() {
+    fn the_chip_of_the_header_names_the_state_of_the_conversation() {
+        assert_eq!(Phase::NotConnected.word(false), "not connected");
+        assert_eq!(Phase::Starting.word(false), "starting");
+        assert_eq!(Phase::Running.word(false), "ready");
+        assert_eq!(Phase::Running.word(true), "working");
+        assert_eq!(Phase::Stopped.word(false), "stopped");
+        assert_eq!(Phase::Ended.word(false), "ended");
+        // The line under the name keeps the program and drops the state word.
         assert_eq!(
-            Phase::NotConnected.line(false),
-            "Orchestrator \u{b7} Claude Code \u{b7} not connected"
+            super::super::header::PROGRAM_LINE,
+            "Orchestrator \u{b7} Claude Code on this computer"
         );
-        assert_eq!(
-            Phase::Starting.line(false),
-            "Orchestrator \u{b7} Claude Code \u{b7} starting"
-        );
-        assert_eq!(
-            Phase::Running.line(false),
-            "Orchestrator \u{b7} Claude Code \u{b7} ready"
-        );
-        assert_eq!(
-            Phase::Running.line(true),
-            "Orchestrator \u{b7} Claude Code \u{b7} working"
-        );
-        assert_eq!(
-            Phase::Stopped.line(false),
-            "Orchestrator \u{b7} Claude Code \u{b7} stopped"
-        );
-        assert_eq!(Phase::Ended.line(false), "Orchestrator \u{b7} Claude Code \u{b7} ended");
     }
 
     #[test]
@@ -421,7 +417,7 @@ while IFS= read -r line; do :; done
         assert!(text.starts_with("Claude Code did not start: "), "{text}");
         assert!(text.len() > "Claude Code did not start: ".len(), "{text}");
         assert!(!snapshot.busy, "the turn of that message ended with the failure");
-        assert_eq!(session.state_line(), "Orchestrator \u{b7} Claude Code \u{b7} ended");
+        assert_eq!(session.phase(), Phase::Ended);
         // The next message asks for one more start, and no message waits twice.
         assert!(session.say("bravo"));
         let again = session.begin_start();
@@ -442,7 +438,7 @@ while IFS= read -r line; do :; done
                 text: super::STOPPED_NOTICE.to_owned()
             })
         );
-        assert_eq!(session.state_line(), "Orchestrator \u{b7} Claude Code \u{b7} stopped");
+        assert_eq!(session.phase(), Phase::Stopped);
         let resumed = session.begin_start();
         assert_eq!(
             resumed.session,

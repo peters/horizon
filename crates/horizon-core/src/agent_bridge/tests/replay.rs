@@ -416,10 +416,16 @@ fn check_tool_call(reports: &BTreeMap<String, Report>) {
             .unwrap_or_else(|| panic!("{name} shows no agent entry"));
         assert!(agent > tool, "{name}: the answer is not after the call");
         match &entries[tool] {
-            Entry::Tool { state, summary, .. } => {
+            Entry::Tool {
+                state, summary, result, ..
+            } => {
                 assert_eq!(*state, ToolState::Done, "{name}: the Bash call did not finish");
                 assert!(
-                    summary.contains("probe-ok"),
+                    summary.contains("echo probe-ok"),
+                    "{name}: the row lost the command that it was asked to run"
+                );
+                assert!(
+                    result.as_deref().is_some_and(|line| line.contains("probe-ok")),
                     "{name}: the result of the Bash call is gone"
                 );
             }

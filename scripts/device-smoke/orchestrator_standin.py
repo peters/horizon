@@ -11,13 +11,15 @@ optional long answer, the state of the limit of the plan, and the result of the
 turn with its cost. A turn whose text holds `slow` waits two seconds before its
 answer, so a run shows the working state of the dock.
 
-The words `tool`, `long`, `slow` and `card` choose what a turn answers. A turn
-whose text holds `card` draws one card in the workspace of the conversation
-through a real `horizon --browser-mcp` child, with the identity that Horizon gave
-this program, and then keeps one `next_click` open for that card in a thread of
-its own. A press of the person answers that wait, and the thread prints the text
-of the agent and the result of that turn. The program ends when the standard
-input closes, as an agent program of a conversation does.
+The words `tool`, `fail`, `long`, `slow` and `card` choose what a turn answers: a
+tool call that succeeds, a tool call that fails with a result of two lines, a
+long answer, a wait before the answer, or a card. A turn whose text holds `card`
+draws one card in the workspace of the conversation through a real
+`horizon --browser-mcp` child, with the identity that Horizon gave this program,
+and then keeps one `next_click` open for that card in a thread of its own. A
+press of the person answers that wait, and the thread prints the text of the
+agent and the result of that turn. The program ends when the standard input
+closes, as an agent program of a conversation does.
 
 Usage, inside the isolated fixture:
 
@@ -44,10 +46,12 @@ COST_USD = 0.01
 DURATION_MS = 12
 SLOW_SECONDS = 2
 LONG_LINES = 40
-TURN_WORDS = {'tool': 'tool', 'long': 'long', 'slow': 'slow', 'card': 'card'}
+TURN_WORDS = {'tool': 'tool', 'fail': 'fail', 'long': 'long', 'slow': 'slow', 'card': 'card'}
 TOOL_NAME = 'Bash'
 TOOL_COMMAND = 'echo stand-in'
 TOOL_RESULT = 'stand-in'
+TOOL_FAIL_COMMAND = 'exit 3'
+TOOL_FAIL_RESULT = 'the command failed\nsecond line'
 # The card of a turn that holds `card`: one heading with a subtitle, one text and
 # two buttons, so the person has a primary action and a way out.
 CARD_HEADING = 'Plan'
@@ -88,16 +92,20 @@ def text(session, message_id, words):
         'content': [{'type': 'text', 'text': words}], 'stop_reason': None, 'usage': {}}})
 
 
-def tool(session, message_id):
-    """One call of `Bash` and its result, as two lines of the line format."""
+def tool(session, message_id, failed=False):
+    """One call of `Bash` and its result, as two lines of the line format. A call
+    that failed names its command and its error, and the error has two lines."""
     tool_id = f'toolu-{message_id}'
+    command = TOOL_FAIL_COMMAND if failed else TOOL_COMMAND
+    result_text = TOOL_FAIL_RESULT if failed else TOOL_RESULT
     line({'type': 'assistant', 'session_id': session, 'message': {
         'id': f'tool-{message_id}', 'type': 'message', 'role': 'assistant', 'model': MODEL,
         'content': [{'type': 'tool_use', 'id': tool_id, 'name': TOOL_NAME,
-                     'input': {'command': TOOL_COMMAND, 'description': 'Print the stand-in'}}],
+                     'input': {'command': command, 'description': 'Print the stand-in'}}],
         'stop_reason': None, 'usage': {}}})
     line({'type': 'user', 'session_id': session, 'message': {'role': 'user', 'content': [
-        {'type': 'tool_result', 'tool_use_id': tool_id, 'content': TOOL_RESULT, 'is_error': False}]}})
+        {'type': 'tool_result', 'tool_use_id': tool_id, 'content': result_text,
+         'is_error': failed}]}})
 
 
 def long_answer(session, message_id):
@@ -232,7 +240,9 @@ def answer(session, number, words):
     text(session, message_id, f'You said: {words}')
     if TURN_WORDS['card'] in words:
         card_turn(session, number)
-    if TURN_WORDS['tool'] in words:
+    if TURN_WORDS['fail'] in words:
+        tool(session, message_id, failed=True)
+    elif TURN_WORDS['tool'] in words:
         tool(session, message_id)
     if TURN_WORDS['long'] in words:
         long_answer(session, message_id)

@@ -1,11 +1,14 @@
-//! The state chip in the titlebar of a card.
+//! The state chip in the titlebar of a card, and the words of a state in the
+//! same form at the right edge of the header of the orchestrator dock.
 //!
 //! The chip is Horizon's answer to "will a press do anything?". It names the
 //! agent that owns the card and says whether that agent waits for a click right
 //! now, so a person can see that a click will be read before making one. The
 //! document cannot set it.
 
-use egui::{CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Ui};
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui};
 use horizon_browser_control::block::Tone;
 use horizon_core::PanelKind;
 
@@ -48,6 +51,16 @@ const ON: &str = "on ";
 /// Space the title keeps from the chip while both are drawn.
 pub(crate) const TITLE_GAP: f32 = CHIP_TITLE_GAP;
 
+/// The mark at the left of the words of a chip: a hollow ring in the colour of
+/// the text, or a filled dot in a colour of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChipDot {
+    /// A ring in the colour of the words.
+    Hollow,
+    /// A filled dot.
+    Filled(Color32),
+}
+
 /// Height of the chip.
 pub(crate) const fn height() -> f32 {
     CHIP_HEIGHT
@@ -56,6 +69,23 @@ pub(crate) const fn height() -> f32 {
 /// Width `card` needs, its dot and padding included.
 pub(crate) fn width(ui: &Ui, card: &CardChip<'_>) -> f32 {
     card.width(ui)
+}
+
+/// Width that the chip of the dock needs for `words`, its dot and padding
+/// included.
+pub(crate) fn words_width(painter: &Painter, words: &str) -> f32 {
+    2.0 * CHIP_PAD_SIDE + CHIP_DOT + CHIP_DOT_GAP + words_galley(painter, words, theme::FG_SOFT()).size().x
+}
+
+/// Paints the chip of the dock inside `rect`: the words of a state in the form
+/// of the chip of a card, with the mark of that state at their left.
+pub(crate) fn paint_words(painter: &Painter, rect: Rect, words: &str, dot: ChipDot) {
+    let colours = ToneColors {
+        text: theme::FG_SOFT(),
+        fill: theme::BG_ELEVATED(),
+        outline: theme::BORDER_SUBTLE(),
+    };
+    paint(painter, rect, &[words], colours, dot);
 }
 
 /// The chip of one card: the owner's name and what it is doing.
@@ -183,31 +213,12 @@ impl<'a> CardChip<'a> {
                 outline: theme::BORDER_SUBTLE(),
             },
         };
-        let radius = CornerRadius::same(RADIUS_CONTROL);
-        painter.rect_filled(rect, radius, colours.fill);
-        painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
-        let font = FontId::monospace(CHIP_FONT);
-        let center = rect.center();
-        let dot = Pos2::new(rect.min.x + CHIP_PAD_SIDE + CHIP_DOT * 0.5, center.y);
-        match self.state {
-            ChipState::Listening => {
-                painter.circle_filled(dot, CHIP_DOT * 0.5, theme::PALETTE_GREEN());
-            }
-            ChipState::Badge(tone) if tones::badge_has_dot(tone) => {
-                painter.circle_filled(dot, CHIP_DOT * 0.5, colours.text);
-            }
-            _ => {
-                painter.circle_stroke(dot, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, colours.text));
-            }
-        }
-        let mut x = rect.min.x + CHIP_PAD_SIDE + CHIP_DOT + CHIP_DOT_GAP;
-        for part in self.parts().into_iter().filter(|part| !part.is_empty()) {
-            let galley = text::line(painter, part, &font, colours.text, f32::INFINITY);
-            let height = galley.size().y;
-            let width = galley.size().x;
-            painter.galley(Pos2::new(x, center.y - height * 0.5), galley, colours.text);
-            x += width;
-        }
+        let dot = match self.state {
+            ChipState::Listening => ChipDot::Filled(theme::PALETTE_GREEN()),
+            ChipState::Badge(tone) if tones::badge_has_dot(tone) => ChipDot::Filled(colours.text),
+            _ => ChipDot::Hollow,
+        };
+        paint(painter, rect, &self.parts(), colours, dot);
     }
 
     /// The parts the chip draws, in order, with no string built for them.
@@ -215,4 +226,35 @@ impl<'a> CardChip<'a> {
         let (prefix, suffix, name) = self.spoken();
         [prefix, name, suffix]
     }
+}
+
+/// Paints one chip of `parts` inside `rect`: its fill, its outline, its mark and
+/// its words. The parts that are empty draw nothing.
+fn paint(painter: &Painter, rect: Rect, parts: &[&str], colours: ToneColors, dot: ChipDot) {
+    let radius = CornerRadius::same(RADIUS_CONTROL);
+    painter.rect_filled(rect, radius, colours.fill);
+    painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
+    let center = rect.center();
+    let mark = Pos2::new(rect.min.x + CHIP_PAD_SIDE + CHIP_DOT * 0.5, center.y);
+    match dot {
+        ChipDot::Hollow => {
+            painter.circle_stroke(mark, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, colours.text));
+        }
+        ChipDot::Filled(color) => {
+            painter.circle_filled(mark, CHIP_DOT * 0.5, color);
+        }
+    }
+    let mut x = rect.min.x + CHIP_PAD_SIDE + CHIP_DOT + CHIP_DOT_GAP;
+    for part in parts.iter().filter(|part| !part.is_empty()) {
+        let galley = words_galley(painter, part, colours.text);
+        let height = galley.size().y;
+        let width = galley.size().x;
+        painter.galley(Pos2::new(x, center.y - height * 0.5), galley, colours.text);
+        x += width;
+    }
+}
+
+/// One line of the words of a chip, at the font of the chip.
+fn words_galley(painter: &Painter, words: &str, color: Color32) -> Arc<Galley> {
+    text::line(painter, words, &FontId::monospace(CHIP_FONT), color, f32::INFINITY)
 }

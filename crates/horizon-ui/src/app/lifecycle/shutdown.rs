@@ -167,8 +167,10 @@ impl HorizonApp {
         // stop ends its loop, removes its socket and joins its thread.
         self.node_cards.stop_all();
         // An exit that reached this path without the frames of a close still
-        // stops every program of the dock, before the flush below waits for it.
+        // stops every program of the dock, and waits for its worker within the
+        // bound of a stop, so no program outlives Horizon.
         self.stop_orchestrator_bridges();
+        self.orchestrator_dock.flush_worker();
         self.exit_cleanup_complete = true;
         // Outcomes that the flush applies can still change the board, so they
         // land before the saves below.

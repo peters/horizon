@@ -51,7 +51,10 @@ pub enum Entry {
     Tool {
         tool_id: String,
         name: String,
+        /// What the tool was asked to do: the command of a `Bash` call.
         summary: String,
+        /// The first line of the result of the call, once it ended.
+        result: Option<String>,
         state: ToolState,
     },
     /// A line that Horizon writes for the person: a refusal, a dropped line or
@@ -173,6 +176,7 @@ impl Conversation {
                 tool_id,
                 name,
                 summary,
+                result: None,
                 state: ToolState::Running,
             }),
             BridgeEvent::ToolEnded {
@@ -263,8 +267,10 @@ fn apply_agent_text(snapshot: &mut ConversationSnapshot, message_id: &str, text:
     }
 }
 
-/// Moves one tool call to its end. A result of a tool that this conversation did
-/// not see start changes nothing.
+/// Moves one tool call to its end. The summary of the start stays, because it
+/// says what the tool was asked to do, and the first line of the result goes to
+/// `result`. A result of a tool that this conversation did not see start changes
+/// nothing.
 fn apply_tool_end(snapshot: &mut ConversationSnapshot, tool_id: &str, failed: bool, summary: &str) {
     let found = snapshot
         .entries
@@ -273,15 +279,22 @@ fn apply_tool_end(snapshot: &mut ConversationSnapshot, tool_id: &str, failed: bo
     if let Some(index) = found
         && let Entry::Tool {
             state: shown,
-            summary: kept,
+            result: kept,
             ..
         } = &mut snapshot.entries[index]
     {
         *shown = if failed { ToolState::Failed } else { ToolState::Done };
-        if !summary.is_empty() {
-            kept.clear();
-            kept.push_str(summary);
-        }
+        *kept = first_line(summary);
+    }
+}
+
+/// The first line of `text`, cut like a summary, or `None` when it is empty.
+fn first_line(text: &str) -> Option<String> {
+    let line = text.lines().next().unwrap_or_default();
+    if line.trim().is_empty() {
+        None
+    } else {
+        Some(tidy(line, MAX_SUMMARY_CHARS))
     }
 }
 
