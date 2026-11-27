@@ -580,6 +580,16 @@ when it names one of those kinds.
   sentence, `app::panels::mic` draws the icon of the title bar, and
   `app::settings::speech` is the **Speech** tab.
 
+- `app::orchestrator_dock` is the frame of the conversation dock at the right
+  edge of the root window. `orchestrator_dock/layout.rs` holds the width rule,
+  the rectangle of a frame and `leftmost_panel`, which decides where the canvas
+  ends beside the dock and an open Settings panel. `header.rs` shows the tile,
+  the name and the state of the active workspace. `composer.rs` draws the field
+  of the draft of each workspace, the disabled send control and the three chips.
+  `text.rs` lays the text of the dock out. The switch of this part is the
+  environment variable `HORIZON_ORCHESTRATOR_DOCK`, and nothing of the dock is
+  saved. The dock draws no galley and no string while the switch is off.
+
 ## File Size Policy
 
 The automated line-limit and `too_many_lines` suppression checks cover

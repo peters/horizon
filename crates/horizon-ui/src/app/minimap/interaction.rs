@@ -27,8 +27,14 @@ pub(super) fn render_scoped_minimap(
         return;
     }
 
+    // The minimap hangs on the bottom right corner of the canvas, so the dock and
+    // an open Settings panel never stand on it.
+    let corner = crate::app::util::viewport_local_rect(ctx).max - canvas_rect.max;
     let response = egui::Area::new(overlay_id)
-        .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))
+        .anchor(
+            egui::Align2::RIGHT_BOTTOM,
+            Vec2::new(-MINIMAP_MARGIN - corner.x, -MINIMAP_MARGIN - corner.y),
+        )
         .order(Order::Foreground)
         .show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(model.outer_size, Sense::click_and_drag());

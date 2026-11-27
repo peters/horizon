@@ -66,6 +66,7 @@ mod minimap;
 mod navigation_input;
 mod node_cards;
 mod notify;
+mod orchestrator_dock;
 mod panel_chrome;
 mod panel_restarts;
 mod panel_starts;
@@ -429,6 +430,9 @@ pub struct HorizonApp {
     keep_running: keep_running::KeepRunning,
     minimap_visible: bool,
     hud_visible: bool,
+    /// The frame of the orchestrator dock of this run: the switch of the
+    /// experiment, the rectangle of the frame and the draft of each workspace.
+    orchestrator_dock: orchestrator_dock::OrchestratorDock,
     renaming_workspace: Option<WorkspaceId>,
     rename_buffer: String,
     renaming_panel: Option<PanelId>,

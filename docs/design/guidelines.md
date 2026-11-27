@@ -1192,6 +1192,60 @@ The menu fill is `PANEL_BG`. The well is an inset on that fill.
   starts 12 from each side. At rest and on hover the line is `alpha(FG, 16)`.
   The line matches the toolbar search highlight. The line does not replace the focus outline.
 
+### Orchestrator dock
+
+The dock is the conversation column at the right edge of the root window. One
+switch turns it on: `HORIZON_ORCHESTRATOR_DOCK=1` in the environment of the
+start.
+
+- The width is 27 percent of the window, between 360 and 540 points.
+- The dock keeps the right edge of the window. It starts at the bottom of the
+  toolbar and ends at the bottom of the window. An open Settings panel stands to
+  the left of the dock.
+- The dock does not draw in a frame where the canvas keeps less than 320 points.
+  The canvas width is the window width minus the sidebar (210 points when it
+  shows), the dock and the Settings panel.
+- The surface is `BG_ELEVATED`. A 1 px `BORDER_SUBTLE` line is at its left edge.
+  The content stays inside the rectangle of the dock.
+- The header has 16 points of horizontal padding and 12 points of vertical
+  padding. A 1 px `BORDER_SUBTLE` line is under it. The tile of the active
+  workspace is 26 by 26 points. The name is 13.5 Semibold `FG` and ends with an
+  ellipsis. The line under the name is 11.5 Regular `FG_SOFT` and reads
+  `Orchestrator · not connected`. With no active workspace, there is no tile,
+  the name line reads `No work item is open`, and there is no second line.
+- The empty state is vertically centred between the header and the composer,
+  with 28 points of horizontal padding. Its title is `Say what you want done.`
+  at 15 Bold `FG`. The two sentences under the title are 13.5 Regular `FG_SOFT`.
+  They wrap at a line height of 1.55 times the size.
+- The composer keeps the bottom edge of the dock. From its top down: a 1 px
+  `BORDER_SUBTLE` line, 12 points of padding, one row of the field and the send
+  control, 10 points of gap, the row of the chips, and 14 points of padding to the
+  bottom edge. The left and right padding is 16 points.
+- The field is a multiline text edit. Its hint is `Write to the orchestrator`.
+  Its text is 13.5 `FG`, with a margin of 14 points at each side and 12 points
+  above and below it. Its fill is `BG`, its outline is 1 px `BORDER_STRONG`, and
+  its radius is 12. It is at least 44 points high. It opens with one row and it
+  grows to 6 rows upward, and it clips a longer draft. The row of the chips keeps
+  its place at the bottom.
+- The send control is 32 by 32 points at radius 9, and it is 8 points right of the
+  field. Its vertical centre is the centre of a field of one row. In this part
+  the control is disabled, and its hover text is `The orchestrator is not
+  connected yet`.
+- The three read-only chips are under the field, left aligned and 8 points apart.
+  They wrap to the next row when the dock is too narrow for them. A chip has
+  radius 8, a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and a padding of
+  10 by 5 points. Its label line is 10.5 `FG_DIM` and its value line is 12.5 `FG`.
+  The rows are `Orchestrator` / `Claude Code`, `Workers` / `not chosen` and
+  `Place` / `this computer`.
+- The minimap hangs on the bottom right corner of the canvas. The dock and an
+  open Settings panel never stand on it. The map keeps the rule of the minimap:
+  it draws only in a canvas of at least three times its width and twice its
+  height, which is 996 by 384 points for the default map of 332 by 192 points.
+  The dock makes the canvas narrower, so a narrow window keeps no map beside the
+  dock.
+- The field takes the keyboard only after a click in it. The dock takes no other
+  widget of the window, so a terminal panel keeps the keys when the dock appears.
+
 ## Terminal
 
 - Background is `PANEL_BG`; default foreground is `FG`. Cells whose color is the

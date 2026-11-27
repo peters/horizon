@@ -14,6 +14,8 @@ pub enum CommandId {
     ToggleSidebar,
     ToggleHud,
     ToggleMinimap,
+    /// The switch of the orchestrator dock of this run.
+    ToggleOrchestratorDock,
     ToggleFullscreenWindow,
     ToggleFullscreenPanel,
     ZoomReset,
@@ -67,6 +69,15 @@ fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]
         id,
         label: label.into(),
         shortcut: Some(shortcut),
+        keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
+    }
+}
+
+fn command_entry_without_shortcut(id: CommandId, label: &str, keywords: &[&str]) -> CommandEntry {
+    CommandEntry {
+        id,
+        label: label.into(),
+        shortcut: None,
         keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
     }
 }
@@ -147,6 +158,13 @@ fn view_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEn
             shortcuts.toggle_minimap.display_label(primary_label),
             &["overview", "map"],
         ),
+        // The dock is the switch of an experiment, which a later part stores in
+        // the settings; until then a command without a shortcut turns it on.
+        command_entry_without_shortcut(
+            CommandId::ToggleOrchestratorDock,
+            "Toggle Orchestrator Dock",
+            &["orchestrator", "dock", "conversation", "agent"],
+        ),
         command_entry(
             CommandId::ToggleFullscreenWindow,
             "Toggle Fullscreen (Window)",
@@ -216,7 +234,16 @@ mod tests {
     #[test]
     fn action_commands_all_have_shortcuts() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            // The switch of the orchestrator dock is an experiment without a
+            // shortcut of its own, so a command that has none must be that one.
+            let expected = entry.id != CommandId::ToggleOrchestratorDock;
+            assert_eq!(
+                entry.shortcut.is_some(),
+                expected,
+                "entry '{}' and its shortcut {:?}",
+                entry.label,
+                entry.shortcut
+            );
         }
     }
 

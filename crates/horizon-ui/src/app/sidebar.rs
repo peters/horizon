@@ -6,7 +6,7 @@ mod new_workspace;
 mod panel_rows;
 mod place;
 mod rich_menu;
-mod rows;
+pub(in crate::app) mod rows;
 mod text;
 mod toolbar;
 

@@ -186,29 +186,31 @@ fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
 /// Paints the tile with its initials and status badge; `surface` is the color
 /// around the tile, which the badge's ring uses to cut the badge out.
 fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, surface: Color32) -> Rect {
-    let painter = ui.painter();
-    let accent = workspace.color;
-    let side = TILE_SIDE;
     let tile = Rect::from_min_size(
-        pos2(card.min.x + TILE_INSET, card.center().y - side / 2.0),
-        Vec2::splat(side),
+        pos2(card.min.x + TILE_INSET, card.center().y - TILE_SIDE / 2.0),
+        Vec2::splat(TILE_SIDE),
     );
-    let fill = theme::blend(
-        theme::PANEL_BG_ALT(),
-        accent,
-        if workspace.is_active { 0.42 } else { 0.26 },
-    );
-    painter.rect_filled(tile, 9, fill);
-    let letters_color = theme::ensure_terminal_text_contrast(theme::blend(accent, theme::FG(), 0.35), fill);
-    let letters = text::line(ui, &text::initials(&workspace.name), 12.0, BOLD, letters_color, side);
-    painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
+    paint_workspace_tile(ui, tile, &workspace.name, workspace.color, workspace.is_active);
 
     if has_badge(workspace.row.attention) {
+        let painter = ui.painter();
         let center = tile.right_bottom() - vec2(2.0, 2.0);
         painter.circle_filled(center, BADGE_SIDE / 2.0 + 2.0, surface);
         paint_dot(painter, center, workspace.row.attention, ui);
     }
     tile
+}
+
+/// Paints the mark of a workspace in `tile`: the initials in the workspace color
+/// on its surface. The row of the sidebar and the header of the orchestrator dock
+/// show the same tile, so a person reads one mark for one workspace.
+pub(in crate::app) fn paint_workspace_tile(ui: &egui::Ui, tile: Rect, name: &str, accent: Color32, is_active: bool) {
+    let painter = ui.painter();
+    let fill = theme::blend(theme::PANEL_BG_ALT(), accent, if is_active { 0.42 } else { 0.26 });
+    painter.rect_filled(tile, 9, fill);
+    let letters_color = theme::ensure_terminal_text_contrast(theme::blend(accent, theme::FG(), 0.35), fill);
+    let letters = text::line(ui, &text::initials(name), 12.0, BOLD, letters_color, tile.width());
+    painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
 }
 
 /// The least room that the name keeps before the `NEW WINDOW` badge gives way.

@@ -112,6 +112,7 @@ impl HorizonApp {
             CommandId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             CommandId::ToggleHud => self.hud_visible = !self.hud_visible,
             CommandId::ToggleMinimap => self.minimap_visible = !self.minimap_visible,
+            CommandId::ToggleOrchestratorDock => self.orchestrator_dock.toggle(),
             CommandId::ToggleFullscreenWindow => {
                 let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));

@@ -2,6 +2,8 @@ mod command_palette;
 mod interaction;
 mod layout;
 pub(in crate::app) mod panels;
+#[cfg(test)]
+pub(in crate::app) use self::layout::canvas_rect_for_layout;
 mod pickers;
 mod search;
 pub(in crate::app) mod support;
@@ -122,9 +124,9 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
     use horizon_core::{Board, DEFAULT_PANEL_SIZE, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig};
 
+    use super::canvas_rect_for_layout;
     use super::layout::{
-        canvas_rect_for_layout, estimated_settings_bar_rect, estimated_settings_panel_rect,
-        panel_focus_target_at_pointer_press,
+        estimated_settings_bar_rect, estimated_settings_panel_rect, panel_focus_target_at_pointer_press,
     };
     use super::support::{
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
@@ -258,7 +260,7 @@ mod tests {
         let settings_bar = Rect::from_min_max(Pos2::new(0.0, 800.0 - SETTINGS_BAR_HEIGHT), Pos2::new(1200.0, 800.0));
         let sidebar_width = SIDEBAR_WIDTH;
 
-        let rect = canvas_rect_for_layout(viewport, sidebar_width, Some(settings_panel), Some(settings_bar));
+        let rect = canvas_rect_for_layout(viewport, sidebar_width, Some(settings_panel), Some(settings_bar), None);
 
         assert_eq!(rect.min, Pos2::new(sidebar_width, TOOLBAR_HEIGHT));
         assert_eq!(rect.max, Pos2::new(840.0, 800.0 - SETTINGS_BAR_HEIGHT));

@@ -10,6 +10,7 @@ use crate::theme;
 use super::HorizonApp;
 use super::canvas::CanvasGridCache;
 use super::canvas_scroll::reset_canvas_scroll;
+use super::orchestrator_dock::leftmost_panel;
 
 mod shutdown;
 mod startup_workspace;
@@ -319,8 +320,11 @@ impl HorizonApp {
             return;
         }
 
-        // Settings side panel renders first so egui reserves the space
-        // before the canvas `CentralPanel` claims the remainder.
+        // The orchestrator dock keeps the right edge of the window, and an open
+        // Settings panel stands to its left. Both draw before the canvas
+        // `CentralPanel` claims the remainder, and the dock takes its rectangle
+        // before either of them draws.
+        self.render_orchestrator_dock(ui);
         if self.settings.is_some() {
             self.render_settings(ui);
         }
@@ -335,10 +339,11 @@ impl HorizonApp {
         self.render_toolbar(ui);
         self.render_work_resume_banner(ui);
         self.render_sidebar(ui);
-        // The rectangle that the panel took this frame, so the canvas paints
-        // only beside it.
+        // The rectangle that each panel took this frame, so the canvas paints
+        // only beside the leftmost of them.
         let settings_panel_rect = self.settings.as_ref().and_then(|editor| editor.panel_rect);
-        self.render_canvas(ui, settings_panel_rect);
+        let beside = leftmost_panel([settings_panel_rect, self.orchestrator_dock.frame_rect()]);
+        self.render_canvas(ui, beside);
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
         // The lines of the agents run under the panels and over the canvas
