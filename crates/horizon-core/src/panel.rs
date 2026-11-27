@@ -322,10 +322,7 @@ impl PanelOptions {
 
     #[must_use]
     pub(crate) fn runs_a_local_process(&self) -> bool {
-        if !panel_runs_a_local_process(self.kind) {
-            return false;
-        }
-        true
+        panel_runs_a_local_process(self.kind)
     }
 }
 
