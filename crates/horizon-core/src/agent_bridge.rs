@@ -1,0 +1,65 @@
+//! One agent program on a pipe, with no terminal.
+//!
+//! Horizon starts one agent program for one conversation and speaks its line
+//! format: the person's messages leave on the standard input of the program as
+//! one JSON line each, and the lines of its standard output become the small set
+//! of typed events of [`BridgeEvent`]. The program draws no screen, so this
+//! module reads no terminal, no cursor and no escape sequence.
+//!
+//! Every byte that the program writes to its standard output and to its standard
+//! error is untrusted, as is every byte that it does not write. The module turns
+//! a line into an event only when the line is JSON of the one grammar that
+//! [`ClaudeCodec`] reads; every other line becomes [`BridgeEvent::Dropped`] and
+//! ends nothing. No text of the program reaches a log line, a path, a command
+//! line or a snapshot field of its own: the events hold it, and the conversation
+//! of [`Conversation`] shows it as plain text. The page
+//! `docs/review/trust-boundaries/agent-bridge.md` states that boundary, and
+//! `docs/architecture/agent-bridge.md` gives the threads, the bounds and the
+//! line format as it was measured on Claude Code 2.1.332.
+//!
+//! One [`Bridge`] owns one child and three threads: `agent-bridge-out` reads the
+//! lines of the standard output with the bound of one line, `agent-bridge-in`
+//! writes the queued lines and flushes them, and a reader of the standard error
+//! keeps its last bytes. A frame calls [`Bridge::poll`] and never waits.
+//!
+//! Nothing calls this module yet: no window, no card and no setting of this
+//! slice names it, and its only callers are its tests. The card path, the
+//! storage of a conversation and the choice of the program are later slices.
+
+use std::time::Duration;
+
+mod codec;
+mod conversation;
+mod event;
+mod program;
+#[cfg(test)]
+mod tests;
+mod worker;
+
+pub use codec::{ClaudeCodec, LineCodec};
+pub use conversation::{Conversation, ConversationSnapshot, Entry, LimitNote, Link, ToolState};
+pub use event::{BridgeEvent, DropReason};
+pub use program::{ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, ProgramSpec, SessionChoice, claude};
+pub use worker::{Bridge, BridgeError};
+
+/// The bytes of one line of the program. A longer line is read to its newline,
+/// dropped whole and reported as [`DropReason::TooLong`].
+pub const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// The bytes of one text of the person or of the agent.
+pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+
+/// The characters of one summary: of a tool call, of a tool result and of the
+/// refusal of a tool.
+pub const MAX_SUMMARY_CHARS: usize = 400;
+
+/// The entries that one conversation keeps. Older entries are dropped, and one
+/// [`Entry::Notice`] at the top of the list says how many.
+pub const MAX_ENTRIES: usize = 2000;
+
+/// The last bytes of the standard error of the program that the bridge keeps for
+/// the notice of its end.
+pub const STDERR_TAIL_BYTES: usize = 8 * 1024;
+
+/// How long [`Bridge::stop`] may wait for the program and for its threads.
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(5);

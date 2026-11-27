@@ -351,6 +351,15 @@ when it names one of those kinds.
   identities and prepares/seals handoffs; `repository.rs` fingerprints repository
   contents. Terminal shutdown workers own cancellation and PTY exit, keeping
   filesystem work outside the UI shutdown path.
+- `agent_bridge/` runs one agent program with no terminal: `codec.rs` reads
+  the JSON line format of the program and builds the typed events of
+  `event.rs`, `program.rs` owns the command line and the variables that the
+  child must not inherit, `worker.rs` owns the child and its three threads, and
+  `conversation.rs` holds the list that a window will read. The bounds of this
+  path live in `agent_bridge.rs`; its design page is
+  [`agent-bridge.md`](agent-bridge.md), and its trust boundary is
+  [`agent-bridge.md`](../review/trust-boundaries/agent-bridge.md). Nothing calls
+  it yet.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
