@@ -141,7 +141,7 @@ tempfile = "3.27.0"
 # Browser manifests need replace-existing semantics without exposing a gap to
 # lock-free readers.
 atomicwrites = "0.4.4"
-rusqlite = { version = "0.41.1", features = ["bundled"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
 libc = "0.2.189"
 rustix = { version = "1.1.4", features = ["fs", "net", "process", "system"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
