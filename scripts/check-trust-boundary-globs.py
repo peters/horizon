@@ -31,8 +31,14 @@ def globs_of(page: pathlib.Path) -> list[str]:
 
 
 def files_of(glob: str) -> list[pathlib.Path]:
-    """The files of the repository that `glob` names, relative to the root."""
-    return [path for path in ROOT.glob(glob) if path.is_file()]
+    """The files of the repository that `glob` names, relative to the root.
+
+    Python 3.12 makes a pattern that ends in `**` name directories only, where
+    Python 3.13 and later also name the files below them. `x/**/*` names the
+    files below `x` on every version, so the glob keeps one meaning.
+    """
+    pattern = f"{glob}/*" if glob.endswith("/**") else glob
+    return [path for path in ROOT.glob(pattern) if path.is_file()]
 
 
 def main() -> int:
