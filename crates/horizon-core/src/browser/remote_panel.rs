@@ -197,10 +197,13 @@ impl BrowserPanelState {
     #[must_use]
     pub fn is_cloud(&self) -> bool {
         #[cfg(feature = "cloud-workspaces")]
-        if self.cloud.is_some() {
-            return true;
+        {
+            self.cloud.is_some()
         }
-        false
+        #[cfg(not(feature = "cloud-workspaces"))]
+        {
+            false
+        }
     }
 
     /// Whether the cloud worker browser accepts files dropped on its page.

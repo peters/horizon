@@ -220,10 +220,7 @@ fn edit(ui: &mut egui::Ui, id: u32, target: &mut ResizeTarget, profile: &cloud_r
         }
         ResizeTarget::Workspace { size_gb } => size_gb > workspace && size_gb <= max_workspace,
     };
-    if ui.add_enabled(changed, action_button("Review resize…")).clicked() {
-        return true;
-    }
-    false
+    ui.add_enabled(changed, action_button("Review resize…")).clicked()
 }
 
 fn description(target: ResizeTarget) -> String {
