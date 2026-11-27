@@ -18,6 +18,7 @@ RMCP_370 = '5d6a11f2ae022f513aec0f6e0f10f89a57891a7f'
 RMCP_380 = 'cd88056ffdc97756fbd98e5a12bbeb41758f0ce8'
 RMCP_390 = '5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc'
 RMCP_3100 = '53e64a93c8e32d8f7699af587b9e28566929940c'
+RMCP_3110 = '165f8fd514afb8f6d1be3e86260ee9abfce58541'
 
 
 class HelperNoticeTests(unittest.TestCase):
@@ -66,6 +67,19 @@ class HelperNoticeTests(unittest.TestCase):
                     self.assertIn(identity, collector.SUPPLEMENTS)
 
     def test_current_rmcp_and_macros_use_their_reviewed_revision(self):
+        for name in ('rmcp', 'rmcp-macros'):
+            self.crate(name, '3.11.0', RMCP_3110)
+        collector.collect_notices(self.root, self.output)
+        for name in ('rmcp', 'rmcp-macros'):
+            destination = self.output / f'{name}-3.11.0'
+            self.assertIn(RMCP_3110, (destination / 'LICENSE').read_text())
+            provenance = json.loads((destination / 'provenance.json').read_text())
+            self.assertEqual(provenance['source_revision']['git']['sha1'], RMCP_3110)
+        self.assertEqual(self.urlopen.call_args_list, [
+            mock.call(f'https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/{RMCP_3110}/LICENSE', timeout=60)
+        ] * 2)
+
+    def test_rmcp_3100_and_macros_keep_their_reviewed_revision(self):
         for name in ('rmcp', 'rmcp-macros'):
             self.crate(name, '3.10.0', RMCP_3100)
         collector.collect_notices(self.root, self.output)
