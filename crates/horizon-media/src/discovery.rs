@@ -1,6 +1,6 @@
 //! Multicast DNS browsing shared by each transport's receiver discovery.
 //! Transports keep their own filtering and TXT record interpretation.
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use mdns_sd::{ServiceDaemon, ServiceEvent, instance_name_unescaped};
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
@@ -84,7 +84,7 @@ pub fn browse(
                 .map(|property| (property.key().to_ascii_lowercase(), property.val_str().to_owned()))
                 .collect();
             on_service(Service {
-                instance: instance_name(&info.fullname, service_type).to_owned(),
+                instance: instance_name(&info.fullname, service_type),
                 fullname: info.fullname.clone(),
                 address: SocketAddr::new(ip.into(), info.port),
                 properties,
@@ -96,10 +96,13 @@ pub fn browse(
     result
 }
 
-fn instance_name<'a>(fullname: &'a str, service_type: &str) -> &'a str {
-    fullname
-        .strip_suffix(service_type)
-        .map_or(fullname, |name| name.strip_suffix('.').unwrap_or(name))
+/// The instance label without its DNS escapes. `fullname` keeps `\.` and `\\`
+/// for a dot or backslash in the label; a name of another type stays as given.
+fn instance_name(fullname: &str, service_type: &str) -> String {
+    fullname.strip_suffix(service_type).map_or_else(
+        || fullname.to_owned(),
+        |name| instance_name_unescaped(name.strip_suffix('.').unwrap_or(name)),
+    )
 }
 
 #[cfg(test)]
@@ -115,6 +118,18 @@ mod tests {
         assert_eq!(
             instance_name("Speaker._googlecast._tcp.local.", "_airplay._tcp.local."),
             "Speaker._googlecast._tcp.local."
+        );
+    }
+
+    #[test]
+    fn instance_name_removes_dns_escapes() {
+        assert_eq!(
+            instance_name(r"Mr\. Smith's TV._airplay._tcp.local.", "_airplay._tcp.local."),
+            "Mr. Smith's TV"
+        );
+        assert_eq!(
+            instance_name(r"A\\B._airplay._tcp.local.", "_airplay._tcp.local."),
+            r"A\B"
         );
     }
 
