@@ -51,7 +51,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// heartbeat of a live link in both directions, so a computer that went away
 /// leaves the list of the others. Version 9 adds the grid that the computer which
 /// typed last gives the program of a shared panel.
-pub const SERVER_PROTOCOL_VERSION: u32 = 9;
+pub const SERVER_PROTOCOL_VERSION: u32 = 10;
 
 /// The first version of a server that holds an idle wait for fifteen seconds.
 pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
@@ -60,6 +60,13 @@ pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
 /// which is [version 9](SERVER_PROTOCOL_VERSION) with the grid that the computer
 /// which typed last gives the program of a shared panel.
 pub const LIVE_PROTOCOL_VERSION: u32 = 9;
+
+/// The first version of a server that relays the frames of the session mirror,
+/// which is [version 10](SERVER_PROTOCOL_VERSION). A computer sends `mirror_open`
+/// only to a server that answered this version, and the server sends a frame of the
+/// mirror only to a link that sent `mirror_open`: a computer of an older build
+/// keeps its live link, its shared terminals and its own frames.
+pub const MIRROR_PROTOCOL_VERSION: u32 = 10;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;

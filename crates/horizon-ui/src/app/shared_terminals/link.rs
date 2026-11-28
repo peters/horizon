@@ -31,4 +31,7 @@ live_link! {
     ended(&self, panel: &str);
     typed(&self, owner: &str, panel: &str, bytes: &[u8]);
     take_events(&self) -> Vec<LiveEvent>;
+    open_mirror(&self);
+    follow_mirror(&self, owner: &str, program: &str, session: &str);
+    unfollow_mirror(&self, owner: &str, program: &str, session: &str);
 }

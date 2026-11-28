@@ -63,6 +63,7 @@ mod connect;
 mod files;
 mod link;
 mod live;
+mod live_mirror;
 mod machine_login;
 mod pull;
 mod questions;

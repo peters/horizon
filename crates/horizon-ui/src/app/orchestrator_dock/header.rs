@@ -70,35 +70,45 @@ pub(super) const FRONT_DESK_TITLE: &str = "Front desk";
 pub(super) const FRONT_DESK_LINE: &str = "Starts and watches the work items";
 
 /// What the header of the dock names: the front desk, which belongs to no
-/// workspace, or one workspace of the board.
-#[derive(Clone, Copy)]
+/// workspace, one workspace of the board, or one mirrored session of another
+/// computer.
+#[derive(Clone)]
 pub(super) enum Form<'a> {
     FrontDesk,
     Workspace(&'a Workspace),
+    /// A session of another computer: its title, and the line that names the program
+    /// and the computer.
+    Mirror {
+        title: String,
+        line: String,
+    },
 }
 
-impl<'a> Form<'a> {
+impl Form<'_> {
     /// The first line of the header.
-    fn title(self) -> &'a str {
+    fn title(&self) -> &str {
         match self {
             Self::FrontDesk => FRONT_DESK_TITLE,
             Self::Workspace(workspace) => workspace.name.as_str(),
+            Self::Mirror { title, .. } => title,
         }
     }
 
     /// The second line of the header, under the first one.
-    fn line(self) -> &'static str {
+    fn line(&self) -> &str {
         match self {
             Self::FrontDesk => FRONT_DESK_LINE,
             Self::Workspace(_) => PROGRAM_LINE,
+            Self::Mirror { line, .. } => line,
         }
     }
 
     /// The room that the marks at the left take before the two lines: the back
-    /// control and the tile of a workspace, and nothing for the front desk.
-    fn leading(self) -> f32 {
+    /// control and the tile of a workspace, and nothing for the front desk or for a
+    /// mirrored session, which has no back control of its own.
+    fn leading(&self) -> f32 {
         match self {
-            Self::FrontDesk => 0.0,
+            Self::FrontDesk | Self::Mirror { .. } => 0.0,
             Self::Workspace(_) => BACK_SIDE + BACK_GAP + TILE_SIDE + TILE_GAP,
         }
     }
@@ -140,6 +150,22 @@ pub(super) struct State {
 }
 
 impl State {
+    /// The state of one mirrored session: the chip reads `live` while a process runs
+    /// it and `idle` otherwise, and the mirror has no cost.
+    pub(super) fn mirrored(live: bool) -> Self {
+        Self {
+            chip: Chip {
+                word: if live { "live" } else { "idle" },
+                dot: if live {
+                    ChipDot::Filled(theme::PALETTE_GREEN())
+                } else {
+                    ChipDot::Hollow
+                },
+            },
+            cost_usd_total: 0.0,
+        }
+    }
+
     /// The state of the conversation of `session`, or the state of a
     /// conversation that started no program yet.
     pub(super) fn of(session: Option<&Session>) -> Self {
@@ -168,7 +194,7 @@ pub(in crate::app) struct Parts {
 }
 
 /// The rectangles of the marks of the header of `rect`.
-pub(super) fn parts(rect: Rect, form: Form<'_>) -> Parts {
+pub(super) fn parts(rect: Rect, form: &Form<'_>) -> Parts {
     let back = matches!(form, Form::Workspace(_)).then(|| {
         Rect::from_min_size(
             pos2(rect.min.x + PADDING_X, rect.center().y - BACK_SIDE / 2.0),
@@ -199,7 +225,7 @@ fn chip_width(ui: &Ui, state: State) -> f32 {
 
 /// The galleys of the header of `width` points: the name of `form`, the line
 /// under it, the cost and the chip at the right.
-fn lines(ui: &Ui, width: f32, form: Form<'_>, state: State) -> Lines {
+fn lines(ui: &Ui, width: f32, form: &Form<'_>, state: State) -> Lines {
     let column = (width - 2.0 * PADDING_X - form.leading()).max(0.0);
     let name_column = (column - chip_width(ui, state)).max(0.0);
     let mut cost = cost_of(ui, state.cost_usd_total, name_column);
@@ -238,7 +264,7 @@ pub(super) fn cost_words(cost_usd_total: f64) -> String {
 
 /// The height of the header of `form` at `width` points, which the dock works out
 /// before it draws the header.
-pub(super) fn height(ui: &Ui, width: f32, form: Form<'_>, state: State) -> f32 {
+pub(super) fn height(ui: &Ui, width: f32, form: &Form<'_>, state: State) -> f32 {
     let lines = lines(ui, width, form, state);
     let text_height = lines.name.size().y + LINE_GAP + lines.state.size().y;
     let chip_height = chip::height();
@@ -248,7 +274,7 @@ pub(super) fn height(ui: &Ui, width: f32, form: Form<'_>, state: State) -> f32 {
 /// Draws the header of `form` in `rect`, its line under the name, the cost left of
 /// the chip and the chip at the right edge. It answers whether the person pressed
 /// the back control, which the front desk has and a workspace shows.
-pub(super) fn render(ui: &Ui, rect: Rect, form: Form<'_>, state: State) -> bool {
+pub(super) fn render(ui: &Ui, rect: Rect, form: &Form<'_>, state: State) -> bool {
     let lines = lines(ui, rect.width(), form, state);
     let name_height = lines.name.size().y;
     let text_height = name_height + LINE_GAP + lines.state.size().y;

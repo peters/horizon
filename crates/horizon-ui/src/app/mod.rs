@@ -85,6 +85,7 @@ mod session;
 mod session_jobs;
 mod session_kill;
 mod session_manager;
+mod session_mirror;
 mod session_pickup;
 mod settings;
 mod settings_io;

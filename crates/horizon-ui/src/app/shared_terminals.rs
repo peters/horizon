@@ -32,6 +32,7 @@ use horizon_core::{Config, FollowSpec, ServerConfig};
 use horizon_sync::{LiveSupervisor, SupervisorConfig};
 
 use super::HorizonApp;
+use super::session_mirror::SessionMirror;
 use crate::block_widget::{CardChip, chip::ChipState};
 pub(in crate::app) use link::LiveLink;
 pub(in crate::app) use list::{attention_of, computer_name, kind_of};
@@ -58,6 +59,9 @@ pub(in crate::app) struct SharedTerminals {
     /// of a link that is down.
     pub(in crate::app) found: Arc<Found>,
     list: list::ListState,
+    /// The choice of this window in the group `COMPUTERS`: the computers whose rows
+    /// show every session.
+    pub(in crate::app) mirror: SessionMirror,
 }
 
 impl SharedTerminals {
@@ -152,7 +156,9 @@ impl HorizonApp {
         let server = &self.template_config.server;
         let shared = &mut self.shared_terminals;
         let wanted = &mut shared.wanted;
+        let shown_mirror = self.orchestrator_dock.front_desk().mirror().cloned();
         let before = (wanted.sharing, wanted.typing, wanted.follows.len());
+        wanted.mirror.follow = shown_mirror;
         (wanted.sharing, wanted.typing) = (server.share_terminals, server.remote_typing);
         wanted.follows.retain(|follow| !follow.feed.closed());
         let mut changed = before != (wanted.sharing, wanted.typing, wanted.follows.len());
@@ -170,6 +176,7 @@ impl HorizonApp {
             }
             if let Some(found) = pump.shared().found() {
                 shared.found = found;
+                shared.mirror.retain(&shared.found.mirror.computers);
             }
         }
     }

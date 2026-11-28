@@ -402,6 +402,60 @@ encryption.
    computer keeps every copy of every machine key and every credential value that
    it already had, so make new keys and new values if it is lost.
 
+## Mirror the sessions of another computer
+
+The session mirror shows the agent sessions of one computer on the other
+computers of the same server, in the conversation dock. The computer that has
+the sessions runs the publisher. The server relays the frames and keeps none of
+them. The other computers read the sessions and cannot change them. The design is
+in [`docs/architecture/session-mirror.md`](../../docs/architecture/session-mirror.md).
+
+The publisher reads the stores of Claude Code, Codex and Pi, and it names
+Antigravity with no session. It installs nothing, and it reads no setting of
+Horizon: its own home is `~/.horizon-mirror`, at mode 0700.
+
+1. On a computer that is logged in to the server, make one invitation, as the
+   step 4 of [Join a computer with a QR code](#join-a-computer-with-a-qr-code)
+   says.
+
+2. On the computer that has the sessions, join the publisher:
+
+   ```sh
+   horizon --mirror-sessions --join '<the link>'
+   ```
+
+   Result: one line reads `horizon mirror: this computer joined the server at
+   <host:port> as <name>-sessions.`, and the command ends. The name of the
+   publisher is the name of that computer and `-sessions`.
+
+3. Start the publisher:
+
+   ```sh
+   horizon --mirror-sessions
+   ```
+
+   Result: one line reads `horizon mirror: the sessions of this computer go to
+   <host:port> as <name>-sessions.`, and one more line names the count of each
+   program of the list, such as `the list holds 4 sessions: claude 2, codex 1,
+   pi 1, antigravity 0.` A line reads `horizon mirror: connected to the server.`
+   when the link is open.
+
+4. On another computer of that server, read the group `COMPUTERS` of the sidebar.
+
+   Result: under the name of the publishing computer, one row for each session
+   holds the two letters of its program, its title and the time of its last
+   change. A session that a process runs shows a dot in the accent colour. A
+   press on a row shows the session in the dock.
+
+5. Stop the publisher with Ctrl+C, or with `kill` of its process id.
+
+   Result: the process ends, its link ends, and the rows of that computer leave
+   the sidebar of the other computers.
+
+A server that refuses the publisher prints one line and ends the process with a
+code that is not 0. A server of an older build reads no frame of the mirror: the
+publisher prints one line and ends with code 2.
+
 ## Replace the binary and restart
 
 1. Build the new binary.

@@ -43,6 +43,7 @@ pub mod search;
 pub mod secret;
 pub mod secret_store;
 pub mod server_link;
+pub mod session_mirror;
 pub mod session_pickup;
 mod session_store;
 pub mod settings_sync;

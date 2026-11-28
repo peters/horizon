@@ -425,6 +425,11 @@ when it names one of those kinds.
   opens the store or a file. The design page is
   [`shared-terminals.md`](shared-terminals.md) and the boundary is
   [`shared-terminals.md`](../review/trust-boundaries/shared-terminals.md).
+- `live/mirror.rs` holds the frames of the session mirror and their bounds, and
+  `supervisor/live_mirror.rs` holds the part of one live link that carries them.
+  The hub relays those frames beside the panels, and it sends a frame of the
+  mirror only to a link that sent `mirror_open`. The design page is
+  [`session-mirror.md`](session-mirror.md).
 
 ### `horizon-browser-cli`
 
@@ -454,6 +459,12 @@ when it names one of those kinds.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - `app/mod.rs` orchestrates frame flow only.
+- `app/session_mirror.rs` is the viewer state of the session mirror: the list that
+  the pump read, the rows of the followed session and the expansions of the group
+  `COMPUTERS`. `app/sidebar/mirror_rows.rs` draws those rows, and
+  `app/orchestrator_dock/mirror.rs` draws one session in the dock. The reader of
+  the stores is `horizon-core/src/session_mirror.rs`, and the publisher mode is
+  `mirror_sessions.rs`; no part of the viewer reads a store.
 - `native_app/pinch.rs` bridges Linux trackpad pinch into the existing zoom
   path: window-scoped XInput 2.4 pinch and focus events on X11, and the
   `horizon-wayland` bridge on Wayland. Older X11 servers and compositors

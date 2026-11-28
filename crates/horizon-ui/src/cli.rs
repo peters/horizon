@@ -25,6 +25,9 @@ pub(crate) enum Start {
     PanelHolder,
     /// One of the three modes of the server.
     Sync(SyncMode),
+    /// `--mirror-sessions`: the publisher of the session mirror, which reads the
+    /// session stores of this computer and sends them to its server.
+    MirrorSessions(crate::mirror_sessions::MirrorMode),
     /// `--browser-mcp`: the browser MCP server on the standard input and output.
     BrowserMcp,
     /// `--browser-host-driver`: the driver of a browser panel that runs beside
@@ -50,6 +53,7 @@ pub(crate) fn parse_start(args: impl IntoIterator<Item = std::ffi::OsString>) ->
         Some("--help" | "-h") => alone(&args, Start::Help),
         Some("--version" | "-V") => alone(&args, Start::Version),
         Some("--agent-work-hook") => alone(&args, Start::AgentWorkHook),
+        Some("--mirror-sessions") => Ok(Start::MirrorSessions(parse_mirror_args(args.iter().skip(1).cloned())?)),
         Some(horizon_core::panel_holder::PANEL_HOLDER_ARG) => alone(&args, Start::PanelHolder),
         Some("--browser-mcp") => {
             parse_browser_mcp_args(args.iter().cloned())?;
@@ -64,6 +68,41 @@ pub(crate) fn parse_start(args: impl IntoIterator<Item = std::ffi::OsString>) ->
             None => Ok(Start::Desktop(parse_cli_args(args)?)),
         },
     }
+}
+
+/// The arguments of `--mirror-sessions`: one optional `--join <link>`.
+///
+/// # Errors
+/// Returns why one argument is not part of this mode.
+pub(crate) fn parse_mirror_args(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<crate::mirror_sessions::MirrorMode, String> {
+    let mut join = None;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--join") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--join` needs the link of an invitation".to_owned())?;
+                if join.is_some() {
+                    return Err("give one `--join` only".to_owned());
+                }
+                join = Some(
+                    value
+                        .to_str()
+                        .ok_or_else(|| "the link of `--join` is not text".to_owned())?
+                        .to_owned(),
+                );
+            }
+            _ => {
+                return Err(format!(
+                    "`{}` is not part of the session mirror mode",
+                    argument.to_string_lossy()
+                ));
+            }
+        }
+    }
+    Ok(crate::mirror_sessions::MirrorMode::with_join(join))
 }
 
 /// A mode that takes no other argument.
@@ -188,6 +227,7 @@ pub(crate) const CLI_USAGE: &str = "usage: horizon [<folder>] [--config <path>] 
        horizon --server [--listen <ip>:<port>] [--name <dns-name>]
        horizon --server-link
        horizon --server-invite
+       horizon --mirror-sessions [--join <link>]
        horizon --browser-host-driver [--profile <name>] [--engine <engine>]
 
 A folder argument opens the board of that folder: Horizon shows the workspace of

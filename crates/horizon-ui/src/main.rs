@@ -20,6 +20,7 @@ mod input;
 #[cfg(any(test, target_os = "linux"))]
 mod linux_desktop;
 mod loading_spinner;
+mod mirror_sessions;
 mod native_window;
 mod plugin_install;
 mod primary_selection;
@@ -119,6 +120,15 @@ fn main() -> eframe::Result {
         Start::Sync(mode) => {
             init_tracing();
             std::process::exit(run_sync_mode(&mode));
+        }
+        // The publisher of the session mirror reads the session stores of this
+        // computer and sends them to its server. It comes before the Horizon home,
+        // the settings, the sessions and the agent integrations, because it must
+        // read and write nothing of them: its own home holds its name, its address
+        // and its token. It installs no tracing writer, so no text of a session can
+        // reach a log line of this process.
+        Start::MirrorSessions(mode) => {
+            std::process::exit(mirror_sessions::run(&mode));
         }
         Start::Desktop(cli_args) => cli_args,
     };

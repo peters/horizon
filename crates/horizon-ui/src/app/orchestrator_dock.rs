@@ -39,6 +39,7 @@ mod header;
 mod layout;
 mod list;
 mod markdown;
+mod mirror;
 mod programs;
 pub(in crate::app) mod proposal;
 mod session;
@@ -574,7 +575,7 @@ impl OrchestratorDock {
     /// Keeps the rectangles of the marks of the header of this frame for the tests
     /// of the layout.
     #[cfg(test)]
-    fn set_last_header(&mut self, rect: Rect, form: header::Form<'_>) {
+    fn set_last_header(&mut self, rect: Rect, form: &header::Form<'_>) {
         self.last_header = Some(header::parts(rect, form));
     }
 

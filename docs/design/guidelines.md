@@ -914,6 +914,40 @@ words in a terminal, in a device viewer, in a browser panel and in the Server ta
 - Do not write "connects again" or "reaches again" for a retry that Horizon
   starts by itself, and do not name the panel or the viewer as the actor.
 
+### The rows and the header of a mirrored session
+
+The group `COMPUTERS` of the sidebar shows the sessions that another computer
+publishes, under the name of that computer and under the panels that it shares.
+The dock shows one of those sessions while the person reads it
+(`crates/horizon-ui/src/app/sidebar/mirror_rows.rs`,
+`crates/horizon-ui/src/app/orchestrator_dock/mirror.rs`).
+
+- **A session row is a row of a terminal of another computer.** It keeps the tree
+  guide, the height, the hover fill and the two texts at its right and left. The
+  mark in the place of the kind icon is the two letters of the program: `CC` for
+  Claude Code, `CX` for Codex, `PI` for Pi and `AG` for Antigravity. The letters
+  are the size of a kind icon and they take `ACCENT`.
+- **The right of a row holds one word.** It is the time of the last change of the
+  session, at the size and in the colour of the word of a state. A session that a
+  process runs now shows a dot of 3 points in `ACCENT` instead, as the row of a
+  panel that works shows its dot.
+- **A computer shows at most 8 rows.** The row `and <N> more` follows them, with
+  no mark, at the size and in the colour of the time of a row. A press on it shows
+  the rest.
+- **A program that the publisher cannot read is one line.** It reads
+  `<program> is not mirrored`, under the rows and at the size of a note of the
+  group.
+- **The header of a mirrored session has no back control and no cost.** The first
+  line is the title of the session. The second line is
+  `<program> on <computer> · read only`, with the same sizes as the two lines of
+  another conversation. The chip reads `live` while a process runs the session,
+  with the green dot of a turn that works, and `idle` otherwise, with a hollow
+  dot.
+- **In place of the composer the dock reads one line.** It is centred at 12.5
+  points in `FG_SOFT`, with the padding of the header above and below it:
+  `This session runs on <computer>. You read it here.` There is no field and no
+  chip. A mirrored session takes no key and no text.
+
 ### Card panel
 
 A card panel shows a document that an agent composed. Horizon owns the frame

@@ -24,16 +24,18 @@ use std::{
 };
 
 use super::connect::Halt;
+use super::live_mirror::MirrorState;
 use super::{End, Greeted, LINK_SLICE, SupervisorConfig};
 use crate::error::SyncError;
 use crate::frame::write_frame;
 use crate::live::alive::Limits;
+use crate::live::mirror::MirrorList;
 use crate::live::protocol::{ID_CHARS, LABEL_CHARS, clean, clean_panels};
 use crate::live::{
     Alive, LiveBytes, LiveEvent, LivePanel, LiveRequest, LiveState, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS,
-    MAX_LIVE_TYPED_BYTES,
+    MAX_LIVE_TYPED_BYTES, MirrorEntry,
 };
-use crate::protocol::{Frame, Hello, LIVE_PROTOCOL_VERSION, LinkErrorCode, PROTOCOL_VERSION};
+use crate::protocol::{Frame, Hello, LIVE_PROTOCOL_VERSION, LinkErrorCode, MIRROR_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use crate::refusal::RefusalCell;
 
 /// The most bytes of screens, output and typed input that wait for the link.
@@ -96,6 +98,9 @@ struct Inner {
     queued: usize,
     events: VecDeque<LiveEvent>,
     event_bytes: usize,
+    /// The sessions of the mirror: the list that this computer publishes and the
+    /// sessions that it follows.
+    mirror: MirrorState,
 }
 
 struct Shared {
@@ -248,6 +253,34 @@ impl LiveHandle {
         })
     }
 
+    /// Takes part in the session mirror: the link sends the list of this computer
+    /// and it answers the follows of other computers. A server that answered no
+    /// mirror version reads no such frame, and this call changes nothing there.
+    pub fn open_mirror(&self) {
+        self.with(|inner| inner.mirror.want());
+    }
+
+    /// Replaces the list of the sessions that this computer publishes.
+    pub fn set_mirror_list(&self, list: MirrorList) {
+        self.with(|inner| inner.mirror.set_list(list));
+    }
+
+    /// Starts the follow of one session of `owner`, or ends it.
+    pub fn follow_mirror(&self, owner: &str, program: &str, session: &str) {
+        self.with(|inner| inner.mirror.follow(owner, program, session));
+    }
+
+    pub fn unfollow_mirror(&self, owner: &str, program: &str, session: &str) {
+        self.with(|inner| inner.mirror.unfollow(owner, program, session));
+    }
+
+    /// Sends the entries of one of the followed sessions of this computer. `false`
+    /// says that the link is away or that its frames are full: nothing was sent.
+    #[must_use]
+    pub fn mirror_entries(&self, program: &str, session: &str, entries: Vec<MirrorEntry>, tail: bool) -> bool {
+        self.with(|inner| inner.mirror.entries(program, session, entries, tail))
+    }
+
     /// The state of the link now.
     #[must_use]
     pub fn state(&self) -> LiveState {
@@ -293,6 +326,9 @@ impl Inner {
             self.device = std::mem::take(device);
             self.set_state(LiveState::Open);
             event = LiveEvent::Computers { computers };
+        }
+        if !self.mirror.accept(&mut event) {
+            return;
         }
         match &mut event {
             LiveEvent::Computers { computers } => {
@@ -401,6 +437,9 @@ impl Shared {
             for (owner, panel) in new {
                 inner.sent.insert((owner.clone(), panel.clone()));
                 batch.push(LiveRequest::Follow { owner, panel });
+            }
+            if batch.len() < BATCH_FRAMES {
+                inner.mirror.batch(&mut batch);
             }
             while batch.len() < BATCH_FRAMES {
                 let Some(request) = inner.queue.pop_front() else { break };
@@ -535,8 +574,9 @@ fn run(config: &SupervisorConfig, shared: &Shared, halt_slot: &Arc<Mutex<Option<
         let greeted = super::greet(config, &shared.stop, halt_slot, &RefusalCell::default(), hello, |_| {});
         let (state, again) = match greeted {
             Ok((_, answer)) if answer.protocol < LIVE_PROTOCOL_VERSION => (LiveState::Unsupported, Again::Soon),
-            Ok((greeted, _)) => {
-                let (reason, again) = serve(shared, greeted, halt_slot);
+            Ok((greeted, answer)) => {
+                let mirror = answer.protocol >= MIRROR_PROTOCOL_VERSION;
+                let (reason, again) = serve(shared, greeted, halt_slot, mirror);
                 (LiveState::Down(reason), again)
             }
             Err(failed) => {
@@ -575,7 +615,7 @@ fn run(config: &SupervisorConfig, shared: &Shared, halt_slot: &Arc<Mutex<Option<
 /// Serves one greeted link until it ends: this thread writes, and a second one
 /// takes the frames of the server. Answers why the link ended, and whether
 /// another attempt follows.
-fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>) -> (String, Again) {
+fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>, mirror: bool) -> (String, Again) {
     let Greeted { mut input, answers, .. } = greeted;
     // A new link has nothing of this computer: the wanted state goes again, and
     // what waited for the last link is not for this one.
@@ -584,6 +624,7 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
         (inner.up, inner.end, inner.panels_sent, inner.queued) = (true, None, false, 0);
         inner.sent.clear();
         inner.queue.clear();
+        inner.mirror.reset();
         let label = inner.label.clone();
         Frame::Live(LiveRequest::Open { label })
     };
@@ -609,6 +650,12 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
             };
             shared.link_down(end);
         });
+        if !mirror {
+            // A server of an older version reads no frame of the mirror, so this
+            // computer publishes and follows nothing: its shared terminals and its
+            // sync link are unchanged.
+            shared.lock().mirror.want_not();
+        }
         let mut sent = write_frame(&mut input, &open).is_ok();
         shared.alive.sent();
         while sent {

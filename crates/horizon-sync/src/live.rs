@@ -8,6 +8,7 @@
 
 pub(crate) mod alive;
 mod hub;
+pub(crate) mod mirror;
 mod outbox;
 pub(crate) mod protocol;
 mod relay;
@@ -15,7 +16,9 @@ mod relay;
 mod tests;
 
 pub(crate) use alive::Alive;
+pub use horizon_core::session_mirror::{MirrorEntry, MirrorProgram, MirrorSession};
 pub(crate) use hub::LiveHub;
+pub use mirror::{MAX_MIRROR_ENTRIES, MAX_MIRROR_FOLLOWS, MAX_MIRROR_SESSIONS, MirrorComputer, MirrorList};
 pub use protocol::{
     LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest, LiveState, LiveWatcher,
     MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS,

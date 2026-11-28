@@ -26,7 +26,7 @@ use horizon_core::workspace_list::Orchestrator;
 use super::layout::{dock_fits, dock_rect, dock_width};
 use super::proposal::{self, Choice};
 use super::session::{Said, Session, TOO_LONG_NOTICE};
-use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list};
+use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list, mirror};
 
 /// The most characters of the name of a work item in a notice of the front desk.
 const WORK_ITEM_NOTICE_NAME_CHARS: usize = 40;
@@ -98,6 +98,14 @@ impl HorizonApp {
         let Some(rect) = dock_rect else {
             return;
         };
+        // A mirrored session of another computer, while the dock shows one, with the
+        // snapshot of the mirror that the pump gave this frame.
+        let shown_mirror = self
+            .orchestrator_dock
+            .front_desk()
+            .mirror()
+            .cloned()
+            .map(|key| (key, Arc::clone(&self.shared_terminals.found.mirror)));
         // The worker wakes this window when an outcome is ready, so a start or a
         // stop applies without input.
         self.orchestrator_dock.worker.wake_with(ui.ctx());
@@ -139,6 +147,10 @@ impl HorizonApp {
                     pos2(ui.max_rect().min.x, ui.max_rect().min.y + TOOLBAR_HEIGHT),
                     ui.max_rect().max,
                 );
+                if let Some((key, view)) = &shown_mirror {
+                    mirror::render(ui, content, view, key);
+                    return;
+                }
                 let session = dock.sessions.get(&local_id);
                 let snapshot = session.map(Session::snapshot);
                 // The front desk names its own job in the second line, so the
@@ -148,12 +160,12 @@ impl HorizonApp {
                 // The header and the composer are bottom and top edges of the dock,
                 // so they are worked out first and the list takes the room between
                 // them. A part that drew top down would move the parts under it.
-                let header_height = header::height(ui, content.width(), form, state);
+                let header_height = header::height(ui, content.width(), &form, state);
                 let composer = composer::parts(ui, content, dock.draft(&local_id), composer_form);
                 let parts = layout::parts(content, header_height, composer.rect.height());
-                back = header::render(ui, parts.header, form, state);
+                back = header::render(ui, parts.header, &form, state);
                 #[cfg(test)]
-                dock.set_last_header(parts.header, form);
+                dock.set_last_header(parts.header, &form);
                 let draft = dock.drafts.entry(local_id.clone()).or_default();
                 asked = composer::render(ui, &composer, draft, true, busy, composer_form);
                 match snapshot {

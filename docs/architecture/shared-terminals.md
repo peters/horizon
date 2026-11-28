@@ -111,6 +111,10 @@ at most 256 KiB. A computer sends `live` frames, and the server sends
 {"live_event":"heartbeat"}
 ```
 
+A version 10 server also carries the frames of the session mirror, which the
+section [The frames of the session mirror](#the-frames-of-the-session-mirror)
+gives.
+
 ### The requests of a computer
 
 | Request | Fields | What it says | Bound |
@@ -150,6 +154,41 @@ The `reason` of `ended` is one of four values:
 | `not_found` | The owner has no live link, or it does not share that panel, or the panel is a panel of the computer that asked. |
 | `limit` | The panel has 4 followers, or the computer that asked follows 8 panels. |
 
+### The frames of the session mirror
+
+The session mirror travels on the same live link, in frames of its own. A
+computer joins it with `mirror_open`, and the server sends a frame of the mirror
+only to a link that sent that request, so a computer of an older build reads no
+such frame and keeps its shared terminals. A computer sends `mirror_open` only to
+a server that answered version 10 or higher. The design is in
+[`session-mirror.md`](session-mirror.md).
+
+| Request | Fields | What it says |
+|---|---|---|
+| `mirror_open` | None | This link takes part in the session mirror. |
+| `mirror_sessions` | `sessions`, `unreadable` | The full list of the sessions of this publisher. It replaces the last list. |
+| `mirror_follow` | `owner`, `program`, `session` | Start the follow of one session of the computer `owner`. |
+| `mirror_unfollow` | `owner`, `program`, `session` | End that follow. |
+| `mirror_entries` | `program`, `session`, `entries`, `tail` | The entries of one followed session: the whole bounded tail when `tail` is set, then the new entries. |
+
+| Event | Fields | What it says |
+|---|---|---|
+| `mirror_computers` | `computers` | The publishing computers and the sessions that each one lists. |
+| `mirror_watched` | `program`, `session`, `watched` | To a publisher: a computer follows this session now, or no computer follows it. |
+| `mirror_entries` | `owner`, `program`, `session`, `entries`, `tail` | To a follower: the entries of the followed session. |
+| `mirror_ended` | `owner`, `program`, `session`, `reason` | To a follower: the follow ended or did not start. The `reason` is one of the four values above. |
+
+A program is `claude`, `codex`, `pi` or `antigravity`. One session holds its
+program, its id, a title, the name and the parent of its folder, the time of its
+last change and the flag that says that a process runs it. One entry is one of
+four things: `person`, `agent`, `tool` with a name and a request, and `notice`.
+The bounds of a session, an entry and a frame are in
+[`session-mirror.md`](session-mirror.md).
+
+The hub relays a session only to the computers of its own server, and it writes
+no text of a session to the store or to the log. An entry of a session that no
+computer follows is dropped.
+
 ### The texts and their bounds
 
 The server removes the control characters of each text and cuts the text at its
@@ -175,7 +214,9 @@ computers type in it. A request that names a computer or a panel that the
 server does not hold changes nothing.
 
 A frame with a field that the protocol does not know is not a frame of the
-protocol. A frame whose `data` is not base64 is not one either. The server ends
+protocol. A link that reads a frame of a kind that its build does not know ends
+with `bad_frame`, which is why a build sends a frame of a new kind only to a peer
+that answered a version which knows it. A frame whose `data` is not base64 is not one either. The server ends
 that link with `bad_frame`. An `output` frame or a `typed` frame that is empty
 or above its bound is different: the server drops the frame and keeps the link.
 

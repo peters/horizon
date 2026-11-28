@@ -222,7 +222,49 @@ fn show(event: &LiveEvent) -> String {
         } => format!("resized {panel} {cols}x{rows} from {from} ({label})"),
         LiveEvent::State(state) => format!("state {state:?}"),
         LiveEvent::Heartbeat => "heartbeat".to_owned(),
+        LiveEvent::MirrorComputers { computers } => {
+            let computer = |computer: &horizon_sync::MirrorComputer| {
+                let ids: Vec<&str> = computer.sessions.iter().map(|row| row.session.as_str()).collect();
+                format!("{}[{}]", computer.device, ids.join(","))
+            };
+            format!(
+                "mirror {}",
+                computers.iter().map(computer).collect::<Vec<_>>().join(" ")
+            )
+        }
+        LiveEvent::MirrorWatched {
+            program,
+            session,
+            watched,
+        } => format!("watched {program}/{session} {watched}"),
+        LiveEvent::MirrorEntries {
+            owner,
+            program,
+            session,
+            entries,
+            tail,
+        } => format!(
+            "entries {owner}/{program}/{session} {} tail={tail}",
+            show_entries(entries)
+        ),
+        LiveEvent::MirrorEnded {
+            owner,
+            program,
+            session,
+            reason,
+        } => format!("mirror_ended {owner}/{program}/{session} {reason:?}"),
     }
+}
+
+/// The entries of a frame as one line.
+fn show_entries(entries: &[horizon_sync::MirrorEntry]) -> String {
+    let row = |entry: &horizon_sync::MirrorEntry| match entry {
+        horizon_sync::MirrorEntry::Person { text } => format!("person:{text}"),
+        horizon_sync::MirrorEntry::Agent { text } => format!("agent:{text}"),
+        horizon_sync::MirrorEntry::Tool { name, request } => format!("tool:{name}:{request}"),
+        horizon_sync::MirrorEntry::Notice { text } => format!("notice:{text}"),
+    };
+    entries.iter().map(row).collect::<Vec<_>>().join(",")
 }
 
 fn panel(id: &str, typing: bool) -> LivePanel {

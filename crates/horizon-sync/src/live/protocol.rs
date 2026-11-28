@@ -8,6 +8,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use horizon_core::session_mirror::{MirrorEntry, MirrorProgram, MirrorSession};
+
+use super::mirror::MirrorComputer;
+
 /// The most raw bytes of terminal output in one frame.
 pub const MAX_LIVE_OUTPUT_BYTES: usize = 48 * 1024;
 /// The most raw bytes of typed input in one frame.
@@ -24,6 +28,7 @@ pub const MAX_LIVE_WATCHERS: usize = 4;
 pub(crate) const LABEL_CHARS: usize = 60;
 pub(crate) const DEVICE_CHARS: usize = 40;
 pub(crate) const ID_CHARS: usize = 64;
+pub(crate) const PROGRAM_CHARS: usize = 16;
 
 /// Terminal bytes, which travel as base64 in the JSON of a frame.
 #[derive(Clone, PartialEq, Eq)]
@@ -186,6 +191,37 @@ pub enum LiveRequest {
     /// The sign of life of this link: a link with no other frame for ten seconds
     /// sends one.
     Heartbeat,
+    /// This link takes part in the session mirror: from now on it reads the frames
+    /// of the mirror, and it may send the list of its sessions. A server of an
+    /// older version reads no such request, so a computer sends it only to a server
+    /// that answered [`crate::protocol::MIRROR_PROTOCOL_VERSION`].
+    MirrorOpen,
+    /// The full list of the sessions that this computer publishes. It replaces the
+    /// last list.
+    MirrorSessions {
+        sessions: Vec<MirrorSession>,
+        unreadable: Vec<MirrorProgram>,
+    },
+    /// Starts the follow of one session of the publishing computer `owner`.
+    MirrorFollow {
+        owner: String,
+        program: String,
+        session: String,
+    },
+    /// Ends that follow.
+    MirrorUnfollow {
+        owner: String,
+        program: String,
+        session: String,
+    },
+    /// The entries of one session of this computer that a computer follows: the
+    /// whole bounded tail when `tail` is set, and the new entries after it.
+    MirrorEntries {
+        program: String,
+        session: String,
+        entries: Vec<MirrorEntry>,
+        tail: bool,
+    },
 }
 
 /// One event of a live link: a frame of the server, or the state of the link.
@@ -250,6 +286,31 @@ pub enum LiveEvent {
     /// The sign of life of the server, for a link with nothing else to carry: a
     /// computer that reads none of them for thirty seconds ends the link.
     Heartbeat,
+    /// The publishing computers and the sessions that each one lists, to a link
+    /// that takes part in the mirror.
+    MirrorComputers { computers: Vec<MirrorComputer> },
+    /// To a publisher: a computer follows one of its sessions now, or no computer
+    /// follows it.
+    MirrorWatched {
+        program: String,
+        session: String,
+        watched: bool,
+    },
+    /// To a follower: the entries of the followed session.
+    MirrorEntries {
+        owner: String,
+        program: String,
+        session: String,
+        entries: Vec<MirrorEntry>,
+        tail: bool,
+    },
+    /// To a follower: the follow ended or did not start.
+    MirrorEnded {
+        owner: String,
+        program: String,
+        session: String,
+        reason: LiveEndReason,
+    },
     /// The state of the link changed. The handle of a computer makes this event,
     /// and it does not travel.
     #[serde(skip)]

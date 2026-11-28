@@ -29,6 +29,8 @@ use std::time::{Duration, Instant};
 use horizon_core::{FollowFeed, ShareSource};
 use horizon_sync::{LiveComputer, LiveEvent, LivePanel, LiveState};
 
+use crate::app::session_mirror::{Mirror, MirrorView, MirrorWanted};
+
 use super::follower::Follow;
 use super::owner::Watched;
 use super::{LiveLink, shown};
@@ -74,6 +76,8 @@ pub(super) struct Wanted {
     pub(super) typing: bool,
     pub(super) panels: Vec<OwnPanel>,
     pub(super) follows: Vec<FollowPanel>,
+    /// The session of another computer that the dock shows, while it shows one.
+    pub(super) mirror: MirrorWanted,
 }
 
 /// What the pump found, for the section of the sidebar and for the chips.
@@ -86,6 +90,9 @@ pub(in crate::app) struct Found {
     pub(in crate::app) chips: HashMap<String, String>,
     /// Why the live link is down. It stays until the link opens.
     pub(in crate::app) down: Option<String>,
+    /// The sessions that the other computers publish, and the entries of the session
+    /// that the dock follows, as the last pass of the pump read them.
+    pub(in crate::app) mirror: Arc<MirrorView>,
 }
 
 /// What the window and the pump share.
@@ -179,6 +186,8 @@ impl Pump {
             follows: Vec::new(),
             found: Found::default(),
             changed: false,
+            session_mirror: Mirror::default(),
+            mirror_sent: MirrorWanted::default(),
         };
         let state = Arc::clone(&shared);
         let thread = std::thread::Builder::new().name("share-pump".to_owned());
@@ -221,6 +230,9 @@ pub(super) struct Run {
     /// What the window reads, and whether the window does not have it yet.
     pub(super) found: Found,
     pub(super) changed: bool,
+    /// The frames of the mirror that this pass read, and what the link has of them.
+    session_mirror: Mirror,
+    mirror_sent: MirrorWanted,
 }
 
 impl Run {
@@ -253,6 +265,11 @@ impl Run {
         }
         if fresh {
             self.apply_wanted();
+            self.apply_mirror();
+        }
+        if let Some(view) = self.session_mirror.snapshot() {
+            self.found.mirror = view;
+            self.changed = true;
         }
         self.drain_watched(now);
         self.pump_follows(now);
@@ -292,6 +309,12 @@ impl Run {
                 cols,
                 rows,
             } => self.resized(&panel, cols, rows, &from, &label),
+            LiveEvent::MirrorComputers { .. }
+            | LiveEvent::MirrorEntries { .. }
+            | LiveEvent::MirrorEnded { .. }
+            | LiveEvent::MirrorWatched { .. } => {
+                self.session_mirror.apply(&event);
+            }
             stream => self.stream(stream),
         }
     }
@@ -304,7 +327,31 @@ impl Run {
         if lost {
             self.unwatch_all();
             self.follows_lost();
+            // A link that ended holds no list of the mirror: the next link sends it
+            // again, and this window follows its session again.
+            self.session_mirror.clear();
+            self.mirror_sent = MirrorWanted::default();
         }
+    }
+
+    /// Tells the link what the window wants of the mirror: whether it reads the
+    /// frames of the mirror at all, and the one session that the dock shows.
+    fn apply_mirror(&mut self) {
+        if self.wanted.mirror == self.mirror_sent {
+            return;
+        }
+        self.link.open_mirror();
+        if let Some(before) = self.mirror_sent.follow.as_ref()
+            && self.wanted.mirror.follow.as_ref() != Some(before)
+        {
+            self.link
+                .unfollow_mirror(&before.device, before.program.key(), &before.session);
+        }
+        if let Some(follow) = self.wanted.mirror.follow.as_ref() {
+            self.link
+                .follow_mirror(&follow.device, follow.program.key(), &follow.session);
+        }
+        self.mirror_sent.clone_from(&self.wanted.mirror);
     }
 
     /// Takes a new copy of what the window wants: the list goes to the link

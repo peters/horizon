@@ -223,6 +223,12 @@ impl StandIn {
 }
 
 impl LiveLink for StandIn {
+    fn open_mirror(&self) {}
+
+    fn follow_mirror(&self, _owner: &str, _program: &str, _session: &str) {}
+
+    fn unfollow_mirror(&self, _owner: &str, _program: &str, _session: &str) {}
+
     fn set_panels(&self, panels: Vec<LivePanel>) {
         let mut relay = self.relay();
         relay.panels = panels;

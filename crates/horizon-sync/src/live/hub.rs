@@ -8,16 +8,20 @@
 //! log line names devices and counts, never a title or a byte of a panel.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, PoisonError},
     thread,
     time::{Duration, Instant},
 };
 
+use super::mirror::{MAX_MIRROR_FOLLOWS, MirrorComputer, MirrorList, clean_entries, clean_list};
 use super::outbox::{Outbox, Push, Tag};
+use horizon_core::session_mirror::MirrorEntry;
+
 use super::protocol::{
     DEVICE_CHARS, ID_CHARS, LABEL_CHARS, LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest,
-    LiveWatcher, MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS, clean, clean_panels,
+    LiveWatcher, MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS, PROGRAM_CHARS,
+    clean, clean_panels,
 };
 use crate::protocol::LinkErrorCode;
 use crate::server::LinkTicket;
@@ -72,8 +76,22 @@ struct State {
     /// The live link of each device.
     links: BTreeMap<String, Link>,
     follows: Vec<Follow>,
+    /// The links that take part in the session mirror.
+    mirror_links: BTreeSet<String>,
+    /// The sessions that each publishing computer lists.
+    mirror_lists: BTreeMap<String, MirrorList>,
+    /// The sessions that each computer follows.
+    mirror_follows: Vec<MirrorFollow>,
     /// The links that must end, which end after the lock is free.
     ending: Vec<(Arc<LinkTicket>, LinkErrorCode, &'static str)>,
+}
+
+/// One computer that follows one session of one publishing computer.
+struct MirrorFollow {
+    follower: String,
+    owner: String,
+    program: String,
+    session: String,
 }
 
 /// The live links of one server.
@@ -285,7 +303,22 @@ impl State {
         for follow in self.follows.extract_if(.., left).collect::<Vec<Follow>>() {
             self.watchers(&follow.owner, &follow.panel, false);
         }
+        self.drop_mirror(device);
         Some(link)
+    }
+
+    /// Forgets the sessions of `device` in the mirror, and the follows that it had
+    /// both ways. A follower reads why its follow ended, and a publisher reads who
+    /// follows its sessions now. The caller sends the mirror list.
+    fn drop_mirror(&mut self, device: &str) {
+        self.mirror_links.remove(device);
+        self.mirror_lists.remove(device);
+        self.end_mirror_follows(|follow| follow.owner == device, LiveEndReason::Offline);
+        let left = |follow: &mut MirrorFollow| follow.follower == device;
+        for follow in self.mirror_follows.extract_if(.., left).collect::<Vec<MirrorFollow>>() {
+            self.mirror_watched(&follow.owner, &follow.program, &follow.session);
+        }
+        self.mirror_changed(None);
     }
 
     /// Replaces the list of `device`. The followers of a panel that left read
@@ -363,6 +396,40 @@ impl State {
             }
             // A second `open` changes nothing, a heartbeat only says that the
             // computer is there, and a frame over its bound is dropped, not obeyed.
+            LiveRequest::MirrorOpen => {
+                self.mirror_links.insert(owner);
+                self.mirror_changed(Some(device));
+            }
+            LiveRequest::MirrorSessions { sessions, unreadable } => {
+                self.set_mirror_list(device, MirrorList { sessions, unreadable });
+            }
+            LiveRequest::MirrorFollow {
+                owner: of,
+                program,
+                session,
+            } => {
+                let (of, program, session) = (
+                    clean(&of, DEVICE_CHARS),
+                    clean(&program, PROGRAM_CHARS),
+                    clean(&session, ID_CHARS),
+                );
+                self.mirror_follow(device, &of, &program, &session);
+            }
+            LiveRequest::MirrorUnfollow {
+                owner: of,
+                program,
+                session,
+            } => {
+                self.mirror_unfollow(device, &of, &program, &session);
+            }
+            LiveRequest::MirrorEntries {
+                program,
+                session,
+                entries,
+                tail,
+            } => {
+                self.mirror_entries(device, &program, &session, entries, tail);
+            }
             LiveRequest::Open { .. }
             | LiveRequest::Heartbeat
             | LiveRequest::Output { .. }
@@ -513,5 +580,189 @@ impl State {
                 Tag::Kept,
             );
         }
+    }
+}
+
+impl State {
+    /// The publishing computers and the sessions that each one lists, cut to one
+    /// list: the sessions of all computers share [`LIST_BYTES`], an equal part for
+    /// each computer.
+    fn mirror_computers(&self) -> Vec<MirrorComputer> {
+        let part = LIST_BYTES / self.mirror_lists.len().max(1);
+        self.mirror_lists
+            .iter()
+            .map(|(device, list)| {
+                let mut bytes = 0;
+                let mut sessions = Vec::new();
+                for session in &list.sessions {
+                    bytes += serde_json::to_vec(session).map_or(part, |json| json.len() + 1);
+                    if bytes > part {
+                        break;
+                    }
+                    sessions.push(session.clone());
+                }
+                MirrorComputer {
+                    device: device.clone(),
+                    label: self.label(device),
+                    sessions,
+                    unreadable: list.unreadable.clone(),
+                    own: false,
+                }
+            })
+            .collect()
+    }
+
+    /// Sends the lists of the mirror to every link that takes part in it, but
+    /// `except`. The newest list replaces the list that still waits for a link.
+    fn mirror_changed(&mut self, except: Option<&str>) {
+        if self.mirror_links.is_empty() {
+            return;
+        }
+        let computers = self.mirror_computers();
+        let devices: Vec<String> = self.mirror_links.iter().cloned().collect();
+        for device in devices.iter().filter(|device| Some(device.as_str()) != except) {
+            let computers = computers.clone();
+            self.send(device, LiveEvent::MirrorComputers { computers }, Tag::List);
+        }
+    }
+
+    /// Replaces the list of the sessions of the publisher `device`. A follow of a
+    /// session that left the list ends, and every link of the mirror reads the new
+    /// list.
+    fn set_mirror_list(&mut self, device: &str, list: MirrorList) {
+        if !self.mirror_links.contains(device) {
+            return;
+        }
+        let list = clean_list(list);
+        if self.mirror_lists.get(device) == Some(&list) {
+            return;
+        }
+        let listed: Vec<(String, String)> = list
+            .sessions
+            .iter()
+            .map(|session| (session.program.key().to_owned(), session.session.clone()))
+            .collect();
+        self.mirror_lists.insert(device.to_owned(), list);
+        let left = |follow: &mut MirrorFollow| {
+            follow.owner == device && !listed.contains(&(follow.program.clone(), follow.session.clone()))
+        };
+        self.end_mirror_follows(left, LiveEndReason::Closed);
+        tracing::info!(device, sessions = listed.len(), "a publisher listed its sessions");
+        self.mirror_changed(None);
+    }
+
+    /// Starts the follow of one session of one publisher, or answers why it does
+    /// not start. The publisher reads who follows the session now, so it sends the
+    /// entries of that session only while one computer follows it.
+    fn mirror_follow(&mut self, device: &str, owner: &str, program: &str, session: &str) {
+        let listed = owner != device
+            && self.mirror_links.contains(owner)
+            && self.mirror_lists.get(owner).is_some_and(|list| {
+                list.sessions
+                    .iter()
+                    .any(|row| row.program.key() == program && row.session == session)
+            });
+        let same = self.mirror_follows.iter().any(|follow| {
+            follow.follower == device && follow.owner == owner && follow.program == program && follow.session == session
+        });
+        let mine = self
+            .mirror_follows
+            .iter()
+            .filter(|follow| follow.follower == device)
+            .count();
+        let refused = if !listed {
+            Some(LiveEndReason::NotFound)
+        } else if !same && mine >= MAX_MIRROR_FOLLOWS {
+            Some(LiveEndReason::Limit)
+        } else {
+            if !same {
+                self.mirror_follows.push(MirrorFollow {
+                    follower: device.to_owned(),
+                    owner: owner.to_owned(),
+                    program: program.to_owned(),
+                    session: session.to_owned(),
+                });
+            }
+            None
+        };
+        match refused {
+            Some(reason) => self.send_mirror_ended(device, owner, program, session, reason),
+            None => self.mirror_watched(owner, program, session),
+        }
+    }
+
+    /// Ends the follow of one session of `device`.
+    fn mirror_unfollow(&mut self, device: &str, owner: &str, program: &str, session: &str) {
+        let left = |follow: &mut MirrorFollow| {
+            follow.follower == device && follow.owner == owner && follow.program == program && follow.session == session
+        };
+        if self.mirror_follows.extract_if(.., left).count() > 0 {
+            self.mirror_watched(owner, program, session);
+        }
+    }
+
+    /// Tells `owner` whether one computer follows one of its sessions now.
+    fn mirror_watched(&mut self, owner: &str, program: &str, session: &str) {
+        let watched = self
+            .mirror_follows
+            .iter()
+            .any(|follow| follow.owner == owner && follow.program == program && follow.session == session);
+        let event = LiveEvent::MirrorWatched {
+            program: program.to_owned(),
+            session: session.to_owned(),
+            watched,
+        };
+        self.send(owner, event, Tag::Kept);
+    }
+
+    /// Relays the entries of one followed session of `device` to each computer that
+    /// follows it. Entries of a session that no computer follows are dropped, so the
+    /// server keeps nothing of a session that nobody reads.
+    fn mirror_entries(&mut self, device: &str, program: &str, session: &str, entries: Vec<MirrorEntry>, tail: bool) {
+        let entries = clean_entries(entries);
+        if entries.is_empty() {
+            return;
+        }
+        let followers: Vec<String> = self
+            .mirror_follows
+            .iter()
+            .filter(|follow| follow.owner == device && follow.program == program && follow.session == session)
+            .map(|follow| follow.follower.clone())
+            .collect();
+        for follower in followers {
+            let event = LiveEvent::MirrorEntries {
+                owner: device.to_owned(),
+                program: program.to_owned(),
+                session: session.to_owned(),
+                entries: entries.clone(),
+                tail,
+            };
+            self.send(&follower, event, Tag::Kept);
+        }
+    }
+
+    /// Ends the follows that `ended` names, and tells each follower why.
+    fn end_mirror_follows(&mut self, ended: impl FnMut(&mut MirrorFollow) -> bool, reason: LiveEndReason) {
+        let over: Vec<MirrorFollow> = self.mirror_follows.extract_if(.., ended).collect();
+        for MirrorFollow {
+            follower,
+            owner,
+            program,
+            session,
+        } in over
+        {
+            self.send_mirror_ended(&follower, &owner, &program, &session, reason);
+        }
+    }
+
+    /// Tells one follower that its follow ended, or did not start.
+    fn send_mirror_ended(&mut self, follower: &str, owner: &str, program: &str, session: &str, reason: LiveEndReason) {
+        let event = LiveEvent::MirrorEnded {
+            owner: owner.to_owned(),
+            program: program.to_owned(),
+            session: session.to_owned(),
+            reason,
+        };
+        self.send(follower, event, Tag::Kept);
     }
 }

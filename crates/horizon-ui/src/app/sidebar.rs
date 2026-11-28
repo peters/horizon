@@ -8,6 +8,7 @@ pub(in crate::app) mod inbox;
 mod list;
 pub(in crate::app) mod machines;
 mod menus;
+mod mirror_rows;
 mod new_workspace;
 mod panel_rows;
 mod place;
@@ -128,6 +129,11 @@ struct SidebarActions {
     /// A click on the row of a terminal of another computer: the computer and
     /// the panel that the follow panel shows.
     open_shared_terminal: Option<(String, String)>,
+    /// A press on the row of a mirrored session of another computer: the session
+    /// that the dock shows.
+    mirror_session: Option<crate::app::session_mirror::MirrorKey>,
+    /// A press on the row `and <N> more` of a publishing computer.
+    mirror_more: Option<String>,
     /// A confirmed "Forget this machine" on the row of this machine.
     forget_machine: Option<String>,
     /// A press on `+ Rent a machine`, which sends the message of the button to
@@ -620,6 +626,12 @@ impl HorizonApp {
         }
         if let Some((device, panel)) = &actions.open_shared_terminal {
             self.open_shared_terminal(device, panel, ctx);
+        }
+        if let Some(device) = &actions.mirror_more {
+            self.shared_terminals.mirror.expand(device);
+        }
+        if let Some(key) = &actions.mirror_session {
+            self.orchestrator_dock.front_desk_mut().show_mirror(key.clone());
         }
     }
 

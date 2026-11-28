@@ -12,6 +12,7 @@ use crate::theme;
 
 use super::super::HorizonApp;
 use super::super::shared_terminals::{attention_of, computer_name, kind_of};
+use super::mirror_rows;
 use super::panel_rows::{self, PANEL_ROW_HEIGHT, PanelRowLook, PanelRowState};
 use super::{SidebarActions, caption, rows, text};
 
@@ -20,7 +21,8 @@ impl HorizonApp {
     pub(super) fn render_sidebar_computers(&self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
         let shared = &self.shared_terminals;
         let (computers, down) = (&shared.found.computers, &shared.found.down);
-        if computers.is_empty() && down.is_none() {
+        let listing = &shared.found.mirror;
+        if computers.is_empty() && down.is_none() && listing.is_empty() {
             return;
         }
         caption::group(ui, caption::COMPUTERS, None, &[]);
@@ -39,8 +41,27 @@ impl HorizonApp {
                     actions.open_shared_terminal = Some((computer.device.clone(), panel.id.clone()));
                 }
             }
+            // The sessions that this computer publishes, under the panels that it
+            // shares: the mark of the program, the title and the time of the last
+            // change, or the dot of a session that a process runs.
+            let Some(publisher) = listing.computers.iter().find(|listed| listed.device == computer.device) else {
+                continue;
+            };
+            match mirror_rows::render(ui, publisher, shared.mirror.is_expanded(&computer.device), now_millis()) {
+                Some(mirror_rows::Press::Session(key)) => actions.mirror_session = Some(key),
+                Some(mirror_rows::Press::More) => actions.mirror_more = Some(computer.device.clone()),
+                None => {}
+            }
         }
     }
+}
+
+/// The clock of this frame, in milliseconds, which the words of the times of the
+/// mirrored sessions count from. A frame reads it one time, and not once for each row.
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// The most rows that the reason of a link that is down takes: the sidebar is

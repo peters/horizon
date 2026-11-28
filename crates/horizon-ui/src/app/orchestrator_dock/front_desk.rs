@@ -19,6 +19,8 @@
 
 use horizon_core::{Board, OrchestratorConversationState, WorkspaceId};
 
+use crate::app::session_mirror::MirrorKey;
+
 /// The key of the conversation of the front desk. It is also the name of the
 /// folder of the front desk under the Horizon home, and the name of its stored
 /// file in the session folder.
@@ -31,6 +33,9 @@ pub(in crate::app) struct FrontDesk {
     record: Option<OrchestratorConversationState>,
     /// Whether the dock shows the front desk instead of a workspace.
     shown: bool,
+    /// The mirrored session of another computer that the dock shows, when it shows
+    /// one instead of the front desk or a workspace.
+    mirror: Option<MirrorKey>,
     /// Whether a frame read the active workspace of the board yet, and which one
     /// it read. A workspace that the start restored is no change of this run.
     active_read: bool,
@@ -43,6 +48,7 @@ impl Default for FrontDesk {
             record: None,
             // The start of Horizon shows the front desk.
             shown: true,
+            mirror: None,
             active_read: false,
             active_seen: None,
         }
@@ -53,6 +59,11 @@ impl FrontDesk {
     /// The key of the conversation that the dock shows on `board`: [`FRONT_DESK`],
     /// or the `local_id` of the active workspace of that board.
     pub(in crate::app) fn key<'a>(&self, board: &'a Board) -> &'a str {
+        if self.mirror.is_some() {
+            // The dock shows a session of another computer, so no conversation of a
+            // workspace is on it.
+            return FRONT_DESK;
+        }
         let active = board
             .active_workspace
             .and_then(|id| board.workspace(id))
@@ -67,19 +78,33 @@ impl FrontDesk {
     /// draw no active workspace row and the button `+ Rent a machine` reads to
     /// disable itself.
     pub(in crate::app) fn shows(&self, board: &Board) -> bool {
-        self.key(board) == FRONT_DESK
+        self.mirror.is_none() && self.key(board) == FRONT_DESK
     }
 
     /// Shows the front desk, which the back control of the header and the command
     /// `Show Front Desk` of the palette do.
     pub(in crate::app) fn show(&mut self) {
         self.shown = true;
+        self.mirror = None;
     }
 
     /// Shows the conversation of the active workspace, which a press on a row of
     /// the sidebar does.
     pub(in crate::app) fn show_workspace(&mut self) {
         self.shown = false;
+        self.mirror = None;
+    }
+
+    /// Shows the mirrored session of `key` of another computer, which a press on its
+    /// row of the group `COMPUTERS` does.
+    pub(in crate::app) fn show_mirror(&mut self, key: MirrorKey) {
+        self.mirror = Some(key);
+    }
+
+    /// The mirrored session that the dock shows, and that this window follows while
+    /// it shows it.
+    pub(in crate::app) fn mirror(&self) -> Option<&MirrorKey> {
+        self.mirror.as_ref()
     }
 
     /// Follows the active workspace of `board`: a change of it shows that
@@ -89,6 +114,7 @@ impl FrontDesk {
         let active = board.active_workspace;
         if self.active_read && self.active_seen != active {
             self.shown = false;
+            self.mirror = None;
         }
         self.active_read = true;
         self.active_seen = active;

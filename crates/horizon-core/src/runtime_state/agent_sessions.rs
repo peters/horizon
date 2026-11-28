@@ -596,6 +596,21 @@ fn load_pi_sessions() -> Vec<AgentSessionRecord> {
     load_pi_sessions_from_dir(&sessions_dir)
 }
 
+/// The sessions of the Pi store of `home`, newest first, read from that folder
+/// alone.
+///
+/// The mirror of a publishing computer lists the sessions of every program that
+/// this build reads, and the Pi store is read by this one reader: a caller names
+/// the folder that is read, so a test never reads the home of a person.
+pub(crate) fn load_pi_sessions_of_home(home: &Path) -> Vec<AgentSessionRecord> {
+    crate::ui_thread::blocking("the Pi session store is read");
+    let sessions_dir = home.join(".pi/agent/sessions");
+    if !sessions_dir.exists() {
+        return Vec::new();
+    }
+    load_pi_sessions_from_dir(&sessions_dir)
+}
+
 fn load_pi_sessions_from_dir(sessions_dir: &Path) -> Vec<AgentSessionRecord> {
     let mut session_paths = Vec::new();
     collect_pi_session_files(sessions_dir, &mut session_paths);
