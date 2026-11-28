@@ -464,6 +464,24 @@ fn a_worker_of_the_chip_opens_one_panel_with_the_preset_and_the_sentence() {
     let _ = REPORT_SENTENCE;
 }
 
+/// A run with the real program asked for a preset by its alias. The chip holds
+/// the name of the preset, so the request of an allowed program by its alias
+/// starts the worker and asks nothing again.
+#[test]
+fn a_request_by_the_alias_of_a_program_of_the_chip_starts_with_no_press() {
+    let (temp, ctx, mut app) = app();
+    let mut preset = agent_preset(temp.path(), "Worker Codex");
+    preset.alias = Some("wcx".to_owned());
+    let name = preset.name.clone();
+    app.template_config.presets.push(preset);
+    let local_id = running(&mut app, 0);
+    app.orchestrator_dock.allow_worker_program(&local_id, &name);
+
+    let outcome = start(&mut app, &ctx, 0, "wcx", "task by alias");
+
+    assert!(matches!(outcome, Outcome::WorkerStarted { .. }), "{outcome:?}");
+}
+
 #[test]
 fn a_fifth_worker_of_one_orchestrator_is_refused() {
     let (temp, ctx, mut app) = app();

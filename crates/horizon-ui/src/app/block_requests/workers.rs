@@ -92,12 +92,9 @@ impl HorizonApp {
                 ),
             );
         }
-        if !self
-            .orchestrator_dock
-            .workers_allowed(&local_id)
-            .iter()
-            .any(|held| held == name)
-        {
+        // The chip holds the name of a preset, and a request names a preset by its
+        // name or by its alias.
+        if !self.orchestrator_dock.workers_allowed(&local_id).contains(&preset.name) {
             if self.orchestrator_dock.worker_ask_declined(&local_id, &preset.name) {
                 return Outcome::failed(
                     NOT_ALLOWED,
