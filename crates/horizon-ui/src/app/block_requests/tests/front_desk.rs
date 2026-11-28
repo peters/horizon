@@ -788,3 +788,25 @@ fn a_turn_that_ends_on_the_screen_is_still_one_finished_notice_of_the_front_desk
         1
     );
 }
+
+/// A real run showed two cards that hid their own text: a new workspace starts
+/// with the grid arrangement, and a tile of an arranged workspace keeps the size
+/// of the preset. A work item of the front desk starts with no arrangement, so the
+/// card of its orchestrator takes the size of its content.
+#[test]
+fn a_work_item_of_a_proposal_starts_with_no_arrangement() {
+    let (temp, ctx, mut app) = app();
+    running_front_desk(&temp, &ctx, &mut app);
+    let id = propose(&mut app, &ctx, two_items());
+    app.press_proposal(&ctx, &id, Choice::Start);
+    let _ = wait_work_item(&mut app, "Faster cold start");
+    for name in ["Faster cold start", "Fix login redirect"] {
+        let workspace = workspace_named(&app, name).expect("the work item");
+        assert!(
+            app.board
+                .workspace(workspace)
+                .is_some_and(|workspace| workspace.layout.is_none()),
+            "{name} starts with no arrangement, so its cards fit their content"
+        );
+    }
+}

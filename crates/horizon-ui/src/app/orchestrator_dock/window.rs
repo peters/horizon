@@ -302,6 +302,13 @@ impl HorizonApp {
         let mut started: Vec<(String, String)> = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let workspace = self.board.create_workspace(&item.title);
+            // A new workspace starts with the grid arrangement, and an arranged
+            // workspace gives every tile the size of the preset: a card of the
+            // orchestrator would then hide its own text behind `More below`, as a
+            // real run showed. The panels of a work item are cards that take the
+            // size of their content, so the work item starts with no arrangement,
+            // as the workspace of a machine does.
+            self.board.clear_workspace_layout(workspace);
             let Some(local_id) = self
                 .board
                 .workspace(workspace)
