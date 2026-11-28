@@ -25,12 +25,12 @@ use crate::theme;
 
 use super::super::HorizonApp;
 use super::SidebarActions;
-use super::text;
+use super::{caption, text};
 
 mod item;
 
-/// The title of the group, in the form of the group headers of the sidebar.
-pub(in crate::app) const GROUP: &str = "Needs you";
+/// The title of the group, in the form of a caption of the sidebar.
+pub(in crate::app) const GROUP: &str = caption::NEEDS_YOU;
 /// The control that opens the card of a question with more than two answers.
 pub(in crate::app) const OPEN: &str = "Open";
 /// How many questions the group draws before its line `and <N> more`.
@@ -43,8 +43,6 @@ pub(in crate::app) const MAX_TEXT_CHARS: usize = 160;
 pub(in crate::app) const MAX_LABEL_CHARS: usize = 24;
 /// The air between two items.
 const ITEM_GAP: f32 = 6.0;
-/// The air above the group and under it.
-const GROUP_GAP: f32 = 12.0;
 /// The size and the left inset of the line `and <N> more`.
 const MORE_SIZE: f32 = 11.0;
 const MORE_INSET: f32 = 16.0;
@@ -137,9 +135,8 @@ impl HorizonApp {
         let mut asked: Option<(PanelId, String)> = None;
         let mut opened: Option<PanelId> = None;
 
-        ui.add_space(GROUP_GAP);
-        render_heading(ui, questions.len());
-        ui.add_space(ITEM_GAP);
+        let count = self.sidebar_chrome.counts.text(caption::NEEDS_YOU, questions.len());
+        caption::group(ui, GROUP, Some(count), &[]);
         for (index, question) in questions.iter().take(MAX_ITEMS).enumerate() {
             if index > 0 {
                 ui.add_space(ITEM_GAP);
@@ -156,7 +153,6 @@ impl HorizonApp {
             ui.add_space(ITEM_GAP);
             render_more(ui, questions.len() - MAX_ITEMS);
         }
-        ui.add_space(GROUP_GAP);
 
         self.sidebar_list.questions = questions;
         if let Some((panel, id)) = asked {
@@ -229,17 +225,6 @@ fn plain(text: &str, max: usize) -> String {
         .collect()
 }
 
-/// Draws the heading of the group: its name and the count of the questions, in
-/// the form of the group `Agents`.
-fn render_heading(ui: &mut egui::Ui, questions: usize) {
-    ui.horizontal(|ui| {
-        ui.add_space(18.0);
-        ui.label(text::line(ui, GROUP, 13.0, text::SEMIBOLD, theme::FG_SOFT(), 120.0));
-        ui.add_space(6.0);
-        ui.label(text::mono(ui, &questions.to_string(), 11.0, theme::FG_DIM()));
-    });
-}
-
 /// Draws the line that names the questions under the third item.
 fn render_more(ui: &mut egui::Ui, rest: usize) {
     ui.horizontal(|ui| {
@@ -267,6 +252,9 @@ pub(in crate::app) fn asking_card(
     use horizon_browser_control::block::{BlockDocument, Button, Tone};
 
     let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
+    // A question is the question of a card whose owner is here, so the test holds
+    // the program of its orchestrator without starting one.
+    app.orchestrator_dock.mark_running_for_test(&local_id);
     let document = BlockDocument {
         width: None,
         finished: false,

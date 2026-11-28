@@ -246,6 +246,9 @@ fn sidebar_search_field_is_above_the_sidebar_and_accepts_pointer_input() {
         )
         .expect("editor panel");
     let destination = app.board.create_workspace("Destination");
+    // The panel rows of a work item stand under an open fold.
+    let local_id = app.board.workspace(current).expect("the workspace").local_id.clone();
+    app.sidebar_chrome.folds.toggle(&local_id, false);
     app.board.focus(panel);
     app.sidebar_visible = true;
     let ctx = Context::default();

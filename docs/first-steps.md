@@ -283,7 +283,7 @@ does the work and shows each step as a card.
 
 You can start Set up in three places:
 
-1. The control **Set up** in the header of the **Machines** section of the
+1. The icon control **Set up a machine** in the caption `MACHINES` of the
    sidebar. It has no goal, so the agent asks which one you want.
 2. The row **Set up** in the Menu of the titlebar, above Settings. It has no
    goal either.

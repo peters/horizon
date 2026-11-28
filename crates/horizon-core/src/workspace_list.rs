@@ -174,6 +174,13 @@ pub struct Row {
     /// the agents that wait and `on <machine>`. It is empty for a workspace of
     /// this computer where no agent waits and no orchestrator speaks.
     pub line: String,
+    /// The facts of the line without the word of the orchestrator: the count of
+    /// the agents that wait, then `on <machine>`. It is empty for a workspace of
+    /// this computer where no agent waits.
+    pub facts: String,
+    /// The state of the orchestrator of the workspace, which the row shows as the
+    /// one word at its right edge.
+    pub orchestrator: Orchestrator,
 }
 
 impl Row {
@@ -198,12 +205,14 @@ impl Row {
         let line = match (orchestrator.word(), facts.is_empty()) {
             (Some(word), false) => format!("{word} \u{00B7} {facts}"),
             (Some(word), true) => word.to_owned(),
-            (None, _) => facts,
+            (None, _) => facts.clone(),
         };
         Self {
             attention: orchestrator.attention(attention),
             waiting,
             line,
+            facts,
+            orchestrator,
         }
     }
 }

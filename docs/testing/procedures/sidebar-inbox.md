@@ -141,7 +141,7 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 
    Result:
    - The group stands at the top of the sidebar, above the heading
-     `Workspaces`, with the heading `Needs you` and the count `1`.
+     `WORK ITEMS`, with the caption `NEEDS YOU` and the count `1` above it.
    - One item shows the name of the workspace, the text of the callout in two
      rows, and the buttons `Lazy fonts` and `New format` on one row. The first
      button is filled with the accent colour and the second is quiet.

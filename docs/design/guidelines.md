@@ -635,8 +635,9 @@ Rules of thumb:
 | 18 | Focus ring around a focused panel |
 | 16 | Terminal panel body and titlebar, large form dialogs' modal frame, egui windows, file-drop highlight on a panel |
 | 14 | Search dropdown (15 for its outer ring), upload dialog, session manager card |
-| 12 | Default widget radius in the egui style, overlay input wells, summary cards, sidebar workspace rows |
-| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, workspace labels, pills, toolbar search input shell |
+| 12 | Default widget radius in the egui style, overlay input wells, summary cards, agent chips of the sidebar |
+| 10 | Buttons (primary, chrome, danger, 40 px dialog buttons), section cards, selector cards, workspace labels, pills, toolbar search input shell, sidebar work item and machine rows, the control `+ Rent a machine` |
+| 11 | The row `Front desk` of the sidebar |
 | 8 | Tabs, chips, toggle buttons, status frames, palette rows, preset cards |
 | 6 | Search result rows |
 | 4 | Key-hint chips, checkbox box |
@@ -654,7 +655,7 @@ Nested shapes step down: an outer 16 modal holds 10 cards, which hold 8 chips.
 | 24 | Large form dialogs' `inner_margin`; dialog column gutter; settings panel horizontal margin |
 | 16 | Vertical gap after a dialog heading or settings heading; settings section-card margin; settings panel vertical margin |
 | 12 | Gap between a scroll body and its action bar; gap after a settings card |
-| 8 | Gap between form rows in a dialog; sidebar row horizontal inset |
+| 8 | Gap between form rows in a dialog; sidebar row horizontal inset; air before the state word of a work item row |
 | 6 | Gap between preset cards |
 | 4 | Gap between tabs in the tab bar |
 
@@ -1187,136 +1188,161 @@ The page of four starts answers the size of the window.
 - Workspace labels on the canvas use `blend(PANEL_BG_ALT, accent, t)`
   with `t` = 0.08 rest, 0.14 active, 0.18 hover, 0.22 dragging, radius 10, and a
   1 px accent outline (alpha 90 rest, 160 active or hover).
-- The group `Needs you` stands at the top of the sidebar, above the heading of
-  the workspaces. A frame draws the group only while a card of the board asks a
-  question, so a window with no question has no heading there and no height. A
-  question is a card that is open, whose document is not `finished`, and that
-  holds a `callout` with at least one button that nobody pressed. The first such
-  callout of the card is its question. The group shows the three oldest
-  questions, the oldest first: the time of the last update of the card, then the
-  order of the board.
-- The heading is the heading of the `Agents` group: `Needs you` in Inter 13 at
-  weight 620 in `FG_SOFT`, 18 px from the left edge, then the count of the
-  questions in JetBrains Mono 11 `FG_DIM`, 6 px after the name. With more than
-  three questions, the line `and <N> more` follows the third item, at 11 pt in
-  `FG_DIM`, 16 px from the left edge.
-- One item is a box 8 px in at each side of the sidebar, radius 12, with a
-  padding of 10 on all sides. Items stand 6 apart, and the group keeps 12 above
-  it and 12 below it. The fill is `alpha(PALETTE_YELLOW, 23)` and the outline is
+- The sidebar has five groups, from the top to the bottom: the row `Front desk`,
+  the group `NEEDS YOU`, the group `WORK ITEMS`, the group `MACHINES` and the
+  group `AGENTS`. The footer stays at the bottom edge and does not move. The gap
+  between two groups is 14. The groups above the footer scroll when they are
+  taller than the room that the footer leaves.
+- The row `Front desk` shows only while the orchestrator dock is visible. It is 8
+  in from each side, 38 high, has radius 11 and a padding of 10. The gap above it
+  is 12. A glyph 16 x 16 stands at its left: a rounded rectangle 12 x 8 with
+  radius 2.5 and a top 3 under the top of the glyph, a stem 3 under the centre of
+  the rectangle, and a foot 6 wide under the stem, all of them in lines of 1.5 in
+  `ACCENT`. The gap after the glyph is 10, then the label `Front desk` in Inter 13
+  at weight 620. The state word of the front desk conversation stands at the right
+  edge, 10 in, in JetBrains Mono 10 `FG_DIM`, and it is empty while that word is
+  `not connected`. While the dock shows the front desk, the row has the fill
+  `alpha(ACCENT, 28)` and a 1 px outline `alpha(ACCENT, 102)`, and its label is
+  `FG`. Otherwise the row has no fill and no outline, its label is `FG_SOFT`, and
+  a hover adds the fill `PANEL_BG_ALT`. A press shows the front desk in the dock,
+  as the back control of the header does. The accessible name is `Front desk`.
+- Every group heading is a caption: the name in upper case, Inter 10 at weight
+  620 in `FG_DIM`, with an extra letter spacing of 1.1, 16 from the left edge of
+  the sidebar. The count of the group follows 8 after the name, in JetBrains Mono
+  10 at weight 400 in `FG_DIM`; a group with no count shows none. A caption is 22
+  high. The gap from a caption to the first row of its group is 6.
+- The icon controls of a caption stand at the right edge, 12 in and 4 apart. A
+  control is 22 x 22 with radius 7 and no fill. A hover adds the fill
+  `PANEL_BG_ALT` and a 1 px `BORDER_SUBTLE` outline. The glyph is drawn in lines
+  of 1.5 in `FG_SOFT`, and in `FG` during the hover. There are two glyphs: plus,
+  two lines 9 long that cross at the centre; and fit, the four corner marks of a
+  square 10 x 10, each one two lines 3 long. Each control has a hover text, and
+  the same words are its accessible name.
+- The group `NEEDS YOU` keeps the items of the questions. A frame draws the group
+  only while a card of the board asks a question, so a window with no question has
+  no caption there and no height. A question is a card that is open, whose
+  document is not `finished`, and that holds a `callout` with at least one button
+  that nobody pressed. The first such callout of the card is its question. The
+  group shows the three oldest questions, the oldest first: the time of the last
+  update of the card, then the order of the board. The caption carries the count
+  of the questions. With more than three questions, the line `and <N> more`
+  follows the third item, at 11 pt in `FG_DIM`, 16 from the left edge. Items
+  stand 6 apart.
+- One item is a box 8 in at each side of the sidebar, radius 12, with a padding
+  of 10 on all sides. The fill is `alpha(PALETTE_YELLOW, 23)` and the outline is
   1 px `alpha(PALETTE_YELLOW, 97)`: `PALETTE_YELLOW` is the colour of the
-  needs-you dot of a workspace row. Line 1 is the name of the workspace in Inter
+  needs-you dot of a work item row. Line 1 is the name of the workspace in Inter
   12 at weight 620 in `FG`, one line with an ellipsis. Line 2 stands 7 under it:
   the text of the callout in Inter 11.5 `FG_SOFT`, at most two lines with an
   ellipsis. The buttons stand 7 under line 2.
 - The buttons of an item are the first two buttons of the callout, in its order.
-  A button is 26 high, radius 8, with 10 px of padding at each side of its label,
-  and its label is Inter 11.5 on one line, cut to 24 characters. The first
-  button is `ACCENT` with its label in `BG`, the colour of the window background,
-  at weight 620; the second is `PANEL_BG_ALT` with a 1 px `BORDER_SUBTLE`
-  outline and its label in `FG`. Two buttons stand 6 apart, and a second button
-  that does not fit beside the first goes on the row under it, 6 below. A
-  callout with more than two buttons adds the control `Open` in the form of the
-  second button.
+  A button is 26 high, radius 8, with 10 of padding at each side of its label, and
+  its label is Inter 11.5 on one line, cut to 24 characters. The first button is
+  `ACCENT` with its label in `BG`, the colour of the window background, at weight
+  620; the second is `PANEL_BG_ALT` with a 1 px `BORDER_SUBTLE` outline and its
+  label in `FG`. Two buttons stand 6 apart, and a second button that does not fit
+  beside the first goes on the row under it, 6 below. A callout with more than two
+  buttons adds the control `Open` in the form of the second button.
 - A press on a button of an item is the press on that button of the card: it
   records the same click, on the one path of the clicks of a card, and the
-  question leaves the group on the next read. A press on the body of the item
-  and a press on `Open` show the card: its workspace becomes the active one and
-  the canvas reveals the panel, on the path of a workspace row. A pointer over a
+  question leaves the group on the next read. A press on the body of the item and
+  a press on `Open` show the card: its workspace becomes the active one and the
+  canvas reveals the panel, on the path of a workspace row. A pointer over a
   button or over the body shows the pointing hand, and a line that the item cut
   shows its whole text in the hover text. A screen reader says
   `<workspace>: <text>` for the item.
-- Sidebar workspace rows are cards with an 8 px inset and radius 12. The active
-  workspace has a `PANEL_BG_ALT` card with a 1 px accent outline (alpha 120).
-  Hover is `alpha(PANEL_BG_ALT, 170)` and dragging is
-  `blend(PANEL_BG_ALT, accent, 0.22)`. A row is 50 high, or 38 for a compact
-  parked row.
-- Each workspace row has a tile in the workspace accent: 30 x 30 (26 x 26 for a
-  compact row), radius 9, fill `blend(PANEL_BG_ALT, accent, 0.26)` or 0.42 for
-  the active workspace. The tile shows the first letters of the first two words
-  of the name in Inter weight 700. A status badge sits on the lower-right
-  corner of the tile with a 2 px ring in the surface color. An idle workspace
-  has no badge, so activity stands out.
-- The workspace name is Inter 13.5 at weight 620 (`FG`, or a blend toward
-  `FG_SOFT` for an idle, inactive row). The second line is 12, in `FG_SOFT`
-  blended 0.14 toward `BG_ELEVATED`. It holds facts about the workspace only:
-  the count of the agents that wait, then the machine. It never holds text of
-  the screen of a panel. The panel count is JetBrains Mono 11 in a fixed right
-  column.
-- The second line of a workspace row names the state of its orchestrator first,
-  and the facts of today follow after ` · `. One word stands at most, in this
-  order of weight: `Needs you` (a card of the workspace asks a question that
-  nobody answered), `Failed` (the last turn of its orchestrator failed and the
-  person did not see it in the dock), `Working` (a turn of its orchestrator
-  runs) and `Done` (the last turn of its orchestrator ended well and the person
-  did not see it in the dock). A workspace with no question and no word of its
-  orchestrator shows the facts of today alone. The row carries the needs-you
-  badge for `Needs you` and for `Failed`, the done check mark for `Done`, and
-  for `Working` the state that its panels have. `Done` and `Failed` hold until
-  the dock shows the conversation of that workspace.
-- Group headers are sentence case, Inter 12 at weight 620 in `FG_SOFT`, with the
-  count in JetBrains Mono 11 `FG_DIM` and the summary at the right.
-- Panel rows hang from a 1 px tree guide (`BORDER_STRONG` alpha 200) under the
-  tile. An agent row shows the agent's task (its terminal title without the
-  spinner) next to the kind label. The focused row is
-  `blend(PANEL_BG_ALT, accent, 0.20)` with radius 8. The close button shows
-  only on the hovered or focused row; otherwise a working agent shows a
-  `PALETTE_GREEN` dot in its place.
-- The Machines section sits below the last workspace row, inside the same
-  scroll area, and only while this Horizon keeps a machine. Its header is the
-  sidebar group header: sentence case, Inter 13 at weight 620 in `FG_SOFT`,
-  18 px from the left edge. The agents of the machines that wait for the person
-  are at the right of that header, in the words and the size of the word of a
-  panel row (`1 needs you · 1 done`). A row is 38 high with no vertical gap, an
-  8 px inset for the hover card (radius 10, `alpha(PANEL_BG_ALT, 170)`), and the
-  pointing hand cursor. The fold control is a 12 px chevron (`▾` open, `▸`
-  folded), 10 pt, 8 px from the card's left edge and in `FG` while the row is
-  hovered; its hover text is `Show the agents of <machine>` or `Fold the agents
-  of <machine>`, which is also what a screen reader says. The state dot is 9 px
-  in diameter right of that control: hollow `FG_DIM` when no terminal of the
-  machine is open, hollow `FG_SOFT` while one connects, filled `PALETTE_YELLOW`
-  while it waits to reach the machine again after a lost link, filled
-  `PALETTE_GREEN` when it is connected, and filled `PALETTE_RED` when it is
-  disconnected. The name is Inter 13 at weight 500 `FG` on the first line; the
-  provider line that the agent reported is Inter 11 `FG_SOFT` blended 0.14
-  toward `BG_ELEVATED` on the second line, cut with an ellipsis. A machine whose
-  link is lost says `link lost <relative time>` in the place of that line, and a
-  folded machine shows its summary at the right of the second line, in 9.5 pt
-  like the word of a panel row: `1 needs you · 1 done`, else `2 working`, else
-  nothing. A name that is cut shows the whole name in its hover text. A refused record shows one line 11 in `PALETTE_RED` under the
-  rows for ten seconds. That line is the one notice of this window for an action
-  of the person that opened nothing, so it also says why a panel that the person
-  started could not start, as `<kind> panel: <reason>`, and it stays visible when
-  this Horizon keeps no machine. The row menu holds `Focus` (or `Connect` when no
-  terminal is open) and `Forget this machine`, whose confirm line is the
-  menu's own text.
-- The `Agents` group sits under the machine section, in the same scroll area,
-  and only while the orchestrator dock is on. Its header is the sidebar group
-  header of `Machines`: `Agents` in Inter 13 at weight 620 in `FG_SOFT`, 18 px
-  from the left edge, then the count of the rows in JetBrains Mono 11 `FG_DIM`,
-  6 px after the name. One row stands for each agent program that the
-  orchestrator can use, in this order: Claude, Codex, Pi, Gemini, as
-  `horizon_core::agents` names them. A row is 34 high with an 8 px inset and no
-  card behind the pointer, and it takes no press. The state dot is 8 px at the
-  left edge of the card: filled `PALETTE_GREEN` when a folder of `PATH` holds the
-  program, and hollow `FG_DIM` when it does not or while the search of this run
-  has no answer. The name is Inter 12.5 at weight 500 in `FG`, or `FG_DIM` when
-  this computer has no such program. The line under it is Inter 10.5 `FG_DIM` and
-  reads `on this computer`, `not found on this computer`, or `looking` until the
-  search answers. Both lines start 18 px from the left edge of the sidebar, under
-  the header.
-- The button `+ Rent a machine` stands at the end of the machine section, under
-  its rows or under the line that says where a machine comes from, and only while
-  the orchestrator dock is on. It is 30 high, the full width of the section less
-  12 at each side, radius 10, `PANEL_BG_ALT` fill with a 1 px `BORDER_SUBTLE`
-  outline, and its label is Inter 12.5 `FG`, centred. Hover: the outline is
-  `FG_DIM` and the pointer is a pointing hand. A press sends
-  `Rent a machine for this workspace. Show me the card with the type, the place and the price first.`
-  to the conversation that the dock shows, on the path of the send control of the
-  composer. A dock that shows the front desk draws the label in `FG_DIM` and says
-  `Open a work item first` in its hover, because a machine belongs to one work
-  item. A window without an active workspace draws the label in `FG_DIM` and says
-  `Open a workspace first` in its hover. A window whose orchestrator works draws
-  it so as well, and its hover says `The orchestrator works`.
+- The group `WORK ITEMS` is the group `Workspaces` of the older form. Its caption
+  carries the count of the workspaces and two icon controls: fit, whose hover text
+  is `Fit all in view` and whose press is the press of the button `Fit`; and plus,
+  whose hover text is `New work item` and whose press is the press of the button
+  `New`. The fit takes no press while no workspace is attached to the canvas. The
+  text buttons `New` and `Fit` are gone.
+- A work item row is 8 in from each side, 46 high, has radius 10 and no outline.
+  A press, a drag and a menu of the row keep the rules of the row of the older
+  form. The tile is 30 x 30 with radius 9, its fill is
+  `blend(PANEL_BG_ALT, accent, 0.26)`, or 0.42 for the active row, and it shows
+  the first letters of the first two words of the name in Inter weight 700. A
+  work item row shows no badge on its tile: the word at its right edge carries the
+  state.
+- The name of a work item row is Inter 13 at weight 620 in `FG`. The line under
+  it is the line of the older form without the state word: the count of the agents
+  that wait and `on <machine>`, in Inter 12 at weight 400 in the secondary colour
+  of the sidebar. A row with no fact shows the name alone, in the middle of the
+  row. The name and the line never hold text of the screen of a panel.
+- The state word stands at the right edge of the row, 8 in, in Inter 10.5 at
+  weight 400. A dot 6 x 6 of the same colour stands 5 before it. The word is the
+  word of the orchestrator of the workspace when it has one: `working` in
+  `ACCENT`, `needs you` in `PALETTE_YELLOW`, `failed` in `PALETTE_RED` and `done`
+  in `ACCENT`. A workspace with no word of its orchestrator shows `needs you` or
+  `done` when its attention state carries a badge, and it shows no word otherwise.
+  The name and the line end 8 before the word. The badge `NEW WINDOW` of a
+  detached workspace stands left of the word and keeps its rule.
+- The active work item row has the fill `alpha(<workspace accent>, 23)` and a bar
+  3 wide of the workspace accent at the left edge of the sidebar, from 10 under
+  the top of the row to 10 over its bottom, with radius 3 on its two right
+  corners. A row under the pointer that is not active has the fill
+  `alpha(PANEL_BG_ALT, 128)`. The drag and drop of the rows, their menus and the
+  reveal of a press keep their rules.
+- The panel rows of a work item are folded at the start of a run. A chevron
+  stands at the right end of the row, 6 in: 18 x 18, drawn in lines of 1.5 in
+  `FG_DIM` and in `FG` during the hover. It points right while the row is folded
+  and down while the row is open. It shows while the pointer is on the row or the
+  row is open. Its hover text is `Show panels` or `Hide panels`, and the same
+  words are its accessible name. A press on it opens or folds the panel rows of
+  that row and does nothing else. The state word moves 22 left while the control
+  shows. A work item with no panel has no control. While the setting of the
+  accordion is on, opening one work item folds the others. The fold is a state of
+  the run and it is not saved with the session. A panel row keeps its form.
+- The group `MACHINES` has the caption `MACHINES` with the count of the machines,
+  and no count at zero. Its icon control plus has the hover text `Set up a
+  machine`, and its press is the press of the button `Set up`. The text button
+  `Set up`, the line of the server and the paragraph `No machines yet. Set up
+  rents one, or adds the Horizon server.` are gone from this group; the footer
+  says the state of the server.
+- A machine row is 8 in from each side, 40 high, has radius 10 and a padding of
+  10. A box 24 x 24 with radius 7 and a 1 px `BORDER_SUBTLE` outline stands at its
+  left. Inside the box are two rounded rectangles 9 x 3.2 with radius 1, and 1.6
+  apart, drawn in lines of 1.3 in `FG_SOFT`; the colour of the state of the
+  machine takes the place of `FG_SOFT` when the older row shows a state colour:
+  `PALETTE_YELLOW` while it reconnects, `PALETTE_GREEN` when it is connected and
+  `PALETTE_RED` when it is disconnected. The gap after the box is 10. The name is
+  Inter 12.5 at weight 620 in `FG`; the line under it is Inter 10.5 in the
+  secondary colour, and it holds the repository and the provider line of the
+  record. The `pending` mark and the summary of a folded machine keep their words.
+  The fold control of the agents of the machine stands at the right end of the
+  row, 6 in, with the words of the older form. The states, the menus and the
+  presses of the row keep their rules, and a hover adds the fill
+  `alpha(PANEL_BG_ALT, 128)`. A row that the record gives a price would show it at
+  the right edge in JetBrains Mono 10.5 `FG_SOFT` as `<amount>/h`; a record of
+  this version carries no price, so the row shows none.
+- The control `+ Rent a machine` stands under the rows of the machine section, and
+  it stands there with no machine as well. It is 12 in from each side, 34 high,
+  has radius 10, no fill, and a 1 px dashed outline in `BORDER_STRONG` with a dash
+  of 4 and a gap of 3. The label is Inter 12 in `FG_SOFT`, centred. A hover draws
+  the label in `FG` and adds the fill `alpha(PANEL_BG_ALT, 128)`. Its press, its
+  disabled states and its hover texts keep the rules of the button of the older
+  form.
+- The group `AGENTS` has the caption `AGENTS` with no count. The four programs are
+  chips that wrap: 14 in from each side, 6 apart, and 6 between two lines. A chip
+  is 24 high, has radius 12, a 1 px `BORDER_SUBTLE` outline, and a padding of 8 at
+  its left and 10 at its right. A dot 7 x 7 stands at its left, and the name of
+  the program follows 6 after the dot, in Inter 11.5 at weight 400. A program of
+  this computer has a filled dot in `PALETTE_GREEN` and its name in `FG`. A
+  program that this computer does not have, and a program that the search still
+  looks for, has a hollow dot with a 1.5 px outline in `FG_DIM` and its name in
+  `FG_SOFT`. The hover text is `<name>: on this computer`, `<name>: not found on
+  this computer` or `<name>: looking`, and the same words are the accessible name
+  of the chip. A chip takes no press.
+- The footer stays at the bottom edge of the sidebar, under the scroll area of the
+  groups: a 1 px `BORDER_SUBTLE` line across the sidebar, a padding of 10 above
+  its line and 12 under it, and 16 at each side. A dot 7 x 7 in `FG_DIM` stands at
+  the left, and the line of the server of the older form follows 8 after it, in
+  Inter 11 in `FG_DIM`, on one line with an ellipsis; a line that the footer cuts
+  shows its whole text in its hover, and the hover also says the reason of the
+  last attempt at the link. The link `Set up` stands at the right edge, in Inter
+  11 in `ACCENT`, and a hover underlines it. Its press is the press of the button
+  `Set up`.
+
 - The agents of a machine hang under its row, in the form and the painter of
   the panel rows of a workspace: a 1 px tree guide (`BORDER_STRONG` alpha 200)
   from the state dot of the machine, the two letters of the kind, the name of

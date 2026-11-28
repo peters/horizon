@@ -184,7 +184,7 @@ impl HorizonApp {
             frame_stats: FrameStats::default(), output_wake, undrawn, workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true, sidebar_drag_workspace: None,
-            sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
+            sidebar_list: super::sidebar::ListCache::default(), sidebar_chrome: super::sidebar::SidebarChrome::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
             notifications: super::notify::Notifications::default(), keep_running: super::keep_running::KeepRunning::default(),
             minimap_visible: true, hud_visible: false, orchestrator_dock: super::orchestrator_dock::OrchestratorDock::from_settings(config.features.orchestrator_dock),
             renaming_workspace: None,

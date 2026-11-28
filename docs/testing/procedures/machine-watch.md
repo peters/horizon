@@ -239,7 +239,7 @@ the state that the program of a pane reports, and that it starts and stops one
    `Last seen: 2 agents. Horizon tries again.` After the link comes back, the
    rows and their states return.
 
-6. Press the chevron in front of the name of the machine.
+6. Press the chevron at the right end of the row of the machine.
 
    Result: the agent rows fold away, and the row of the machine says `1 needs you ·
    1 done`, else `2 working`, else nothing, in the place of its second line.

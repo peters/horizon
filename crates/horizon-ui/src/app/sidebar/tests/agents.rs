@@ -1,26 +1,16 @@
-//! The `Agents` group of the sidebar and the button `+ Rent a machine` at the end
-//! of the machine section.
+//! The chips of the group `Agents` of the sidebar.
 //!
-//! The group stands there only while the orchestrator dock is on, and it says
-//! which of the four agent programs of `horizon_core::agents` this computer has.
-//! A press on the button sends one message to the orchestrator of the active
-//! workspace, and it sends nothing while no workspace is active or while that
-//! orchestrator works.
+//! The group says which of the four agent programs of `horizon_core::agents` this
+//! computer has, in one chip for each program. A chip wraps under the caption of
+//! its group, so the group takes one or two lines instead of eight rows, and its
+//! accessible name says what the dot of the chip means.
 
-use egui::{Event, FullOutput, Modifiers, PointerButton, Pos2, Rect};
-use horizon_core::PanelKind;
+use egui::{Event, FullOutput, Rect};
 
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::OrchestratorDock;
-use crate::app::sidebar::agents::{AgentPrograms, FOUND, GROUP, LOOKING, NOT_FOUND, PROGRAMS};
-use crate::app::sidebar::rent_machine::{FRONT_DESK, LABEL, MESSAGE, NO_WORKSPACE};
+use crate::app::sidebar::agents::{AgentPrograms, CHIP_HEIGHT, PROGRAMS};
 use crate::test_egui::DiscardTextures;
-
-/// The stand-in of an orchestrator that names its session and then waits for the
-/// lines of the person, so its turn stays open while the dock holds it.
-const SILENT: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
-while IFS= read -r line; do :; done
-"#;
 
 /// One text that a frame of the sidebar painted, with its rectangle.
 type Drawn = (String, Rect);
@@ -66,36 +56,6 @@ impl Sidebar {
         }
         drawn
     }
-
-    /// Clicks at `pos`: the pointer arrives, presses and releases.
-    fn click(&self, app: &mut HorizonApp, pos: Pos2) {
-        let _ = self.draw(app, vec![Event::PointerMoved(pos)]);
-        for pressed in [true, false] {
-            let _ = self.draw(
-                app,
-                vec![Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed,
-                    modifiers: Modifiers::NONE,
-                }],
-            );
-        }
-    }
-}
-
-/// Reads the worker of the dock until the program of `local_id` runs, which the
-/// start of a press does on that worker.
-fn wait_for_bridge(app: &mut HorizonApp, local_id: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !app.orchestrator_dock.running(local_id) {
-        app.poll_orchestrator_dock(&egui::Context::default());
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the press started the program of that conversation"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 /// Every rectangle where `drawn` painted `text`.
@@ -107,10 +67,10 @@ fn rects_of<'a>(drawn: &'a [Drawn], text: &str) -> Vec<&'a Rect> {
         .collect()
 }
 
-/// The box of the one text `text` of `drawn`.
-fn box_of(drawn: &[Drawn], text: &str) -> Rect {
-    let rects = rects_of(drawn, text);
-    assert_eq!(rects.len(), 1, "the frame draws {text} once: {drawn:?}");
+/// The one chip of the program of `name`.
+fn chip_of(drawn: &[Drawn], name: &str) -> Rect {
+    let rects = rects_of(drawn, name);
+    assert_eq!(rects.len(), 1, "the frame draws {name} once: {drawn:?}");
     *rects[0]
 }
 
@@ -124,72 +84,120 @@ fn app_with(found: [bool; 4], dock_on: bool) -> (tempfile::TempDir, HorizonApp) 
     (temp, app)
 }
 
-/// An app of [`app_with`] whose orchestrator runs `program` instead of the agent
-/// program of a person.
-fn app_with_program(program: std::path::PathBuf) -> (tempfile::TempDir, HorizonApp) {
-    let (temp, mut app) = app_with([true; 4], true);
-    app.orchestrator_dock = OrchestratorDock::with_program(true, program);
-    (temp, app)
-}
-
 #[test]
 fn the_group_of_the_agents_is_absent_while_the_dock_is_off() {
     let (_temp, mut app) = app_with([true; 4], false);
     let drawn = Sidebar::new().settled(&mut app);
 
-    assert!(rects_of(&drawn, GROUP).is_empty(), "no group: {drawn:?}");
-    assert!(rects_of(&drawn, FOUND).is_empty(), "no row of a program: {drawn:?}");
-    assert!(rects_of(&drawn, LABEL).is_empty(), "no button: {drawn:?}");
+    assert!(
+        rects_of(&drawn, crate::app::sidebar::caption::AGENTS).is_empty(),
+        "no caption: {drawn:?}"
+    );
+    assert!(rects_of(&drawn, "Claude").is_empty(), "no chip: {drawn:?}");
 }
 
 #[test]
-fn the_group_of_the_agents_says_which_programs_this_computer_has() {
-    // The dock of this app follows the setting of Settings, which the test turns
-    // on in the configuration of the window, so the group arrives without a
-    // restart.
+fn the_chips_name_the_four_programs_in_the_order_of_the_design() {
     let (_temp, mut app) = app_with([true, false, true, false], true);
     let drawn = Sidebar::new().settled(&mut app);
 
-    assert_eq!(rects_of(&drawn, GROUP).len(), 1, "one header: {drawn:?}");
-    assert_eq!(rects_of(&drawn, "4").len(), 1, "the count of the rows: {drawn:?}");
-    assert_eq!(rects_of(&drawn, FOUND).len(), 2, "two programs are here: {drawn:?}");
-    assert_eq!(rects_of(&drawn, NOT_FOUND).len(), 2, "two are not: {drawn:?}");
-
-    // The rows stand in the order of the design, one under the other, and each
-    // name keeps its state line under it.
-    let names: Vec<&str> = PROGRAMS.into_iter().map(PanelKind::display_name).collect();
-    let boxes: Vec<Rect> = names.iter().map(|name| box_of(&drawn, name)).collect();
-    for pair in boxes.windows(2) {
-        assert!(pair[0].bottom() < pair[1].top(), "the rows stand in order: {boxes:?}");
-    }
-    let found = *rects_of(&drawn, FOUND)[0];
+    assert_eq!(
+        rects_of(&drawn, crate::app::sidebar::caption::AGENTS).len(),
+        1,
+        "one caption: {drawn:?}"
+    );
+    let names: Vec<&str> = PROGRAMS
+        .into_iter()
+        .map(horizon_core::PanelKind::display_name)
+        .collect();
+    let boxes: Vec<Rect> = names.iter().map(|name| chip_of(&drawn, name)).collect();
+    // The first line runs from left to right, and the line under it as well.
     assert!(
-        (found.top() - boxes[0].bottom()).abs() < 6.0,
-        "the line of the state is under the name of its row: {found:?} {:?}",
-        boxes[0]
+        boxes[1].top() < boxes[0].bottom() && boxes[0].left() < boxes[1].left(),
+        "the first two chips share their line: {boxes:?}"
     );
     assert!(
-        (found.left() - boxes[0].left()).abs() < 0.5,
-        "the two lines of a row start together: {found:?} {:?}",
-        boxes[0]
+        boxes[2].top() >= boxes[0].bottom(),
+        "the third chip wraps under them: {boxes:?}"
+    );
+    assert!(
+        boxes[3].top() < boxes[2].bottom() && boxes[2].left() < boxes[3].left(),
+        "the last two chips share their line: {boxes:?}"
+    );
+    assert!((CHIP_HEIGHT - 24.0).abs() < f32::EPSILON, "a chip is 24 high");
+}
+
+/// The chips wrap, so the four programs take two lines at the width of the
+/// sidebar and never leave it.
+#[test]
+fn the_chips_wrap_into_two_lines_inside_the_sidebar() {
+    let (_temp, mut app) = app_with([true; 4], true);
+    let drawn = Sidebar::new().settled(&mut app);
+    let names: Vec<&str> = PROGRAMS
+        .into_iter()
+        .map(horizon_core::PanelKind::display_name)
+        .collect();
+    let boxes: Vec<Rect> = names.iter().map(|name| chip_of(&drawn, name)).collect();
+    let first_top = boxes[0].top();
+    let lines: Vec<f32> = {
+        let mut tops: Vec<f32> = boxes.iter().map(Rect::top).collect();
+        tops.sort_by(f32::total_cmp);
+        tops.dedup_by(|left, right| (*left - *right).abs() < 0.5);
+        tops
+    };
+    assert_eq!(
+        lines.len(),
+        2,
+        "four chips take two lines in a narrow sidebar: {boxes:?}"
+    );
+    assert!(boxes.iter().all(|rect| rect.top() >= first_top - 0.5));
+    assert!(
+        boxes
+            .iter()
+            .all(|rect| rect.right() <= crate::app::SIDEBAR_WIDTH - 13.0),
+        "no chip leaves the sidebar: {boxes:?}"
     );
 }
 
-/// A group whose search has not answered says `looking` on every row, and no row
-/// claims a program that this computer lacks.
+/// A chip says in its accessible name what the dot and the colour of its name
+/// mean: this computer has the program, it does not have it, or the search still
+/// looks for it.
 #[test]
-fn the_group_of_the_agents_says_looking_until_the_search_answers() {
+fn a_chip_says_in_its_accessible_name_what_this_computer_has() {
     let (_temp, mut app) = app_with([true; 4], true);
     app.agent_programs = AgentPrograms::default();
-    let drawn = Sidebar::new().settled(&mut app);
+    let sidebar = Sidebar::new();
+    let _ = sidebar.settled(&mut app);
+    app.agent_programs = AgentPrograms::answered([true, false, true, false]);
+    let _ = sidebar.settled(&mut app);
 
-    assert_eq!(
-        rects_of(&drawn, LOOKING).len(),
-        PROGRAMS.len(),
-        "every row looks for its program: {drawn:?}"
+    sidebar.ctx.enable_accesskit();
+    let mut labels: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        let input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+        let output = sidebar
+            .ctx
+            .run_ui(input, |ui| app.render_sidebar(ui.ctx()))
+            .discard_textures();
+        let nodes = output.platform_output.accesskit_update.expect("an accessibility tree");
+        labels = nodes
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .map(str::to_owned)
+            .collect();
+    }
+    for name in ["Claude: on this computer", "Codex: not found on this computer"] {
+        assert!(
+            labels.iter().any(|label| label == name),
+            "the accessible name of a chip says what it means: {name} in {labels:?}"
+        );
+    }
+    assert!(
+        labels.iter().any(|label| label == "Pi: on this computer")
+            && labels.iter().any(|label| label == "Gemini: not found on this computer"),
+        "every chip says its own state: {labels:?}"
     );
-    assert!(rects_of(&drawn, NOT_FOUND).is_empty(), "{drawn:?}");
-    assert!(rects_of(&drawn, FOUND).is_empty(), "{drawn:?}");
 }
 
 /// A whole frame reads the setting of Settings, so a person who turns it on in
@@ -214,74 +222,10 @@ fn a_frame_reads_the_setting_of_the_settings_window() {
         "the frame reads the setting of the Settings window"
     );
     let drawn = Sidebar::new().settled(&mut app);
-    assert_eq!(rects_of(&drawn, GROUP).len(), 1, "the group arrives with it: {drawn:?}");
-}
-
-#[test]
-fn the_rent_button_sends_one_message_to_the_orchestrator_of_the_active_workspace() {
-    let folder = tempfile::tempdir().expect("a folder for the stand-in");
-    let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
-        .expect("the stand-in program of the test");
-    let (_temp, mut app) = app_with_program(program);
-    let workspace = app.board.create_workspace("alpha");
-    app.board.focus_workspace(workspace);
-    // The dock shows the conversation of that workspace, as a press on its row
-    // does: a machine belongs to one work item.
-    app.orchestrator_dock.front_desk_mut().show_workspace();
-    let local_id = app
-        .board
-        .workspace(workspace)
-        .expect("the workspace of the press")
-        .local_id
-        .clone();
-    let sidebar = Sidebar::new();
-    let drawn = sidebar.settled(&mut app);
-    let button = box_of(&drawn, LABEL);
-
-    sidebar.click(&mut app, button.center());
-
     assert_eq!(
-        app.orchestrator_dock.person_messages(&local_id),
-        vec![MESSAGE.to_owned()],
-        "the conversation of the workspace holds the message of the person once"
+        rects_of(&drawn, crate::app::sidebar::caption::AGENTS).len(),
+        1,
+        "the group arrives with it: {drawn:?}"
     );
-    wait_for_bridge(&mut app, &local_id);
-
-    // The turn of that message stays open, so the button is disabled: a second
-    // press sends nothing.
-    let drawn = sidebar.settled(&mut app);
-    let disabled = box_of(&drawn, LABEL);
-    sidebar.click(&mut app, disabled.center());
-    assert_eq!(
-        app.orchestrator_dock.person_messages(&local_id),
-        vec![MESSAGE.to_owned()],
-        "the second press of a busy orchestrator sends nothing"
-    );
-}
-
-#[test]
-fn the_rent_button_is_disabled_without_an_active_workspace() {
-    let folder = tempfile::tempdir().expect("a folder for the stand-in");
-    let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
-        .expect("the stand-in program of the test");
-    let (_temp, mut app) = app_with_program(program);
-    assert!(
-        app.board.active_workspace.is_none(),
-        "the window of this test has no active workspace"
-    );
-    let sidebar = Sidebar::new();
-    let drawn = sidebar.settled(&mut app);
-    let button = box_of(&drawn, LABEL);
-
-    sidebar.click(&mut app, button.center());
-
-    assert_eq!(
-        app.orchestrator_dock.running_bridges(),
-        0,
-        "no press opens a conversation without a workspace"
-    );
-    // The button is drawn, and its hover says what a press would need: the front
-    // desk is the conversation of the dock, and it owns no machine.
-    assert_eq!(FRONT_DESK, "Open a work item first");
-    assert_eq!(NO_WORKSPACE, "Open a workspace first");
+    let _ = Sidebar::new();
 }

@@ -13,7 +13,7 @@ use crate::theme;
 use super::super::HorizonApp;
 use super::super::shared_terminals::{attention_of, computer_name, kind_of};
 use super::panel_rows::{self, PANEL_ROW_HEIGHT, PanelRowLook, PanelRowState};
-use super::{SidebarActions, rows, text};
+use super::{SidebarActions, caption, rows, text};
 
 impl HorizonApp {
     /// Draws the section under the machines.
@@ -23,8 +23,7 @@ impl HorizonApp {
         if computers.is_empty() && down.is_none() {
             return;
         }
-        ui.add_space(4.0);
-        line(ui, "Computers", (13.0, text::SEMIBOLD, theme::FG_SOFT()), None);
+        caption::group(ui, caption::COMPUTERS, None, &[]);
         let note = (11.0, text::REGULAR, text::secondary());
         if let Some(reason) = down {
             line(ui, "Shared terminals: no link", note, None);
@@ -41,7 +40,6 @@ impl HorizonApp {
                 }
             }
         }
-        ui.add_space(6.0);
     }
 }
 

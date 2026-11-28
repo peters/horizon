@@ -211,9 +211,9 @@ attention summary adds to its own.
   it builds nothing. An agent row is drawn by the painter of a panel row of a
   workspace (`sidebar/panel_rows.rs`): the kind label, the name and the word and
   the dot of `AgentState::attention`, which is the state type of a local panel.
-- **A machine folds.** A chevron in front of the dot of a machine row hides its
+- **A machine folds.** A chevron at the right end of a machine row hides its
   agent rows, and the row then says `1 needs you · 1 done`, else `2 working`, else
-  nothing, in the words of a workspace row. The fold lives in the window and
+  nothing, in the words of a work item row. The fold lives in the window and
   outlives no start.
 - **A link that is down says so.** The second line of the machine row says
   `link lost 2 minutes ago` in the words of a relative time of this build, and the

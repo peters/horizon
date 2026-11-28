@@ -49,6 +49,23 @@ pub(super) fn paragraph_rows(
     layout(ui, text, format(size, weight, color), max_width, max_rows)
 }
 
+/// One line of `text` with extra letter spacing, cut with an ellipsis at
+/// `max_width`: the name of a caption of the sidebar, which stands in upper case
+/// and reads as one block of letters.
+pub(super) fn spaced(
+    ui: &egui::Ui,
+    text: &str,
+    size: f32,
+    weight: f32,
+    color: Color32,
+    spacing: f32,
+    max_width: f32,
+) -> Arc<Galley> {
+    let mut format = format(size, weight, color);
+    format.extra_letter_spacing = spacing;
+    layout(ui, text, format, max_width, ONE_ROW)
+}
+
 /// The format of one run of sidebar text at `size` and `weight`.
 fn format(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat {

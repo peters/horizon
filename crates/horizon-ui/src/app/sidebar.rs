@@ -1,5 +1,9 @@
 pub(in crate::app) mod agents;
+pub(in crate::app) mod caption;
 mod computers;
+mod fold;
+mod footer;
+mod front_desk_row;
 pub(in crate::app) mod inbox;
 mod list;
 pub(in crate::app) mod machines;
@@ -13,11 +17,14 @@ pub(in crate::app) mod rows;
 mod text;
 mod toolbar;
 
+pub(in crate::app) use caption::Counts;
+pub(in crate::app) use fold::Folds;
 pub(in crate::app) use list::ListCache;
+pub(in crate::app) use rent_machine::Dashes;
 
 use std::collections::HashMap;
 
-use egui::{Align, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{Color32, Context, CornerRadius, CursorIcon, Id, Order, Pos2, Rect, Sense, Stroke, Vec2};
 use horizon_core::workspace_list::Row;
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
@@ -27,12 +34,29 @@ use super::util;
 use super::workspace::WorkspaceLayoutCapabilities;
 use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
-/// The air above the heading of the workspaces, while no group stands above it.
-const HEADER_TOP: f32 = 16.0;
+/// The fill of a row or of a control that the pointer is on, at half strength.
+pub(super) const HALF_FILL: u8 = 128;
+
+/// The state of the drawing of the sidebar that a person changes and that no
+/// read of the board holds: which work items show their panel rows, the count
+/// strings of the captions, and the dashes of the rent control.
+#[derive(Default)]
+pub(in crate::app) struct SidebarChrome {
+    pub(in crate::app) folds: Folds,
+    pub(in crate::app) counts: Counts,
+    pub(in crate::app) dashes: Dashes,
+}
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
+    /// The persistent id of the workspace, which its fold is kept by: the id of a
+    /// workspace restarts at 1 in a replaced session.
+    local_id: String,
     name: String,
+    /// The line of facts under the name: the count of the agents that wait and
+    /// the machine. It holds no word of a state, because the row shows that word
+    /// at its right edge.
+    facts: String,
     /// Where the new terminals of the workspace run.
     place: horizon_core::WorkspacePlace,
     /// How many panels of the workspace hold a tmux session of its machine, so
@@ -59,6 +83,27 @@ struct SidebarPanelEntry {
     is_focused: bool,
     /// The one attention state of the panel: which agent waits, finished or works.
     attention: horizon_core::Attention,
+}
+
+/// The group of the sidebar whose caption took a press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Group {
+    WorkItems,
+    Machines,
+}
+
+impl SidebarActions {
+    /// Takes the press on an icon control of a caption of `group`: the same action
+    /// that the text button `New`, `Fit` or `Set up` asked for.
+    pub(super) fn take_caption_press(&mut self, group: Group, press: caption::Press) {
+        match (group, press) {
+            (Group::WorkItems, caption::Press::Plus) => self.create_workspace = true,
+            (Group::WorkItems, caption::Press::Fit) => self.fit_active_workspace = true,
+            (Group::Machines, caption::Press::Plus) => self.press_set_up = true,
+            // The group `Machines` carries the one control of a machine, and no fit.
+            (Group::Machines, caption::Press::Fit) => {}
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -152,7 +197,6 @@ impl HorizonApp {
     }
 
     fn sidebar_workspace_data(&self) -> Vec<WorkspaceSidebarEntry> {
-        let accordion = self.template_config.features.sidebar_accordion;
         // One pass over the panels: rows read their panel from here, never by a
         // lookup on the board.
         let panels_by_id = self
@@ -172,7 +216,8 @@ impl HorizonApp {
             .iter()
             .map(|workspace| {
                 let is_active = !front_desk && self.board.active_workspace == Some(workspace.id);
-                let shows_panels = sidebar_workspace_shows_panels(is_active, accordion);
+                // A work item shows its panel rows only while its fold is open.
+                let shows_panels = self.sidebar_chrome.folds.is_open(&workspace.local_id);
                 let panels = workspace
                     .panels
                     .iter()
@@ -180,9 +225,12 @@ impl HorizonApp {
                     .map(|panel| self.sidebar_panel_entry(panel, shows_panels))
                     .collect::<Vec<_>>();
 
+                let row = self.sidebar_row(workspace.id);
                 WorkspaceSidebarEntry {
                     id: workspace.id,
+                    local_id: workspace.local_id.clone(),
                     name: workspace.name.clone(),
+                    facts: row.facts.clone(),
                     place: workspace.place.clone(),
                     machine_panels: workspace
                         .panels
@@ -195,7 +243,7 @@ impl HorizonApp {
                     detached: self.workspace_is_detached(workspace.id),
                     capabilities: self.workspace_layout_capabilities(workspace.id),
                     panels,
-                    row: self.sidebar_row(workspace.id),
+                    row,
                 }
             })
             .collect()
@@ -242,23 +290,20 @@ impl HorizonApp {
         workspace_data: &[WorkspaceSidebarEntry],
         actions: &mut SidebarActions,
     ) {
-        // The group `Needs you` stands above the heading of the workspaces, and a
-        // frame that draws it keeps the gap under it as its own: the heading then
-        // takes no room above.
-        let inbox = self.render_sidebar_inbox(ui, actions);
-        self.render_sidebar_header(ui, actions, if inbox { 0.0 } else { HEADER_TOP });
-        ui.add_space(10.0);
-
-        let available = ui.available_height();
+        // The footer keeps its place at the bottom of the sidebar, so the groups
+        // above it scroll in the room that is left.
+        let scroll_height = (ui.available_height() - footer::HEIGHT).max(0.0);
         let mut drag_state = SidebarWorkspaceDragState::default();
         egui::ScrollArea::vertical()
-            .max_height(available)
+            .max_height(scroll_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                // Rows and headers set their own gaps.
+                // Rows, captions and chips set their own gaps.
                 ui.spacing_mut().item_spacing.y = 0.0;
 
+                self.render_front_desk_row(ui);
+                self.render_sidebar_inbox(ui, actions);
                 self.render_sidebar_workspaces(ui, workspace_data, actions, &mut drag_state);
                 self.render_sidebar_machines(ui, actions);
                 self.render_sidebar_agents(ui);
@@ -272,48 +317,14 @@ impl HorizonApp {
             self.sidebar_drag_workspace = None;
         }
 
-        ui.add_space(8.0);
-    }
-
-    fn render_sidebar_header(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions, top: f32) {
-        ui.add_space(top);
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(text::line(
-                ui,
-                "Workspaces",
-                13.0,
-                text::SEMIBOLD,
-                theme::FG_SOFT(),
-                120.0,
-            ));
-            ui.add_space(6.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_space(12.0);
-                let fit = ui
-                    .add_enabled(
-                        self.has_attached_workspace(),
-                        util::chrome_button("Fit").min_size(Vec2::new(42.0, 24.0)),
-                    )
-                    .on_hover_text(
-                        self.shortcuts
-                            .fit_active_workspace
-                            .display_label(util::primary_shortcut_label()),
-                    );
-                if fit.clicked() {
-                    actions.fit_active_workspace = true;
-                }
-
-                // The sidebar makes a workspace on this computer.
-                if ui
-                    .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
-                    .on_hover_text("A new empty workspace on this computer.")
-                    .clicked()
-                {
-                    actions.create_workspace = true;
-                }
-            });
-        });
+        let room = ui.available_height() - footer::HEIGHT;
+        if room > 0.0 {
+            ui.add_space(room);
+        }
+        let width = ui.available_width();
+        let line = self.server_line();
+        let reason = self.server_line_reason();
+        footer::render(ui, width, line, reason, actions);
     }
 
     fn render_sidebar_workspace(
@@ -323,35 +334,59 @@ impl HorizonApp {
         actions: &mut SidebarActions,
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
-        let accordion = self.template_config.features.sidebar_accordion;
-        ui.add_space(2.0);
-
         let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), rows::ROW_HEIGHT)).1;
-        let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
-        let surface = rows::paint_workspace_row_bg(
+        let hovered = ui.rect_contains_pointer(row_rect);
+        let open = self.sidebar_chrome.folds.is_open(&workspace.local_id);
+        let mark = fold::Mark::of(open, hovered, !workspace.panels.is_empty());
+        let word = rows::word_of(&workspace.row);
+        let parts = rows::paint(
             ui,
             row_rect,
-            workspace.color,
-            workspace.is_active,
-            click_target_hovered,
+            workspace,
+            word,
+            mark,
+            hovered,
             self.sidebar_drag_workspace == Some(workspace.id),
         );
+        // The control of the fold is a press target of its own, so the row takes no
+        // press under it and a press there opens or folds the panel rows alone.
+        if let Some(rect) = parts.fold
+            && fold::render(ui, rect, &workspace.local_id, mark)
+        {
+            let accordion = self.template_config.features.sidebar_accordion;
+            self.sidebar_chrome.folds.toggle(&workspace.local_id, accordion);
+        }
+
+        // The row's own press stops at the fold control.
+        let click_right = parts.fold.map_or(row_rect.max.x, |rect| rect.min.x);
+        let click_rect = Rect::from_min_max(row_rect.min, Pos2::new(click_right, row_rect.max.y));
         let row_response = ui.interact(
-            row_rect,
+            click_rect,
             ui.make_persistent_id(("sidebar_ws_click", workspace.id.0)),
             Sense::click_and_drag(),
         );
         row_response.widget_info(|| {
-            let panels = accordion.then_some(workspace.panels.len());
-            let spoken = text::workspace_spoken(&workspace.name, panels, workspace.detached);
+            let spoken = text::workspace_spoken(&workspace.name, None, workspace.detached);
             egui::WidgetInfo::labeled(egui::Role::Button, true, spoken)
         });
-        // The tile, name and line tooltips go after the row: egui hovers a widget that
-        // only senses hover when it lies above the row's click target.
-        let tile_response = rows::paint_workspace_row_contents(ui, row_rect, workspace, accordion, surface);
-        click_target_hovered |= row_response.hovered() || tile_response.hovered();
+        // A name or a line that the row cuts shows its whole text in a hover. The
+        // hover goes after the row: egui hovers a widget that only senses hover
+        // when it lies above the row's click target.
+        if parts.name_elided || parts.line_elided {
+            let text = if parts.name_elided {
+                &workspace.name
+            } else {
+                &workspace.facts
+            };
+            ui.interact(
+                parts.text,
+                ui.make_persistent_id(("sidebar_ws_text", workspace.id.0)),
+                Sense::hover(),
+            )
+            .on_hover_text(text);
+        }
         let row_clicked = row_response.clicked();
-        self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
+        self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, hovered);
 
         if row_clicked {
             // A press on a workspace row shows that workspace in the dock, also
@@ -362,6 +397,7 @@ impl HorizonApp {
             // workspace reveals its selected panel instead of panning to the
             // whole workspace. Single-panel workspaces behave the same in
             // both modes; flat multi-panel rows keep panning to bounds.
+            let accordion = self.template_config.features.sidebar_accordion;
             match self.workspace_row_reveal(accordion, workspace.id, &workspace.panels) {
                 Some(panel_id) => {
                     actions.focus_panel = Some(panel_id);
@@ -372,8 +408,7 @@ impl HorizonApp {
         }
         self.show_workspace_context_menu(&row_response, workspace, actions);
 
-        if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
-            ui.add_space(2.0);
+        if open {
             let count = workspace.panels.len();
             for (index, panel) in workspace.panels.iter().enumerate() {
                 self.render_sidebar_panel(ui, workspace, panel, index + 1 == count, actions);
@@ -709,6 +744,7 @@ impl HorizonApp {
                 // A workspace that goes takes its conversation and its draft with
                 // it: a later row with the same name is another workspace.
                 if let Some(local_id) = local_id {
+                    self.sidebar_chrome.folds.close(&local_id);
                     self.forget_orchestrator_conversation(&local_id);
                 }
             }
@@ -763,10 +799,6 @@ fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> Workspa
 
 fn sidebar_workspace_drop_should_dock(target_detached: bool) -> bool {
     !target_detached
-}
-
-fn sidebar_workspace_shows_panels(is_active: bool, accordion: bool) -> bool {
-    is_active || !accordion
 }
 
 #[cfg(test)]

@@ -275,6 +275,15 @@ fn agent_window(size: [f32; 2]) -> (Window, horizon_core::PanelId) {
         )
         .expect("the panel of the test");
     window.app.board.focused = None;
+    // The panel rows of the work item stand under an open fold.
+    let local_id = window
+        .app
+        .board
+        .workspace(workspace)
+        .expect("the workspace")
+        .local_id
+        .clone();
+    window.app.sidebar_chrome.folds.toggle(&local_id, false);
     (window, panel)
 }
 
@@ -283,15 +292,13 @@ fn the_sidebar_of_a_small_window_shows_its_header_whole() {
     let (mut window, _panel) = window_with_an_agent();
     let canvas_left = window.app.canvas_rect(&window.ctx).left();
     let drawn = texts(&window.frame(Vec::new()));
-    let header = text_of(&drawn, "Workspaces");
-    assert!(!header.cut, "the header shows whole: {header:?}");
-    for button in ["New", "Fit"] {
-        let label = text_of(&drawn, button);
-        assert!(
-            header.rect.right() < label.rect.left() && label.rect.right() < canvas_left,
-            "the button {button} stands after the header and inside the sidebar: {header:?} {label:?}"
-        );
-    }
+    let header = text_of(&drawn, "WORK ITEMS");
+    assert!(!header.cut, "the caption shows whole: {header:?}");
+    let count = text_of(&drawn, "1");
+    assert!(
+        header.rect.right() < count.rect.left() && count.rect.right() < canvas_left,
+        "the count stands after the caption and inside the sidebar: {header:?} {count:?}"
+    );
 }
 
 #[test]

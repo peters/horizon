@@ -10,7 +10,7 @@ use horizon_core::workspace_list::{Orchestrator, Row, Turn, TurnEnd, Waiting};
 
 use super::super::HorizonApp;
 use super::inbox::Question;
-use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
+use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry, caption};
 
 const REFRESH: Duration = Duration::from_secs(1);
 
@@ -250,7 +250,9 @@ impl HorizonApp {
             .collect()
     }
 
-    /// The rows of the workspaces of the board, in board order.
+    /// The group `Work items`: its caption with the two icon controls that replace
+    /// the buttons `New` and `Fit`, and the row of each workspace of the board, in
+    /// board order.
     pub(super) fn render_sidebar_workspaces(
         &mut self,
         ui: &mut egui::Ui,
@@ -258,6 +260,22 @@ impl HorizonApp {
         actions: &mut SidebarActions,
         drag_state: &mut SidebarWorkspaceDragState,
     ) {
+        let fits = self.has_attached_workspace();
+        let count = self
+            .sidebar_chrome
+            .counts
+            .text(caption::WORK_ITEMS, workspace_data.len());
+        let controls = [
+            if fits {
+                caption::Control::new(caption::Glyph::Fit, caption::FIT_HOVER)
+            } else {
+                caption::Control::disabled(caption::Glyph::Fit, caption::FIT_HOVER)
+            },
+            caption::Control::new(caption::Glyph::Plus, caption::NEW_HOVER),
+        ];
+        if let Some(press) = caption::group(ui, caption::WORK_ITEMS, Some(count), &controls) {
+            actions.take_caption_press(super::Group::WorkItems, press);
+        }
         for workspace in workspace_data {
             self.render_sidebar_workspace(ui, workspace, actions, drag_state);
         }

@@ -59,13 +59,13 @@ window.
 Give each result to the report with the task ID.
 
 ### 6.1 NEW — New workspace
-1. Click **New** in the sidebar header.
+1. Click the icon control **New work item** in the caption `WORK ITEMS`.
 
    Result: No menu opens. One more empty workspace shows under **This PC**.
    The toolbar has no button for an empty workspace.
 
 2. Make a panel of the first workspace wide: drag its right edge to about three
-   times the width of a panel, then click **New** again.
+   times the width of a panel, then click **New work item** again.
 
    Result: The new workspace stands on free canvas space beside the frame of the
    first workspace. Its name is not over a panel of the first workspace, and no
@@ -150,7 +150,8 @@ Give each result to the report with the task ID.
 
 ## 7. Pass criteria
 
-- NEW makes an empty workspace on this computer from **New** in the sidebar.
+- NEW makes an empty work item on this computer from the control **New work
+  item** in the caption `WORK ITEMS`.
   The control opens no menu, and the new workspace stands beside the panels of
   every workspace that is already there.
 - MENU opens each action from its row and shows the captions, descriptions and

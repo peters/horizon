@@ -20,27 +20,32 @@ use horizon_core::{PanelId, SshConnectionStatus, WorkspaceId};
 use crate::theme;
 
 use super::super::HorizonApp;
-use super::panel_rows::STATE_SIZE;
 use super::text;
-use super::{SidebarActions, rows};
+use super::{HALF_FILL, SidebarActions, caption, rows};
 
 pub(in crate::app) use agents::MachineWatchRow;
 use agents::fold_spoken;
 
-/// The height of one machine row.
-pub(super) const ROW_HEIGHT: f32 = 38.0;
-/// What the section says above its rows while this Horizon follows no server.
-pub(super) const NO_SERVER: &str = "Server: not set";
-/// What the section says while the list is empty: the way to get a machine.
-pub(super) const NO_MACHINE: &str = "No machines yet. Set up rents one, or adds the Horizon server.";
-/// The title of the control that starts Set up.
-pub(super) const SET_UP: &str = "Set up";
-/// The sentence that the Set up control says in a hover.
-pub(super) const SET_UP_HOVER: &str = "Rent a machine, add the Horizon server, or a browser that stays signed in.";
-/// The side of the state dot in front of a machine name.
-pub(super) const DOT_SIDE: f32 = 9.0;
-/// The side of the fold control in front of the state dot.
-pub(super) const FOLD_SIDE: f32 = 12.0;
+/// The height of one machine row, its inset in the sidebar, its radius and its
+/// padding.
+pub(super) const ROW_HEIGHT: f32 = 40.0;
+const PADDING: f32 = 10.0;
+/// The side of the box that marks a machine and its radius.
+const BOX_SIDE: f32 = 24.0;
+const BOX_RADIUS: u8 = 7;
+/// The two rounded bars of the glyph of a machine, the gap between them and the
+/// stroke that draws them.
+const BAR_WIDTH: f32 = 9.0;
+const BAR_HEIGHT: f32 = 3.2;
+const BAR_GAP: f32 = 1.6;
+const BAR_STROKE: f32 = 1.3;
+/// The size of the name of a machine row and of the line under it.
+const NAME_SIZE: f32 = 12.5;
+const LINE_SIZE: f32 = 10.5;
+/// The hover text of the control that sets a machine up.
+pub(super) const SET_UP_HOVER: &str = "Set up a machine";
+/// The side of the fold control at the right end of a machine row.
+pub(super) const FOLD_SIDE: f32 = 18.0;
 /// The mark of the fold control: the agents are open, then folded.
 const FOLD_MARKS: [&str; 2] = ["\u{25BE}", "\u{25B8}"];
 /// How long the reason of a refused machine stays in the section.
@@ -253,7 +258,7 @@ impl HorizonApp {
         self.sidebar_sticky_notice = None;
     }
 
-    /// Draws the machine section below the workspaces, when this Horizon keeps a
+    /// Draws the machine section below the work items, when this Horizon keeps a
     /// machine.
     pub(super) fn render_sidebar_machines(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
         let now = self.notice_clock.now();
@@ -264,29 +269,16 @@ impl HorizonApp {
         // The rows are borrowed out for the pass, because a press changes the
         // actions and the board; nothing in the pass reads the cache again.
         let rows = std::mem::take(&mut self.machine_rows);
-        Self::render_machines_header(ui, actions, &rows);
-        if let Some(line) = rows.server_line.as_deref() {
-            let reason = rows.server_reason;
-            ui.horizontal(|ui| {
-                ui.add_space(18.0);
-                let painted = ui.label(text::line(
-                    ui,
-                    line,
-                    11.0,
-                    text::REGULAR,
-                    text::secondary(),
-                    ui.available_width() - 18.0,
-                ));
-                // `Server away` is the same three words for every reason, so the
-                // reason of the last attempt is here, where the line is.
-                if let Some(reason) = reason {
-                    painted.on_hover_text(reason);
-                }
-            });
-            ui.add_space(2.0);
+        let count = rows.rows().len();
+        let words = self.sidebar_chrome.counts.text(caption::MACHINES, count);
+        // A group with no machine says no count, and its plus is the way to get one.
+        let counted = (count > 0).then_some(words);
+        let controls = [caption::Control::new(caption::Glyph::Plus, SET_UP_HOVER)];
+        if let Some(press) = caption::group(ui, caption::MACHINES, counted, &controls) {
+            actions.take_caption_press(super::Group::Machines, press);
         }
         // The setting that the server decided for another computer stays under the
-        // state line of the server, in the pattern of the line that names the
+        // caption of the section, in the pattern of the line that names the
         // panels that a session left out: its own close control and no timer.
         if let Some(line) = self.settings_lost.clone() {
             ui.add_space(2.0);
@@ -300,9 +292,8 @@ impl HorizonApp {
         }
         self.machine_rows = rows;
 
-        // A window whose dock is on offers the machine that its orchestrator
-        // rents, under the rows that the list holds. Without a machine the button
-        // follows the line that says where a machine comes from.
+        // The control of the machine that the orchestrator rents stands under the
+        // rows of the list, and it stands there with no machine as well.
         self.render_rent_machine(ui, actions);
 
         // The line that stays comes first: it names what an opened session left
@@ -335,68 +326,21 @@ impl HorizonApp {
                 ));
             });
         }
-        ui.add_space(6.0);
     }
 
-    /// The title of the machine section, its Set up control, the state of the link to a
-    /// server and, while the list is empty, where a machine comes from.
-    ///
-    /// It is here while this Horizon has no machine at all: a person who starts
-    /// with an empty window has to be able to get one.
-    fn render_machines_header(ui: &mut egui::Ui, actions: &mut SidebarActions, rows: &MachineRows) {
-        let (no_server, no_machine) = (rows.server_line.is_none(), rows.rows.is_empty());
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(text::line(
-                ui,
-                "Machines",
-                13.0,
-                text::SEMIBOLD,
-                theme::FG_SOFT(),
-                120.0,
-            ));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(12.0);
-                let control = ui
-                    .add(super::super::util::chrome_button(SET_UP).min_size(Vec2::new(64.0, 24.0)))
-                    .on_hover_text(SET_UP_HOVER);
-                if control.clicked() {
-                    actions.press_set_up = true;
-                }
-            });
-        });
-        if no_server {
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.add_space(18.0);
-                let dot = ui.allocate_space(Vec2::new(7.0, 7.0)).1;
-                ui.painter().circle_filled(dot.center(), 3.5, theme::FG_DIM());
-                ui.add_space(3.0);
-                ui.label(text::line(
-                    ui,
-                    NO_SERVER,
-                    11.0,
-                    text::REGULAR,
-                    text::secondary(),
-                    ui.available_width() - 18.0,
-                ));
-            });
-        }
-        if no_machine {
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.add_space(18.0);
-                ui.label(text::paragraph(
-                    ui,
-                    NO_MACHINE,
-                    11.0,
-                    text::REGULAR,
-                    text::secondary(),
-                    ui.available_width() - 18.0,
-                ));
-            });
-        }
+    /// The line of the link to the server, for the footer: the server line of
+    /// today, or the line that says that this Horizon follows no server.
+    pub(super) fn server_line(&self) -> &str {
+        self.machine_rows
+            .server_line
+            .as_deref()
+            .unwrap_or(super::footer::NO_SERVER)
+    }
+
+    /// Why the last attempt at the link to the server did not open it, for the
+    /// hover of the footer.
+    pub(super) fn server_line_reason(&self) -> Option<&'static str> {
+        self.machine_rows.server_reason
     }
 
     /// Draws one machine row and turns a press on it into an action.
@@ -406,85 +350,30 @@ impl HorizonApp {
         let hovered = ui.rect_contains_pointer(rect);
         if hovered {
             ui.painter()
-                .rect_filled(card, CARD_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), 170));
+                .rect_filled(card, CARD_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), HALF_FILL));
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        // The agents hang under an open row, and a folded row says in one line who waits.
-        // A machine with no line under its row has nothing to fold, so it has no mark.
+        // The agents hang under an open row, and a folded row says in one line who
+        // waits. A machine with no line under its row has nothing to fold, so it
+        // has no mark. The mark stands at the right end of the row, because the box
+        // of the machine takes the left one.
         let foldable = !row.watch.agents.is_empty() || row.watch.quiet.is_some();
-        let fold = Rect::from_center_size(
-            pos2(card.min.x + rows::TILE_INSET + FOLD_SIDE / 2.0, card.min.y + 12.0),
-            Vec2::new(FOLD_SIDE, ROW_HEIGHT / 2.0),
+        let fold = Rect::from_min_size(
+            pos2(
+                rect.max.x - super::fold::INSET - FOLD_SIDE,
+                card.center().y - FOLD_SIDE / 2.0,
+            ),
+            Vec2::splat(FOLD_SIDE),
         );
-        if foldable && render_fold_control(ui, fold, &row.name, self.machine_watch.folded(&row.name), hovered) {
+        let folded = self.machine_watch.folded(&row.name);
+        if foldable && render_fold_control(ui, fold, &row.name, folded, hovered) {
             self.machine_watch.toggle_fold(&row.name);
         }
-        let folded = self.machine_watch.folded(&row.name);
-        let dot = dot_center(card);
-        paint_machine_dot(ui.painter(), dot, row.state);
+        let elided = paint_machine_row(ui, card, row, folded, foldable, fold);
 
-        let text_left = dot.x + DOT_SIDE / 2.0 + 10.0;
-        let text_right = card.max.x - 8.0;
-        let summary = row.watch.summary.as_deref().filter(|_| folded).map(|words| {
-            text::line(
-                ui,
-                words,
-                STATE_SIZE,
-                text::REGULAR,
-                text::secondary(),
-                text_right - text_left,
-            )
-        });
-        let summary_width = summary.as_ref().map_or(0.0, |summary| summary.size().x + 6.0);
-        let mark = row.pending.then(|| {
-            text::line(
-                ui,
-                PENDING_MARK,
-                10.0,
-                text::REGULAR,
-                text::secondary(),
-                (text_right - text_left).max(1.0),
-            )
-        });
-        let mark_width = mark.as_ref().map_or(0.0, |mark| mark.size().x + 6.0);
-        let name = text::line(
-            ui,
-            &row.name,
-            13.0,
-            text::MEDIUM,
-            theme::FG(),
-            text_right - text_left - mark_width,
-        );
-        let name_rect = Rect::from_min_size(pos2(text_left, card.min.y + 6.0), name.size());
-        let elided = name.elided;
-        ui.painter().galley(name_rect.min, name, theme::FG());
-        if let Some(mark) = mark {
-            let left = text_right - mark.size().x;
-            ui.painter()
-                .galley(pos2(left, card.min.y + 9.0), mark, text::secondary());
-        }
-        if let Some(second) = row.second.as_deref() {
-            let galley = text::line(
-                ui,
-                second,
-                11.0,
-                text::REGULAR,
-                text::secondary(),
-                text_right - text_left - summary_width,
-            );
-            ui.painter()
-                .galley(pos2(text_left, card.min.y + 21.0), galley, text::secondary());
-        }
-        if let Some(summary) = summary {
-            let left = text_right - summary.size().x;
-            ui.painter()
-                .galley(pos2(left, card.min.y + 22.0), summary, text::secondary());
-        }
-
-        // The press of the fold control is no press on the machine, so the row starts
-        // after it.
-        let left = if foldable { fold.max.x } else { rect.min.x };
-        let click_rect = Rect::from_min_max(pos2(left, rect.min.y), rect.max);
+        // The press of the fold control is no press on the machine, so the row ends
+        // before it.
+        let click_rect = Rect::from_min_max(rect.min, pos2(fold.min.x, rect.max.y));
         let response = ui.interact(
             click_rect,
             ui.make_persistent_id(("sidebar_machine", row.name.as_str())),
@@ -507,7 +396,90 @@ impl HorizonApp {
     }
 }
 
-/// Paints the fold control of a machine row at the left of its card, which a screen
+/// Paints the box, the name, the line and the summary of a machine row in `card`,
+/// and answers whether the room of the row cuts the name.
+fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, foldable: bool, fold: Rect) -> bool {
+    let machine_box = box_rect(card);
+    paint_machine_box(ui.painter(), machine_box, row.state);
+
+    let text_left = machine_box.max.x + PADDING;
+    let text_right = if foldable {
+        fold.min.x - 6.0
+    } else {
+        card.max.x - PADDING
+    };
+    let summary = row.watch.summary.as_deref().filter(|_| folded).map(|words| {
+        text::line(
+            ui,
+            words,
+            LINE_SIZE,
+            text::REGULAR,
+            text::secondary(),
+            text_right - text_left,
+        )
+    });
+    let summary_width = summary.as_ref().map_or(0.0, |summary| summary.size().x + 6.0);
+    let mark = row.pending.then(|| {
+        text::line(
+            ui,
+            PENDING_MARK,
+            10.0,
+            text::REGULAR,
+            text::secondary(),
+            (text_right - text_left).max(1.0),
+        )
+    });
+    let mark_width = mark.as_ref().map_or(0.0, |mark| mark.size().x + 6.0);
+    let name = text::line(
+        ui,
+        &row.name,
+        NAME_SIZE,
+        text::SEMIBOLD,
+        theme::FG(),
+        (text_right - text_left - mark_width).max(1.0),
+    );
+    let second = row.second.as_deref().map(|second| {
+        text::line(
+            ui,
+            second,
+            LINE_SIZE,
+            text::REGULAR,
+            text::secondary(),
+            (text_right - text_left - summary_width).max(1.0),
+        )
+    });
+    let name_height = name.size().y;
+    // The summary of a folded machine stands on the second line, and it is that
+    // line when the row says nothing else.
+    let second_height = second.as_ref().or(summary.as_ref()).map_or(0.0, |line| line.size().y);
+    let gap = if second_height > 0.0 { 2.0 } else { 0.0 };
+    let top = card.center().y - (name_height + gap + second_height) / 2.0;
+    let painter = ui.painter();
+    let name_elided = name.elided;
+    painter.galley(pos2(text_left, top), name, theme::FG());
+    if let Some(mark) = mark {
+        ui.painter().galley(
+            pos2(text_right - mark.size().x, top + (name_height - mark.size().y) / 2.0),
+            mark,
+            text::secondary(),
+        );
+    }
+    let line_top = top + name_height + gap;
+    if let Some(second) = second {
+        ui.painter()
+            .galley(pos2(text_left, line_top), second, text::secondary());
+    }
+    if let Some(summary) = summary {
+        ui.painter().galley(
+            pos2(text_right - summary.size().x, line_top),
+            summary,
+            text::secondary(),
+        );
+    }
+    name_elided
+}
+
+/// Paints the fold control of a machine row at its right end, which a screen
 /// reader names, and answers whether the person pressed it.
 fn render_fold_control(ui: &egui::Ui, rect: Rect, machine: &str, folded: bool, lit: bool) -> bool {
     let spoken = fold_spoken(folded, machine);
@@ -626,35 +598,60 @@ pub(super) fn card(row: Rect) -> Rect {
     row.shrink2(vec2(rows::ROW_INSET, 0.0))
 }
 
-/// The center of the state dot of a machine row, which sits right of its fold control.
-pub(super) fn dot_center(card: Rect) -> egui::Pos2 {
-    pos2(
-        card.min.x + rows::TILE_INSET + FOLD_SIDE + DOT_SIDE / 2.0,
-        card.min.y + 12.0,
+/// The box that marks a machine row: 24 wide, 10 in from the left edge of its card
+/// and in the middle of the row.
+pub(super) fn box_rect(card: Rect) -> Rect {
+    Rect::from_min_size(
+        pos2(card.min.x + PADDING, card.center().y - BOX_SIDE / 2.0),
+        Vec2::splat(BOX_SIDE),
     )
 }
 
-/// Paints the state dot: hollow when no terminal of the machine is open, and a
-/// filled green, red or soft dot for the state of the terminal that is open.
-pub(super) fn paint_machine_dot(painter: &egui::Painter, center: egui::Pos2, state: MachineState) {
-    let radius = DOT_SIDE / 2.0 - 0.5;
+/// The centre of the box that marks a machine row, which the guide of the agents of
+/// the machine hangs from.
+pub(super) fn dot_center(card: Rect) -> egui::Pos2 {
+    box_rect(card).center()
+}
+
+/// The colour of the state of the terminal of a machine, when the row shows one.
+fn state_color(state: MachineState) -> Option<egui::Color32> {
     match state {
-        MachineState::Closed => {
-            painter.circle_stroke(center, radius, Stroke::new(1.0_f32, theme::FG_DIM()));
-        }
-        MachineState::Connecting => {
-            painter.circle_stroke(center, radius, Stroke::new(1.0_f32, theme::FG_SOFT()));
-        }
-        MachineState::Reconnecting => {
-            painter.circle_filled(center, radius, theme::PALETTE_YELLOW());
-        }
-        MachineState::Connected => {
-            painter.circle_filled(center, radius, theme::PALETTE_GREEN());
-        }
-        MachineState::Disconnected => {
-            painter.circle_filled(center, radius, theme::PALETTE_RED());
-        }
+        MachineState::Closed | MachineState::Connecting => None,
+        MachineState::Reconnecting => Some(theme::PALETTE_YELLOW()),
+        MachineState::Connected => Some(theme::PALETTE_GREEN()),
+        MachineState::Disconnected => Some(theme::PALETTE_RED()),
     }
+}
+
+/// Paints the box of a machine row: its outline and the two bars of its glyph, in
+/// the colour of the state of its terminal where that state has one.
+pub(super) fn paint_machine_box(painter: &egui::Painter, rect: Rect, state: MachineState) {
+    painter.rect_stroke(
+        rect,
+        BOX_RADIUS,
+        Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
+        egui::StrokeKind::Inside,
+    );
+    let color = state_color(state).unwrap_or_else(theme::FG_SOFT);
+    let stroke = Stroke::new(BAR_STROKE, color);
+    let center = rect.center();
+    let total = 2.0 * BAR_HEIGHT + BAR_GAP;
+    let top = center.y - total / 2.0;
+    for index in 0..2 {
+        let bar = Rect::from_min_size(
+            pos2(
+                center.x - BAR_WIDTH / 2.0,
+                top + usize_to_f32(index) * (BAR_HEIGHT + BAR_GAP),
+            ),
+            Vec2::new(BAR_WIDTH, BAR_HEIGHT),
+        );
+        painter.rect_stroke(bar, 1, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// `value` as a float, for the geometry of a row.
+fn usize_to_f32(value: usize) -> f32 {
+    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 /// The second line of a machine row: the repository that the record names, the

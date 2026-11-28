@@ -51,8 +51,9 @@ a forgotten record leaves its key.
 1. Start the candidate in the isolated desktop through the fixture with the
    native viewer. Watch the window in the Device panel.
 
-   Result: The window shows one workspace and the sidebar. The sidebar shows
-   `Workspaces` and no `Machines` section.
+   Result: The window shows one work item and the sidebar. The sidebar shows the
+   caption `WORK ITEMS` and no `MACHINES` group, and its footer says
+   `Server: not set`.
 
 2. Start the loopback SSH server and the agent panel of the first workspace.
 
@@ -82,9 +83,10 @@ a forgotten record leaves its key.
 
 2. Look at the sidebar.
 
-   Result: A `Machines` header appears below the workspace rows, with one row
-   `build-1` and one row `build-2`, in that order. Each row shows a hollow dot,
-   the name, and the dimmed text `Loopback, test`.
+   Result: The caption `MACHINES` appears below the work item rows, with the
+   count `2`, and one row `build-1` and one row `build-2` follow in that order.
+   Each row shows a box with two small bars at its left, the name, and the
+   dimmed text `Loopback, test`.
 
 3. Move the pointer over a row.
 
@@ -97,8 +99,8 @@ a forgotten record leaves its key.
 
    Result: A new SSH panel opens in the active workspace with the title
    `build-1`, the titlebar mark `opened by Machines`, and a prompt from the
-   loopback server. The row dot turns green and the hover text says
-   `connected`. The last row of the panel holds the output of the session, and
+   loopback server. The two bars of the box of the row turn green and the hover
+   text says `connected`. The last row of the panel holds the output of the session, and
    no green tmux status line stands at the bottom of the panel.
 
 2. Read the command line of the `ssh` child of the fixture process.

@@ -80,6 +80,9 @@ fn the_name_and_the_state_of_a_panel_row_never_cover_each_other() {
         )
         .expect("panel");
     app.board.focused = None;
+    // The panel rows of the work item stand under an open fold.
+    let local_id = app.board.workspace(workspace).expect("the workspace").local_id.clone();
+    app.sidebar_chrome.folds.toggle(&local_id, false);
     let now = horizon_core::current_unix_millis();
     let local = app.board.panel(panel).expect("panel").local_id.clone();
     for (index, (state, background_tasks, word)) in [

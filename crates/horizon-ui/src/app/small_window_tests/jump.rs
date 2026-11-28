@@ -54,6 +54,9 @@ fn document(rows: usize, steps: usize, lines: usize, wide: bool) -> serde_json::
 fn agent_window(size: [f32; 2]) -> Window {
     let mut window = Window::new(size, vec![editor_workspace_state("lane", [40.0, 40.0])]);
     window.app.board.panels[0].kind = PanelKind::Claude;
+    // The panel rows of the work item stand under an open fold.
+    let local_id = window.app.board.workspaces[0].local_id.clone();
+    window.app.sidebar_chrome.folds.toggle(&local_id, false);
     window
 }
 

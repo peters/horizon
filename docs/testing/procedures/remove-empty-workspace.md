@@ -45,7 +45,7 @@ way.
 
 ### 6.1 REMOVE-EMPTY-1 — The menu is visible and offers the entry
 
-1. Press **New** beside **Workspaces**.
+1. Press the icon control **New work item** in the caption `WORK ITEMS`.
 
    Result: A new row appears in the sidebar, and the count is one higher.
 

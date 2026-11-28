@@ -554,46 +554,45 @@ and Horizon wakes it with one line when no wait is open.
 ### 6.19 OD-18 — The group Agents
 
 1. Start the run of OD-17 step 3, so that the dock is on, and look at the sidebar
-   under the section Machines.
+   under the group Machines.
 
-   Result: The header `Agents` stands 18 points from the left edge of the sidebar,
-   and the count `4` follows it in the monospace font. Four rows stand under the
-   header, 34 points each, in this order: Claude, Codex, Pi, Gemini.
+   Result: The caption `AGENTS` stands 16 points from the left edge of the
+   sidebar. Four chips stand under it in this order: Claude, Codex, Pi, Gemini.
+   A chip is 24 points high, and the chips wrap into two lines.
 
-2. Read each row.
+2. Read each chip.
 
-   Result: A state dot of 8 points stands at the left of the row. The dot is
-   filled green when the program of that row is on the `PATH` of the fixture, and
-   the line under the name reads `on this computer`. The dot is hollow when the
-   program is not there, the name is dim, and the line reads
-   `not found on this computer`. On a computer without Claude Code, the row
-   `Claude` shows the hollow dot.
+   Result: A dot of 7 points stands at the left of the chip, and the name of the
+   program follows it. The dot is filled green when the program of that chip is
+   on the `PATH` of the fixture, and the name is in the main color. The dot is
+   hollow when the program is not there, and the name is in the soft color.
 
-3. Point at a row, and press it.
+3. Point at a chip, and press it.
 
-   Result: The row shows no card and no hover text, the pointer stays an arrow,
-   and the press does nothing.
+   Result: The hover text of the chip says `Claude: on this computer`,
+   `Codex: not found on this computer` or `Pi: looking`, with the name of its
+   program. The pointer stays an arrow, and the press does nothing.
 
 4. Start a computer where none of the four programs is on the `PATH`. Start the
    fixture with the setting on.
 
-   Result: Every row says `looking` with a hollow dot for the first frame of the
-   window, and then the four rows say `not found on this computer`.
+   Result: Every chip says `looking` with a hollow dot for the first frame of the
+   window, and then the four chips say `not found on this computer`.
 
 ### 6.20 OD-19 — The button + Rent a machine
 
-1. Read the end of the section Machines of the run of OD-18.
+1. Read the end of the group Machines of the run of OD-18.
 
-   Result: The button `+ Rent a machine` stands under the rows of the machines,
-   or under the line `No machines yet. Set up rents one, or adds the Horizon
-   server.` when the list holds no machine. Its fill is the panel surface, it has
-   a 1 px outline and radius 10, it is 30 points high, and it keeps 12 points of
-   room at each side of the sidebar. The label is centred.
+   Result: The control `+ Rent a machine` stands under the rows of the machines,
+   and it stands there with no machine as well. It has no fill, it has a 1 px
+   dashed outline with a dash of 4 and a gap of 3, radius 10, it is 34 points
+   high, and it keeps 12 points of room at each side of the sidebar. The label
+   is centred.
 
-2. Point at the button.
+2. Point at the control.
 
-   Result: The outline of the button becomes stronger and the pointer is a
-   pointing hand. The fill does not change.
+   Result: The label takes the main color, the fill `PANEL_BG_ALT` at half
+   strength shows, and the pointer is a pointing hand.
 
 3. Press the button.
 

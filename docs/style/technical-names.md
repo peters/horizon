@@ -51,7 +51,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | endpoint | One IPv4 host or DNS name and one TCP port. | network grant |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts and Settings. | More menu, overflow menu |
-| New workspace button | The **New** button in the sidebar header next to **Workspaces**. It makes an empty workspace on this computer. | New menu, + Workspace |
+| new work item control | The icon control **New work item** (a plus) at the right of the caption `WORK ITEMS` of the sidebar. It makes an empty workspace on this computer. | New menu, + Workspace, New button |
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
 | hidden window | The main window after a close with **Keep Horizon running**. The programs, the server link and the shared terminals continue. | background window, minimized window |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |

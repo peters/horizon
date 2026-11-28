@@ -14,11 +14,13 @@
 //! the dock shows the front desk, while no workspace is active and while that
 //! orchestrator works: a machine belongs to one work item.
 
-use egui::{CursorIcon, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, vec2};
+use egui::{CursorIcon, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo, pos2, vec2};
+use std::f32::consts::PI;
 
 use crate::theme;
 
 use super::super::HorizonApp;
+use super::HALF_FILL;
 use super::SidebarActions;
 use super::text;
 
@@ -33,16 +35,21 @@ pub(in crate::app) const MESSAGE: &str =
 pub(in crate::app) const FRONT_DESK: &str = "Open a work item first";
 pub(in crate::app) const NO_WORKSPACE: &str = "Open a workspace first";
 pub(in crate::app) const BUSY: &str = "The orchestrator works";
-/// The height of the button, the room at each side of the section that it keeps,
+/// The height of the control, the room at each side of the section that it keeps,
 /// and its corner radius.
-pub(in crate::app) const HEIGHT: f32 = 30.0;
+pub(in crate::app) const HEIGHT: f32 = 34.0;
 pub(in crate::app) const INSET: f32 = 12.0;
 const RADIUS: u8 = 10;
-/// The air between the last row of the section and the button, and the air that
+/// The dash and the gap of the outline of the control, and the arcs of each
+/// corner of the rounded rectangle.
+const DASH: f32 = 4.0;
+const GAP: f32 = 3.0;
+const CORNER_STEPS: usize = 5;
+/// The air between the last row of the section and the control, and the air that
 /// the label keeps at each side of it.
 const GAP_ABOVE: f32 = 6.0;
 const LABEL_INSET: f32 = 6.0;
-const LABEL_SIZE: f32 = 12.5;
+const LABEL_SIZE: f32 = 12.0;
 
 /// What a press on the button does now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +90,8 @@ impl HorizonApp {
         if !self.orchestrator_dock.visible() {
             return;
         }
-        if render(ui, self.rent_machine_state()) {
+        let state = self.rent_machine_state();
+        if render(ui, state, &mut self.sidebar_chrome.dashes) {
             actions.rent_machine = true;
         }
     }
@@ -115,22 +123,28 @@ impl HorizonApp {
     }
 }
 
-/// Draws the button in `state` and answers whether the person pressed it. It
-/// takes the full width of the section less [`INSET`] at each side, and a press
-/// is a click of the enabled button.
-fn render(ui: &mut Ui, state: RentMachine) -> bool {
+/// Draws the control in `state` and answers whether the person pressed it. It
+/// takes the full width of the section less [`INSET`] at each side, and a press is
+/// a click of the enabled control.
+fn render(ui: &mut Ui, state: RentMachine, dashes: &mut Dashes) -> bool {
     ui.add_space(GAP_ABOVE);
     let row = ui.allocate_space(Vec2::new(ui.available_width(), HEIGHT)).1;
     let rect = row.shrink2(vec2(INSET, 0.0));
     let enabled = state.enabled();
     let response = ui.interact(rect, ui.make_persistent_id("sidebar_rent_machine"), Sense::click());
     let hovered = enabled && response.hovered();
-    let color = if enabled { theme::FG() } else { theme::FG_DIM() };
-    let outline = if hovered {
-        theme::FG_DIM()
-    } else {
-        theme::BORDER_SUBTLE()
+    let color = match (enabled, hovered) {
+        (false, _) => theme::FG_DIM(),
+        (true, true) => theme::FG(),
+        (true, false) => theme::FG_SOFT(),
     };
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, RADIUS, theme::alpha(theme::PANEL_BG_ALT(), HALF_FILL));
+    }
+    for shape in dashes.shapes(rect) {
+        ui.painter().add(shape.clone());
+    }
     let label = text::line(
         ui,
         LABEL,
@@ -139,10 +153,7 @@ fn render(ui: &mut Ui, state: RentMachine) -> bool {
         color,
         (rect.width() - 2.0 * LABEL_INSET).max(1.0),
     );
-    let painter = ui.painter();
-    painter.rect_filled(rect, RADIUS, theme::PANEL_BG_ALT());
-    painter.rect_stroke(rect, RADIUS, Stroke::new(1.0_f32, outline), StrokeKind::Inside);
-    painter.galley(rect.center() - label.size() / 2.0, label, color);
+    ui.painter().galley(rect.center() - label.size() / 2.0, label, color);
 
     response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, enabled, LABEL));
     let response = match state.disabled_hover() {
@@ -153,6 +164,87 @@ fn render(ui: &mut Ui, state: RentMachine) -> bool {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     enabled && response.clicked()
+}
+
+/// The dashes of the outline of the control, drawn again only when its rectangle
+/// or the outline colour changes: the four arcs and the four lines of the rounded
+/// rectangle, cut into dashes of [`DASH`] with a gap of [`GAP`] between them.
+#[derive(Default)]
+pub(in crate::app) struct Dashes {
+    key: Option<[u32; 5]>,
+    shapes: Vec<Shape>,
+}
+
+impl Dashes {
+    /// The dashes of the outline of `rect`.
+    pub(super) fn shapes(&mut self, rect: Rect) -> &[Shape] {
+        let color = theme::BORDER_STRONG();
+        let key = [
+            rect.min.x.to_bits(),
+            rect.min.y.to_bits(),
+            rect.max.x.to_bits(),
+            rect.max.y.to_bits(),
+            u32::from(color.r()) | u32::from(color.g()) << 8 | u32::from(color.b()) << 16,
+        ];
+        if self.key != Some(key) {
+            self.key = Some(key);
+            let stroke = Stroke::new(1.0_f32, color);
+            self.shapes = dash(&outline(rect, f32::from(RADIUS)), DASH, GAP, stroke);
+        }
+        &self.shapes
+    }
+}
+
+/// The outline of a rounded rectangle as a closed polyline, in the order of a
+/// clock: the four arcs and the four lines between them.
+fn outline(rect: Rect, radius: f32) -> Vec<Pos2> {
+    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let corners = [
+        (pos2(rect.min.x + radius, rect.min.y + radius), PI),
+        (pos2(rect.max.x - radius, rect.min.y + radius), 1.5 * PI),
+        (pos2(rect.max.x - radius, rect.max.y - radius), 0.0),
+        (pos2(rect.min.x + radius, rect.max.y - radius), 0.5 * PI),
+    ];
+    let mut points = Vec::with_capacity(corners.len() * (CORNER_STEPS + 1));
+    for (center, start) in corners {
+        for step in 0..=CORNER_STEPS {
+            let angle = start + 0.5 * PI * usize_to_f32(step) / usize_to_f32(CORNER_STEPS);
+            points.push(pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin()));
+        }
+    }
+    points
+}
+
+/// The dashes of `points`: lines of `dash` followed by a gap of `gap`, walking the
+/// polyline from its first point to its last.
+fn dash(points: &[Pos2], dash: f32, gap: f32, stroke: Stroke) -> Vec<Shape> {
+    let mut shapes = Vec::new();
+    let mut drawing = true;
+    let mut left = dash;
+    for pair in points.windows(2) {
+        let (mut from, to) = (pair[0], pair[1]);
+        let mut remaining = (to - from).length();
+        while remaining > f32::EPSILON {
+            let step = remaining.min(left);
+            let next = from + (to - from) * (step / remaining);
+            if drawing {
+                shapes.push(Shape::line_segment([from, next], stroke));
+            }
+            from = next;
+            remaining -= step;
+            left -= step;
+            if left <= f32::EPSILON {
+                drawing = !drawing;
+                left = if drawing { dash } else { gap };
+            }
+        }
+    }
+    shapes
+}
+
+/// `value` as a float, for the geometry of the outline.
+fn usize_to_f32(value: usize) -> f32 {
+    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 #[cfg(test)]

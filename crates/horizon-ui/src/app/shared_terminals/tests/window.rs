@@ -103,14 +103,14 @@ fn the_sidebar_lists_the_other_computers_and_a_press_opens_the_follow_panel() {
     window.link.relay().events.push(list(Vec::new()));
     window.link.relay().events.clear();
     let output = frame(&mut window, Vec::new());
-    assert!(!drew_text(&output, "Computers"), "no other computer is listed");
+    assert!(!drew_text(&output, "COMPUTERS"), "no other computer is listed");
 
     let panels = vec![
         shared("p-build", "build", "shell", ""),
         shared("p-review", "review the change", "claude", "working"),
     ];
     window.link.relay().events.push(list(panels));
-    let output = until_drawn(&mut window, "Computers");
+    let output = until_drawn(&mut window, "COMPUTERS");
     for words in ["There", "build", "review the change", "Working"] {
         assert!(drew_text(&output, words), "the section draws {words}");
     }
@@ -166,7 +166,7 @@ fn the_sidebar_lists_the_other_computers_and_a_press_opens_the_follow_panel() {
         "the reason stays inside the sidebar: {:?}",
         galley.rect
     );
-    assert!(drew_text(&output, "Computers") && !drew_text(&output, "build"));
+    assert!(drew_text(&output, "COMPUTERS") && !drew_text(&output, "build"));
     let ended = window.app.board.panel(follow).and_then(Panel::follow_ended_line);
     assert!(ended.is_some(), "the follow panel says that its stream ended");
 }

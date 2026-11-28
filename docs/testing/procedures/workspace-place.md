@@ -66,7 +66,7 @@ forgotten machine is reported.
    desktop through the fixture with the native viewer. Watch the window in the
    Device panel.
 
-   Result: The window shows one workspace and the sidebar with `Workspaces`.
+   Result: The window shows one work item and the sidebar with the caption `WORK ITEMS`.
 
 2. Register the machine with the agent panel. Call `block_panel` with
    `{"operation":"machine_set"}` and the record `{"name":"build-1","ssh":{"host":"127.0.0.1","port":2222},"key":"build-1","provider":"Loopback, test"}`.

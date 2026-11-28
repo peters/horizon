@@ -428,6 +428,10 @@ pub struct HorizonApp {
     sidebar_drag_workspace: Option<WorkspaceId>,
     /// The rows of the sidebar's workspace list, read at most once a second.
     sidebar_list: sidebar::ListCache,
+    /// What the person changes in the drawing of the sidebar: the fold of each
+    /// work item, the count strings of the captions and the dashes of the
+    /// control that rents a machine.
+    sidebar_chrome: sidebar::SidebarChrome,
     /// Which agent panel needs the person, which one finished and which one
     /// works, from the work ledgers of the panels.
     attention: attention::AttentionState,

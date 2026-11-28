@@ -1,276 +1,300 @@
-//! The workspace rows of the sidebar's workspace list: a tile in the workspace
-//! color with its initials and a status badge, the name and one line of facts.
+//! The work-item rows of the sidebar: a tile in the workspace colour, the name
+//! with one line of facts under it, and the one word of the state at the right
+//! edge.
 //!
-//! The line stands under the name, so a long name cannot cut the count of the
-//! agents that wait, or the machine, off the row.
-use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+//! The row tells the state in words, so a person reads `needs you` and not only a
+//! coloured dot. The active row is marked by a tint of the workspace colour and by
+//! a bar at the left edge of the sidebar, which a narrow row cannot hide. A row
+//! that the pointer is on and that is not active takes the muted fill of the
+//! chrome.
+//!
+//! The panel rows of a work item hang under this row and are folded by default;
+//! the chevron of [`super::fold`] opens them.
+
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, WidgetInfo, pos2, vec2};
 use horizon_core::Attention;
+use horizon_core::workspace_list::Orchestrator;
 
 use crate::theme;
 
-use super::text::{self, BOLD, SEMIBOLD};
+use super::fold::Mark;
+use super::text::{self, SEMIBOLD};
 use super::{SidebarWorkspaceInsert, WorkspaceSidebarEntry};
 
-/// The height of a row with a status line.
-pub(super) const ROW_HEIGHT: f32 = 50.0;
+/// The one word at the right edge of a work-item row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum WorkspaceWord {
+    Working,
+    NeedsYou,
+    Failed,
+    Done,
+}
+
+impl WorkspaceWord {
+    /// The word, in lower case: it stands in small type beside the name.
+    pub(in crate::app) const fn text(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::NeedsYou => "needs you",
+            Self::Failed => "failed",
+            Self::Done => "done",
+        }
+    }
+
+    /// The colour of the word and of its dot, which is the colour of its state.
+    pub(in crate::app) fn color(self) -> Color32 {
+        match self {
+            Self::Working | Self::Done => theme::ACCENT(),
+            Self::NeedsYou => theme::PALETTE_YELLOW(),
+            Self::Failed => theme::PALETTE_RED(),
+        }
+    }
+}
+
+/// The height of a row.
+pub(super) const ROW_HEIGHT: f32 = 46.0;
 /// The horizontal inset of a row's card inside the sidebar.
 pub(super) const ROW_INSET: f32 = 8.0;
-/// The left edge of the tile inside a row's card.
+/// The left edge of the tile inside a row's card, and the side of the tile.
 pub(super) const TILE_INSET: f32 = 8.0;
-/// The side of the tile of a row with a status line.
 pub(super) const TILE_SIDE: f32 = 30.0;
-const DOT_RADIUS: f32 = 4.0;
-/// The side of the filled badge that a panel which waits for the person shows.
-const BADGE_SIDE: f32 = 11.0;
-/// The two letter mark of a finished turn: the badge shape differs from a dot
-/// and from the filled badge, so no state is told by its color alone.
-const DONE_MARK: &str = "\u{2713}";
-const CARD_RADIUS: u8 = 12;
+const CARD_RADIUS: u8 = 10;
+/// The gap between the tile and the text of the row.
+const TEXT_GAP: f32 = 10.0;
+/// The right inset of the row's text, when no word stands there.
+const TEXT_INSET: f32 = 10.0;
+/// The size of the name and of the line under it.
+const NAME_SIZE: f32 = 13.0;
+const LINE_SIZE: f32 = 12.0;
+/// The size of the state word, the side of its dot and the gap before it.
+const WORD_SIZE: f32 = 10.5;
+const WORD_DOT_SIDE: f32 = 6.0;
+const WORD_DOT_GAP: f32 = 5.0;
+/// The right inset of the state word, and the room that the name and the line
+/// keep before it.
+const WORD_INSET: f32 = 8.0;
+const WORD_GAP: f32 = 8.0;
+/// The least room that the name keeps before the `NEW WINDOW` badge gives way.
+const MIN_NAME_WIDTH: f32 = 48.0;
+const BADGE_GAP: f32 = 6.0;
+/// The bar of the active row: its width and the air above and under it.
+const BAR_SIDE: f32 = 3.0;
+const BAR_INSET: f32 = 10.0;
+/// The radius of the two right corners of the bar.
+const BAR_RADIUS: u8 = 3;
+
+/// The fill of a row that the pointer is on, at half strength.
+const HOVER_ALPHA: u8 = 128;
 
 /// The card of a row: the row without the sidebar inset.
 pub(super) fn card(row: Rect) -> Rect {
     row.shrink2(vec2(ROW_INSET, 0.0))
 }
 
-/// What the badge of a row says, for its hover text.
-pub(super) fn dot_meaning(attention: Attention) -> &'static str {
-    attention.sentence()
+/// The marks of a row that take a press or show a text of their own, which the
+/// caller of [`paint`] uses.
+pub(super) struct Parts {
+    /// The control that opens and folds the panel rows of the row, while it shows.
+    pub(super) fold: Option<Rect>,
+    /// The box of the name and of the line, which shows the whole text of a row
+    /// that cuts it.
+    pub(super) text: Rect,
+    pub(super) name_elided: bool,
+    pub(super) line_elided: bool,
 }
 
-/// Whether the tile shows a badge: an idle row shows none, so activity stands out.
-const fn has_badge(attention: Attention) -> bool {
-    attention.shows_badge()
+/// The tile of a row: the side of [`TILE_SIDE`], centred in the card and 8 in from
+/// its left edge.
+pub(super) fn tile_rect(card: Rect) -> Rect {
+    Rect::from_min_size(
+        pos2(card.min.x + TILE_INSET, card.center().y - TILE_SIDE / 2.0),
+        vec2(TILE_SIDE, TILE_SIDE),
+    )
 }
 
-/// Paints the attention badge of a row at `center`: a green dot while an agent
-/// works, a check mark in the accent color for a finished turn, and a filled
-/// badge in the warning color for an agent that asks the person something.
-pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, attention: Attention, ui: &egui::Ui) {
-    match attention {
-        Attention::Working | Attention::Background => {
-            painter.circle_filled(center, DOT_RADIUS, theme::PALETTE_GREEN());
-        }
-        Attention::Done => {
-            let mark = text::line(ui, DONE_MARK, 11.0, text::BOLD, theme::ACCENT(), BADGE_SIDE);
-            painter.galley(center - mark.size() / 2.0, mark, theme::ACCENT());
-        }
-        Attention::NeedsYou => {
-            painter.circle_filled(center, BADGE_SIDE / 2.0, theme::PALETTE_YELLOW());
-            let mark = text::line(ui, "!", 9.5, text::BOLD, theme::BG(), BADGE_SIDE);
-            painter.galley(center - mark.size() / 2.0, mark, theme::BG());
-        }
-        Attention::Idle => {
-            painter.circle_filled(center, DOT_RADIUS, theme::FG_DIM());
-        }
-    }
+/// Where the state word of a row ends: 8 in from the right edge of the card, and
+/// 22 more while the fold control shows there.
+pub(super) fn word_right(card: Rect, mark: Mark) -> f32 {
+    card.max.x - WORD_INSET - if mark.shows() { FOLD_SHIFT } else { 0.0 }
 }
 
-/// The fill of a row's card: the accent blend while dragged, `PANEL_BG_ALT` for the
-/// active workspace, a translucent `PANEL_BG_ALT` while hovered, or none at rest.
+/// The shift of the state word while the control of the fold shows.
+const FOLD_SHIFT: f32 = 22.0;
+
+/// The fill of a row's card: the accent blend while dragged, the tint of the
+/// workspace colour for the active row, the muted fill at half strength while the
+/// pointer is on another row, or none at rest.
 pub(super) fn card_fill(workspace_color: Color32, is_active: bool, hovered: bool, dragging: bool) -> Option<Color32> {
     if dragging {
         Some(theme::blend(theme::PANEL_BG_ALT(), workspace_color, 0.22))
     } else if is_active {
-        Some(theme::PANEL_BG_ALT())
+        Some(theme::alpha(workspace_color, 23))
     } else if hovered {
-        Some(theme::alpha(theme::PANEL_BG_ALT(), 170))
+        Some(theme::alpha(theme::PANEL_BG_ALT(), HOVER_ALPHA))
     } else {
         None
     }
 }
 
-/// The color that a row shows behind its tile, for the ring that cuts the badge out.
-pub(super) fn row_surface(card_fill: Option<Color32>) -> Color32 {
-    card_fill.map_or_else(theme::BG_ELEVATED, |fill| {
-        theme::composite_over(theme::BG_ELEVATED(), fill)
-    })
-}
-
-/// Paints the card of a row: a filled, outlined card for the active workspace,
-/// a lighter one while dragged or hovered. Returns the color behind the tile.
-pub(super) fn paint_workspace_row_bg(
-    ui: &egui::Ui,
-    row: Rect,
-    workspace_color: Color32,
-    is_active: bool,
-    hovered: bool,
-    dragging: bool,
-) -> Color32 {
-    let card = card(row);
-    let painter = ui.painter();
-    let fill = card_fill(workspace_color, is_active, hovered, dragging);
-    if let Some(fill) = fill {
-        painter.rect_filled(card, CARD_RADIUS, fill);
-    }
-    if is_active && !dragging {
-        painter.rect_stroke(
-            card,
-            CARD_RADIUS,
-            Stroke::new(1.0_f32, theme::alpha(workspace_color, 120)),
-            StrokeKind::Inside,
-        );
-    }
-    row_surface(fill)
-}
-
-/// Paints the tile, the name with its badges and the status line. The tile tells
-/// its status to a pointer and a screen reader.
-pub(super) fn paint_workspace_row_contents(
+/// Paints the row of `workspace`: its card, the bar of the active row, the tile,
+/// the name, the line of facts, the state word and the fold control. It answers
+/// the rectangles of the marks that take a press.
+pub(super) fn paint(
     ui: &egui::Ui,
     row: Rect,
     workspace: &WorkspaceSidebarEntry,
-    accordion: bool,
-    surface: Color32,
-) -> egui::Response {
+    word: Option<WorkspaceWord>,
+    mark: Mark,
+    hovered: bool,
+    dragging: bool,
+) -> Parts {
     let card = card(row);
-    let line = (!workspace.row.line.is_empty()).then_some(workspace.row.line.as_str());
-    let first_line_y = if line.is_some() {
-        card.min.y + 17.0
-    } else {
-        card.center().y
-    };
-
-    let tile = paint_tile(ui, card, workspace, surface);
-    let text_left = tile.max.x + 10.0;
-    let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
-    let meaning = dot_meaning(workspace.row.attention);
-    let mut spoken = meaning.to_owned();
-    // A narrow sidebar leaves out the badge, so the tile tells it.
-    if workspace.detached && !badge_shows {
-        spoken.push_str("\nIn a new window");
+    let painter = ui.painter();
+    if let Some(fill) = card_fill(
+        workspace.color,
+        workspace.is_active,
+        hovered && !workspace.is_active,
+        dragging,
+    ) {
+        painter.rect_filled(card, CARD_RADIUS, fill);
     }
-    let tile_response = ui.interact(
-        tile.expand(2.0),
-        ui.make_persistent_id(("sidebar_ws_tile", workspace.id.0)),
-        Sense::hover(),
-    );
-    tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &spoken));
-    let tile_response = tile_response.on_hover_text(spoken);
-
-    let name_color = if workspace.is_active || has_badge(workspace.row.attention) {
-        theme::FG()
-    } else {
-        theme::blend(theme::FG(), theme::FG_SOFT(), 0.45)
-    };
-    let name = text::line(ui, &workspace.name, 13.5, SEMIBOLD, name_color, name_right - text_left);
-    let name_height = name.size().y;
-    let name_rect = Rect::from_min_size(pos2(text_left, first_line_y - name_height / 2.0), name.size());
-    let name_elided = name.elided;
-    ui.painter().galley(name_rect.min, name, name_color);
-    if name_elided {
-        hover_text(ui, name_rect, ("sidebar_ws_name", workspace.id.0), &workspace.name);
+    if workspace.is_active && !dragging {
+        paint_active_bar(painter, row, workspace.color);
     }
-    if let Some(line) = line {
-        let galley = text::line(
-            ui,
-            line,
-            12.0,
-            text::REGULAR,
-            text::secondary(),
-            card.max.x - 10.0 - text_left,
-        );
-        let line_rect = Rect::from_min_size(pos2(text_left, name_rect.max.y + 2.0), galley.size());
-        ui.painter().galley(line_rect.min, galley, text::secondary());
-        hover_text(ui, line_rect, ("sidebar_ws_line", workspace.id.0), line);
-    }
-    tile_response
-}
 
-/// Shows `text` while the pointer is on `rect`, and tells it to a screen reader.
-fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
-    let response = ui.interact(rect, ui.make_persistent_id(id), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
-    response.on_hover_text(text);
-}
-
-/// Paints the tile with its initials and status badge; `surface` is the color
-/// around the tile, which the badge's ring uses to cut the badge out.
-fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, surface: Color32) -> Rect {
-    let tile = Rect::from_min_size(
-        pos2(card.min.x + TILE_INSET, card.center().y - TILE_SIDE / 2.0),
-        Vec2::splat(TILE_SIDE),
-    );
+    let tile = tile_rect(card);
     paint_workspace_tile(ui, tile, &workspace.name, workspace.color, workspace.is_active);
+    let text_left = tile.max.x + TEXT_GAP;
 
-    if has_badge(workspace.row.attention) {
-        let painter = ui.painter();
-        let center = tile.right_bottom() - vec2(2.0, 2.0);
-        painter.circle_filled(center, BADGE_SIDE / 2.0 + 2.0, surface);
-        paint_dot(painter, center, workspace.row.attention, ui);
+    let fold = mark.shows().then(|| super::fold::rect(row));
+    let word_left = word.map(|word| paint_word(ui, workspace.id.0, word, word_right(card, mark), card));
+    let text_right = word_left.map_or(card.max.x - TEXT_INSET, |left| left - WORD_GAP);
+    let text_right = badges_right(ui, card, workspace, text_left, text_right);
+    let text = paint_text(ui, card, workspace, text_left, text_right);
+
+    Parts {
+        fold,
+        text: text.box_rect,
+        name_elided: text.name_elided,
+        line_elided: text.line_elided,
     }
-    tile
 }
 
-/// Paints the mark of a workspace in `tile`: the initials in the workspace color
-/// on its surface. The row of the sidebar and the header of the orchestrator dock
-/// show the same tile, so a person reads one mark for one workspace.
+/// The bar of the active row: 3 wide at the left edge of the sidebar, from 10 under
+/// the top of the row to 10 over its bottom.
+pub(super) fn active_bar(row: Rect) -> Rect {
+    Rect::from_min_max(
+        pos2(row.min.x, row.min.y + BAR_INSET),
+        pos2(row.min.x + BAR_SIDE, row.max.y - BAR_INSET),
+    )
+}
+
+/// The bar of the active row at the left edge of the sidebar, with the tint of
+/// the workspace colour behind the row.
+fn paint_active_bar(painter: &egui::Painter, row: Rect, color: Color32) {
+    let bar = active_bar(row);
+    let radius = CornerRadius {
+        nw: 0,
+        ne: BAR_RADIUS,
+        sw: 0,
+        se: BAR_RADIUS,
+    };
+    painter.rect_filled(bar, radius, theme::alpha(color, 220));
+}
+
+/// The draws the tile of a work item: the initials of its name in the workspace
+/// colour. The row of the sidebar and the header of the orchestrator dock show the
+/// same tile, so a person reads one mark for one workspace.
 pub(in crate::app) fn paint_workspace_tile(ui: &egui::Ui, tile: Rect, name: &str, accent: Color32, is_active: bool) {
     let painter = ui.painter();
     let fill = theme::blend(theme::PANEL_BG_ALT(), accent, if is_active { 0.42 } else { 0.26 });
     painter.rect_filled(tile, 9, fill);
     let letters_color = theme::ensure_terminal_text_contrast(theme::blend(accent, theme::FG(), 0.35), fill);
-    let letters = text::line(ui, &text::initials(name), 12.0, BOLD, letters_color, tile.width());
+    let letters = text::line(ui, &text::initials(name), 12.0, text::BOLD, letters_color, tile.width());
     painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
 }
 
-/// The least room that the name keeps before the `NEW WINDOW` badge gives way.
-const MIN_NAME_WIDTH: f32 = 48.0;
-const COUNT_GAP: f32 = 8.0;
-const BADGE_GAP: f32 = 6.0;
+/// Paints the state word at the right edge of the card and answers where its dot
+/// begins: the dot in the colour of the state, then the word in the same colour.
+fn paint_word(ui: &egui::Ui, workspace: u64, word: WorkspaceWord, right: f32, card: Rect) -> f32 {
+    let galley = text::line(ui, word.text(), WORD_SIZE, text::REGULAR, word.color(), 120.0);
+    let word_left = right - galley.size().x;
+    let color = word.color();
+    let dot_x = word_left - WORD_DOT_GAP - WORD_DOT_SIDE;
+    let center = pos2(dot_x + WORD_DOT_SIDE / 2.0, card.center().y);
+    ui.painter().circle_filled(center, WORD_DOT_SIDE / 2.0, color);
+    ui.painter()
+        .galley(pos2(word_left, card.center().y - galley.size().y / 2.0), galley, color);
+    let response = ui.interact(
+        Rect::from_min_max(
+            pos2(dot_x, card.center().y - WORD_DOT_SIDE / 2.0),
+            pos2(right, card.center().y + WORD_DOT_SIDE / 2.0),
+        ),
+        ui.make_persistent_id(("sidebar_work_item_word", workspace)),
+        Sense::hover(),
+    );
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, word.text()));
+    dot_x
+}
 
-/// Where the name must end, from the right edge of the first line: after the
-/// panel count of `count_width` and the `NEW WINDOW` badge of `badge_width`.
-/// The badge shows only when the name keeps `MIN_NAME_WIDTH`; the second value
-/// tells whether it shows.
-pub(super) fn name_right(
-    text_left: f32,
-    right: f32,
-    count_width: Option<f32>,
-    badge_width: Option<f32>,
-) -> (f32, bool) {
-    let right = count_width.map_or(right, |width| right - width - COUNT_GAP);
-    match badge_width {
-        Some(width) if right - width - BADGE_GAP - text_left >= MIN_NAME_WIDTH => (right - width - BADGE_GAP, true),
-        _ => (right, false),
+/// What the two texts of a row say about themselves.
+struct Text {
+    box_rect: Rect,
+    name_elided: bool,
+    line_elided: bool,
+}
+
+/// Paints the name and, under it, the line of facts. The name stands alone in the
+/// middle of the row when there is no line.
+fn paint_text(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, text_left: f32, text_right: f32) -> Text {
+    let facts = workspace.facts.as_str();
+    let width = (text_right - text_left).max(1.0);
+    let name = text::line(ui, &workspace.name, NAME_SIZE, SEMIBOLD, theme::FG(), width);
+    let line = (!facts.is_empty()).then(|| text::line(ui, facts, LINE_SIZE, text::REGULAR, text::secondary(), width));
+    let name_height = name.size().y;
+    let line_height = line.as_ref().map_or(0.0, |line| line.size().y);
+    let gap = if line.is_some() { 2.0 } else { 0.0 };
+    let top = card.center().y - (name_height + gap + line_height) / 2.0;
+    let painter = ui.painter();
+    let name_elided = name.elided;
+    painter.galley(pos2(text_left, top), name, theme::FG());
+    if let Some(line) = line {
+        let line_elided = line.elided;
+        painter.galley(pos2(text_left, top + name_height + gap), line, text::secondary());
+        return Text {
+            box_rect: Rect::from_min_size(pos2(text_left, top), vec2(width, name_height + gap + line_height)),
+            name_elided,
+            line_elided,
+        };
+    }
+    Text {
+        box_rect: Rect::from_min_size(pos2(text_left, top), vec2(width, name_height)),
+        name_elided,
+        line_elided: false,
     }
 }
 
-/// Paints the panel count (accordion only) and, when it fits, the `NEW WINDOW`
-/// badge at the right of the first line. Returns where the name must end and
-/// whether the badge shows.
-fn paint_badges(
-    ui: &egui::Ui,
-    card: Rect,
-    workspace: &WorkspaceSidebarEntry,
-    accordion: bool,
-    text_left: f32,
-    y: f32,
-) -> (f32, bool) {
-    let right = card.max.x - 10.0;
-    let count_color = if workspace.is_active {
-        theme::FG_SOFT()
-    } else {
-        theme::FG_DIM()
-    };
-    let count = accordion.then(|| text::mono(ui, &workspace.panels.len().to_string(), 11.0, count_color));
-    let badge = workspace
+/// The badge of a detached work item, which stands left of its state word. It
+/// answers where the name must end: before the badge when the badge fits, and
+/// otherwise where it was.
+fn badges_right(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, text_left: f32, text_right: f32) -> f32 {
+    let Some(badge) = workspace
         .detached
-        .then(|| text::line(ui, "NEW WINDOW", 8.5, SEMIBOLD, theme::FG_DIM(), 80.0));
-    let (name_right, badge_shows) = name_right(
-        text_left,
-        right,
-        count.as_ref().map(|count| count.size().x),
-        badge.as_ref().map(|badge| badge.size().x),
+        .then(|| text::line(ui, "NEW WINDOW", 8.5, SEMIBOLD, theme::FG_DIM(), 80.0))
+    else {
+        return text_right;
+    };
+    let width = badge.size().x;
+    if text_right - width - BADGE_GAP - text_left < MIN_NAME_WIDTH {
+        return text_right;
+    }
+    let right = text_right - width;
+    ui.painter().galley(
+        pos2(right, card.center().y - badge.size().y / 2.0),
+        badge,
+        theme::FG_DIM(),
     );
-    if let Some(count) = count {
-        let pos = pos2(right - count.size().x, y - count.size().y / 2.0);
-        ui.painter().galley(pos, count, count_color);
-    }
-    if let Some(badge) = badge.filter(|_| badge_shows) {
-        let pos = pos2(name_right + BADGE_GAP, y - badge.size().y / 2.0);
-        ui.painter().galley(pos, badge, theme::FG_DIM());
-    }
-    (name_right, badge_shows)
+    right - BADGE_GAP
 }
 
 pub(super) fn paint_workspace_drop_indicator(
@@ -289,4 +313,182 @@ pub(super) fn paint_workspace_drop_indicator(
         [Pos2::new(left, y), Pos2::new(right, y)],
         Stroke::new(2.0_f32, theme::alpha(workspace_color, 220)),
     );
+}
+
+/// The word at the right edge of a work-item row, from the state of the row.
+pub(super) fn word_of(row: &horizon_core::workspace_list::Row) -> Option<WorkspaceWord> {
+    match row.orchestrator {
+        Orchestrator::NeedsYou => Some(WorkspaceWord::NeedsYou),
+        Orchestrator::Failed => Some(WorkspaceWord::Failed),
+        Orchestrator::Working => Some(WorkspaceWord::Working),
+        Orchestrator::Done => Some(WorkspaceWord::Done),
+        Orchestrator::Quiet => match row.attention {
+            Attention::NeedsYou => Some(WorkspaceWord::NeedsYou),
+            Attention::Done => Some(WorkspaceWord::Done),
+            Attention::Idle | Attention::Working | Attention::Background => None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Parts, WorkspaceWord, card, card_fill, paint, word_of};
+    use crate::test_egui::DiscardTextures;
+    use crate::theme;
+    use egui::pos2;
+
+    fn entry(active: bool, detached: bool) -> super::WorkspaceSidebarEntry {
+        super::WorkspaceSidebarEntry {
+            id: horizon_core::WorkspaceId(3),
+            local_id: "local-3".to_owned(),
+            name: "Build the shop".to_owned(),
+            facts: "1 needs you \u{00B7} on build-1".to_owned(),
+            place: horizon_core::WorkspacePlace::Local,
+            machine_panels: 0,
+            color: theme::ACCENT(),
+            is_active: active,
+            detached,
+            capabilities: crate::app::workspace::WorkspaceLayoutCapabilities {
+                can_arrange: true,
+                can_detach: false,
+                can_remove_empty: false,
+            },
+            panels: Vec::new(),
+            row: horizon_core::workspace_list::Row::local(horizon_core::Attention::Idle),
+        }
+    }
+
+    #[test]
+    fn the_row_keeps_the_geometry_of_the_design() {
+        // A row of a sidebar 214 wide: the card is 8 in at each side, the tile is
+        // 30 wide and 8 in from the card, and the word ends 8 before the card.
+        let row = egui::Rect::from_min_size(pos2(0.0, 100.0), egui::vec2(214.0, super::ROW_HEIGHT));
+        let card = card(row);
+        assert!((card.min.x - 8.0).abs() < f32::EPSILON);
+        assert!((card.max.x - 206.0).abs() < f32::EPSILON);
+        assert!((row.height() - 46.0).abs() < f32::EPSILON);
+        let tile = super::tile_rect(card);
+        assert!((tile.min.x - 16.0).abs() < f32::EPSILON);
+        assert!((tile.width() - 30.0).abs() < f32::EPSILON);
+        assert!((tile.height() - 30.0).abs() < f32::EPSILON);
+        assert!((tile.center().y - card.center().y).abs() < f32::EPSILON);
+        assert!((super::word_right(card, super::Mark::Hidden) - 198.0).abs() < f32::EPSILON);
+        assert!(
+            (super::word_right(card, super::Mark::Open) - 176.0).abs() < f32::EPSILON,
+            "the word moves 22 left while the control of the fold shows"
+        );
+        let fold = super::super::fold::rect(row);
+        assert!((fold.max.x - (214.0 - 6.0)).abs() < f32::EPSILON);
+        assert!((fold.width() - 18.0).abs() < f32::EPSILON);
+    }
+
+    /// The row paints its marks inside the card of a sidebar 214 wide.
+    fn painted(active: bool, detached: bool, hovered: bool) -> Parts {
+        let ctx = egui::Context::default();
+        let mut parts = None;
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(214.0, 600.0))),
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    let row = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(214.0, super::ROW_HEIGHT));
+                    let entry = entry(active, detached);
+                    parts = Some(paint(
+                        ui,
+                        row,
+                        &entry,
+                        Some(WorkspaceWord::NeedsYou),
+                        super::Mark::Open,
+                        hovered,
+                        false,
+                    ));
+                },
+            )
+            .discard_textures();
+        parts.expect("the parts of the row")
+    }
+
+    #[test]
+    fn the_word_sits_at_the_right_edge_and_the_text_elides_before_it() {
+        let parts = painted(true, false, false);
+        assert!(
+            parts.text.max.x
+                < super::word_right(
+                    super::card(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(214.0, super::ROW_HEIGHT)
+                    )),
+                    super::Mark::Open
+                ),
+            "the name keeps 8 before the word"
+        );
+        assert_eq!(
+            parts.fold.map(|fold| fold.min.x),
+            Some(214.0 - 24.0),
+            "the fold control stands at the right end of the row"
+        );
+    }
+
+    #[test]
+    fn the_active_row_is_marked_with_a_tint_and_the_rows_under_the_pointer_with_a_muted_fill() {
+        let accent = egui::Color32::from_rgb(137, 180, 250);
+        assert_eq!(
+            card_fill(accent, true, false, false),
+            Some(theme::alpha(accent, 23)),
+            "the active row takes a tint of its workspace colour"
+        );
+        assert_eq!(
+            card_fill(accent, false, true, false),
+            Some(theme::alpha(theme::PANEL_BG_ALT(), 128)),
+            "another row under the pointer takes the muted fill at half strength"
+        );
+        assert_eq!(card_fill(accent, false, false, false), None);
+        assert_eq!(
+            card_fill(accent, false, false, true),
+            Some(theme::blend(theme::PANEL_BG_ALT(), accent, 0.22)),
+            "a dragged row keeps the blend of today"
+        );
+    }
+
+    #[test]
+    fn the_word_comes_from_the_orchestrator_then_from_the_attention_state() {
+        use horizon_core::workspace_list::{Orchestrator, Row};
+        let row = |orchestrator, attention| Row {
+            attention,
+            ..Row::placed(
+                attention,
+                horizon_core::workspace_list::Waiting::default(),
+                None,
+                orchestrator,
+            )
+        };
+        assert_eq!(
+            word_of(&row(Orchestrator::Working, horizon_core::Attention::Idle)),
+            Some(WorkspaceWord::Working)
+        );
+        assert_eq!(
+            word_of(&row(Orchestrator::Failed, horizon_core::Attention::Idle)),
+            Some(WorkspaceWord::Failed)
+        );
+        assert_eq!(
+            word_of(&row(Orchestrator::Done, horizon_core::Attention::Idle)),
+            Some(WorkspaceWord::Done)
+        );
+        assert_eq!(
+            word_of(&row(Orchestrator::Quiet, horizon_core::Attention::NeedsYou)),
+            Some(WorkspaceWord::NeedsYou),
+            "a panel that waits marks the row even with no word of its orchestrator"
+        );
+        assert_eq!(
+            word_of(&row(Orchestrator::Quiet, horizon_core::Attention::Done)),
+            Some(WorkspaceWord::Done)
+        );
+        assert_eq!(
+            word_of(&row(Orchestrator::Quiet, horizon_core::Attention::Working)),
+            None
+        );
+        assert_eq!(word_of(&row(Orchestrator::Quiet, horizon_core::Attention::Idle)), None);
+    }
 }

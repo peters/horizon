@@ -1,9 +1,11 @@
 mod agents;
+mod front_desk;
+mod layout;
+mod rent;
 mod set_up;
 
 use super::{
     SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
-    sidebar_workspace_shows_panels,
 };
 use horizon_core::{WorkspaceDockSide, stand_in_program};
 
@@ -34,20 +36,11 @@ fn sidebar_insert_side_maps_to_expected_dock_side() {
     );
 }
 
-#[test]
-fn sidebar_keeps_panels_expanded_when_accordion_is_disabled() {
-    assert!(sidebar_workspace_shows_panels(false, false));
-    assert!(sidebar_workspace_shows_panels(true, false));
-}
-
-#[test]
-fn sidebar_hides_panels_for_inactive_workspaces_when_accordion_is_enabled() {
-    assert!(!sidebar_workspace_shows_panels(false, true));
-}
-
-#[test]
-fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
-    assert!(sidebar_workspace_shows_panels(true, true));
+/// Opens the fold of `workspace`, which a person does with the control at the right
+/// end of its row.
+fn open_fold(app: &mut crate::app::HorizonApp, workspace: horizon_core::WorkspaceId) {
+    let local_id = app.board.workspace(workspace).expect("the workspace").local_id.clone();
+    app.sidebar_chrome.folds.toggle(&local_id, false);
 }
 
 // `is_focused` is decorative in these tests: the reveal helpers read the
@@ -159,7 +152,9 @@ fn workspace_row_reveal_gate_covers_accordion_and_panel_count() {
 fn workspace_entry(row: horizon_core::workspace_list::Row, detached: bool) -> super::WorkspaceSidebarEntry {
     super::WorkspaceSidebarEntry {
         id: horizon_core::WorkspaceId(7),
+        local_id: "sample".to_owned(),
         name: "sample".to_owned(),
+        facts: String::new(),
         place: horizon_core::WorkspacePlace::Local,
         machine_panels: 0,
         color: egui::Color32::WHITE,
@@ -187,46 +182,6 @@ fn a_dragged_workspace_drops_only_on_a_docked_row() {
 }
 
 #[test]
-fn the_new_window_badge_gives_way_to_the_name_of_a_narrow_row() {
-    use super::rows::name_right;
-    // A row that is narrower than the sidebar: the name starts at 64 and the first line ends at 150.
-    let (right, badge) = name_right(64.0, 150.0, Some(7.0), Some(58.0));
-    assert!(!badge, "a narrow row keeps the room for the name");
-    assert!((right - 135.0).abs() <= f32::EPSILON);
-    // The sidebar is 210 wide: the badge fits and the name keeps 49.
-    let (right, badge) = name_right(64.0, 192.0, Some(7.0), Some(58.0));
-    assert!(badge);
-    assert!((right - 113.0).abs() <= f32::EPSILON);
-    // Without a count or a badge the name runs to the right edge.
-    assert_eq!(name_right(64.0, 192.0, None, None), (192.0, false));
-}
-
-#[test]
-fn the_badge_ring_takes_the_color_of_the_card_in_every_state() {
-    use super::rows::{card_fill, row_surface};
-    use crate::theme;
-    let accent = egui::Color32::from_rgb(137, 180, 250);
-    assert_eq!(
-        row_surface(card_fill(accent, false, false, false)),
-        theme::BG_ELEVATED()
-    );
-    assert_eq!(
-        row_surface(card_fill(accent, true, false, false)),
-        theme::PANEL_BG_ALT()
-    );
-    let hovered = row_surface(card_fill(accent, false, true, false));
-    assert_eq!(
-        hovered,
-        theme::composite_over(theme::BG_ELEVATED(), theme::alpha(theme::PANEL_BG_ALT(), 170))
-    );
-    assert_ne!(hovered, theme::BG_ELEVATED());
-    assert_eq!(
-        row_surface(card_fill(accent, true, true, true)),
-        theme::blend(theme::PANEL_BG_ALT(), accent, 0.22)
-    );
-}
-
-#[test]
 fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
     use crate::test_egui::DiscardTextures;
     use egui::epaint::Shape;
@@ -244,6 +199,7 @@ fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
         .expect("panel");
     app.board.active_workspace = Some(workspace);
     app.board.focus(first);
+    open_fold(&mut app, workspace);
     let ctx = egui::Context::default();
     let frame = |app: &mut crate::app::HorizonApp| {
         let input = crate::app::test_support::raw_input([1400.0, 900.0], None);
@@ -308,12 +264,20 @@ fn the_snapshot_labels_only_the_panel_rows_that_show() {
             .collect::<Vec<_>>()
     };
 
-    app.template_config.features.sidebar_accordion = true;
-    assert_eq!(labels(&app, shown), ["first"]);
-    assert_eq!(labels(&app, hidden), [""], "a collapsed workspace builds no labels");
+    // Every work item starts folded, so no row builds the label of a panel.
+    assert_eq!(labels(&app, shown), [""]);
+    assert_eq!(labels(&app, hidden), [""], "a folded work item builds no label");
 
-    app.template_config.features.sidebar_accordion = false;
-    assert_eq!(labels(&app, hidden), ["second"], "flat rows all show");
+    open_fold(&mut app, shown);
+    assert_eq!(labels(&app, shown), ["first"]);
+    assert_eq!(labels(&app, hidden), [""], "the other work item stays folded");
+
+    // With the accordion on, opening one work item folds the other.
+    app.template_config.features.sidebar_accordion = true;
+    let local_id = app.board.workspace(hidden).expect("workspace").local_id.clone();
+    app.sidebar_chrome.folds.toggle(&local_id, true);
+    assert_eq!(labels(&app, hidden), ["second"]);
+    assert_eq!(labels(&app, shown), [""], "the accordion folded the first work item");
 }
 
 #[test]
@@ -897,6 +861,7 @@ fn sidebar_rows_with_the_close_mark() -> SidebarRows {
         .expect("panel");
     app.board.active_workspace = Some(workspace);
     app.board.focus(first);
+    open_fold(&mut app, workspace);
     let ctx = egui::Context::default();
     sidebar_frame_with(&ctx, &mut app, Vec::new());
     let texts = sidebar_frame_with(&ctx, &mut app, Vec::new());

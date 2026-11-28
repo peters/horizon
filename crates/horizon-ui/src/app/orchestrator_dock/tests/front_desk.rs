@@ -355,22 +355,14 @@ fn the_sidebar_marks_no_row_while_the_front_desk_shows() {
     let (active, panels) = window.app().sidebar_drawn_rows();
     assert!(active.is_empty(), "no row of the sidebar is the active one: {active:?}");
     assert_eq!(
-        panels, 1,
-        "a flat list of rows keeps the panel rows of every workspace open"
+        panels, 0,
+        "every work item starts folded, so no row opens its panel rows"
     );
-
-    // The accordion opens the panel rows of the active workspace alone, so a dock
-    // that shows the front desk opens none of them.
-    window.app().template_config.features.sidebar_accordion = true;
-    let _ = window.frame(Vec::new());
-    let (active, panels) = window.app().sidebar_drawn_rows();
-    assert!(active.is_empty(), "no row of the sidebar is the active one: {active:?}");
-    assert_eq!(panels, 0, "no row of the sidebar opens its panel rows");
 
     press_workspace_row(&mut window);
     let (active, panels) = window.app().sidebar_drawn_rows();
     assert_eq!(active, vec![WORKSPACE.to_owned()], "the row of the workspace is active");
-    assert_eq!(panels, 1, "the workspace opens the row of its panel");
+    assert_eq!(panels, 0, "the fold of that row stays closed");
 
     // The dock that is off keeps the drawing of the sidebar of today.
     window.app().orchestrator_dock.toggle();
@@ -396,7 +388,7 @@ fn the_sidebar_marks_the_active_row_while_the_dock_is_off() {
         vec![WORKSPACE.to_owned()],
         "a window whose dock is off marks its active workspace row"
     );
-    assert_eq!(panels, 1, "and that row opens its panel rows");
+    assert_eq!(panels, 0, "and that row keeps its panel rows folded");
 }
 
 #[test]
