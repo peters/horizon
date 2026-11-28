@@ -26,6 +26,10 @@ pub(crate) enum Tag {
     Kept,
     /// The list of the computers: the newest one replaces it.
     List,
+    /// The lists of the session mirror: the newest one replaces it. It is a tag
+    /// of its own, because the list of the computers and the lists of the mirror
+    /// are two documents, and one must not replace the other while it waits.
+    MirrorList,
     /// A screen or output of one panel of one owner.
     Stream(String, String),
 }
@@ -85,8 +89,8 @@ impl Outbox {
         if state.closed {
             return answer;
         }
-        if tag == Tag::List {
-            state.drop_waiting(|waiting| *waiting == Tag::List);
+        if matches!(tag, Tag::List | Tag::MirrorList) {
+            state.drop_waiting(|waiting| *waiting == tag);
         }
         if state.bytes + cost > CEILING_BYTES {
             let stream = matches!(tag, Tag::Stream(..));

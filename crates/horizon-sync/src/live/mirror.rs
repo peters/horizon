@@ -133,10 +133,10 @@ pub fn clean_entries(entries: Vec<MirrorEntry>) -> Vec<MirrorEntry> {
 fn clean_entry(entry: MirrorEntry) -> Option<MirrorEntry> {
     match entry {
         MirrorEntry::Person { text } => Some(MirrorEntry::Person {
-            text: clean(&text, MAX_TEXT_CHARS),
+            text: clean_lines(&text, MAX_TEXT_CHARS),
         }),
         MirrorEntry::Agent { text } => Some(MirrorEntry::Agent {
-            text: clean(&text, MAX_TEXT_CHARS),
+            text: clean_lines(&text, MAX_TEXT_CHARS),
         }),
         MirrorEntry::Tool { name, request } => Some(MirrorEntry::Tool {
             name: clean(&name, TOOL_CHARS),
@@ -155,6 +155,16 @@ fn is_blank(entry: &MirrorEntry) -> bool {
         MirrorEntry::Person { text } | MirrorEntry::Agent { text } | MirrorEntry::Notice { text } => text.is_empty(),
         MirrorEntry::Tool { name, request } => name.is_empty() && request.is_empty(),
     }
+}
+
+/// The text of the person or of the agent without its control characters but the
+/// end of a line, cut at `max` characters. The lines stay, because the dock draws
+/// the paragraphs and the lists of such a text.
+fn clean_lines(text: &str, max: usize) -> String {
+    text.chars()
+        .filter(|character| *character == '\n' || !character.is_control())
+        .take(max)
+        .collect()
 }
 
 /// `text` without its control characters, cut at `max` characters.

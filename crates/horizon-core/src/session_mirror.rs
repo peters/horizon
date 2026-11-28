@@ -151,13 +151,16 @@ pub struct SessionKey {
     pub session: String,
 }
 
-/// One row of a session of this computer, with the file that holds its entries.
+/// One row of a session of this computer.
+///
+/// The row does not name the file of its entries. A search for that file reads
+/// the names of a store, and a list of fifty rows that searched for each file in
+/// each read cost a third of a processor on a real computer. The publisher asks
+/// [`source_of`] for the file of a session only while a computer follows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MirrorSessionRow {
     /// The row of the list.
     pub session: MirrorSession,
-    /// The file of the entries of that session, when this build found one.
-    pub source: Option<PathBuf>,
 }
 
 impl MirrorSessionRow {
@@ -295,7 +298,6 @@ fn row_of(
         return None;
     }
     Some(MirrorSessionRow {
-        source: source_of(home, program, &session),
         session: session_row(record, program, home, live, session),
     })
 }
@@ -383,9 +385,78 @@ fn notice(text: &str) -> MirrorEntry {
     MirrorEntry::Notice { text: text.to_owned() }
 }
 
+/// What the dock reads in place of a text that a program wrote in the turn of the
+/// person.
+pub const PROGRAM_TEXT_NOTICE: &str = "A message that the program added";
+
+/// The starts of the texts that an agent program writes in the turn of the person
+/// with no tag: the line of a turn that the person stopped, and the instruction
+/// files of a folder that Codex sends before the first words of the person.
+const PROGRAM_TEXT_STARTS: [&str; 2] = ["[Request interrupted", "# AGENTS.md instructions for "];
+
+/// Whether an agent program wrote `text` in the turn of the person: a reminder,
+/// the output of a command of the program, a message of another session, the
+/// context of a new session. Such a text starts with a tag whose name holds a
+/// hyphen or an underscore, as `<system-reminder>` and `<environment_context>` do.
+/// A person seldom starts a message with such a tag, and a tag of HTML that a
+/// person types, as `<div>`, has neither. The person did not type such a text, so
+/// the dock does not draw it as the words of the person.
+fn is_program_text(text: &str) -> bool {
+    let start = text.trim_start();
+    if PROGRAM_TEXT_STARTS.iter().any(|mark| start.starts_with(mark)) {
+        return true;
+    }
+    let Some(rest) = start.strip_prefix('<') else {
+        return false;
+    };
+    let name_len = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '-' || character == '_'))
+        .unwrap_or(rest.len());
+    let (name, after) = rest.split_at(name_len);
+    name.starts_with(|character: char| character.is_ascii_lowercase())
+        && name.contains(['-', '_'])
+        && after.starts_with(['>', ' ', '/'])
+}
+
+/// The entry of one text of the turn of the person: the text with its lines, or
+/// one notice for a text that the program wrote there. `None` for no text.
+fn person_entry(text: &str) -> Option<MirrorEntry> {
+    if is_program_text(text) {
+        return Some(notice(PROGRAM_TEXT_NOTICE));
+    }
+    let text = text_block(text, MAX_TEXT_CHARS);
+    (!text.is_empty()).then_some(MirrorEntry::Person { text })
+}
+
+/// The text of the person or of the agent with its lines kept, because a list
+/// and a paragraph are what make such a text readable. A control character
+/// becomes a space, the white space at the end of a line leaves, the empty lines
+/// between two lines become one, and the text is cut at `max_chars` characters.
+fn text_block(value: &str, max_chars: usize) -> String {
+    let mut block = String::with_capacity(value.len());
+    let mut blank = false;
+    for line in value.lines() {
+        let line: String = line
+            .chars()
+            .map(|character| if character.is_control() { ' ' } else { character })
+            .collect();
+        let line = line.trim_end();
+        if line.is_empty() {
+            blank = true;
+            continue;
+        }
+        if !block.is_empty() {
+            block.push_str(if blank { "\n\n" } else { "\n" });
+        }
+        blank = false;
+        block.push_str(line);
+    }
+    crate::util::truncate_chars(&block, max_chars).into_owned()
+}
+
 /// The keys of a tool input that become the request of a tool call, as the codec of
 /// the bridge reads them. Nothing else of the input is read.
-const SUMMARY_KEYS: [(&str, &str); 8] = [
+const SUMMARY_KEYS: [(&str, &str); 12] = [
     ("Bash", "command"),
     ("Read", "file_path"),
     ("Write", "file_path"),
@@ -394,18 +465,26 @@ const SUMMARY_KEYS: [(&str, &str); 8] = [
     ("NotebookEdit", "file_path"),
     ("shell", "command"),
     ("exec", "command"),
+    // The tools of Pi, whose names are in lower case.
+    ("bash", "command"),
+    ("read", "path"),
+    ("write", "path"),
+    ("edit", "path"),
 ];
 
 /// The first line of the request of one tool call whose input is an object, from
 /// its one key of [`SUMMARY_KEYS`]. A tool without such a key is its own request.
 fn summary(name: &str, input: Option<&Value>) -> String {
-    let Some((_, key)) = SUMMARY_KEYS.iter().find(|(tool, _)| *tool == name) else {
-        return one_line(name, MAX_SUMMARY_CHARS);
-    };
-    match input.and_then(|input| input.get(*key)).and_then(Value::as_str) {
-        Some(value) => request_text(value),
-        None => one_line(name, MAX_SUMMARY_CHARS),
-    }
+    input
+        .and_then(|input| key_request(name, input))
+        .unwrap_or_else(|| one_line(name, MAX_SUMMARY_CHARS))
+}
+
+/// The first line of the text of the one key of [`SUMMARY_KEYS`] of the tool
+/// `name` in `input`, when the tool has such a key and the input holds a text there.
+fn key_request(name: &str, input: &Value) -> Option<String> {
+    let (_, key) = SUMMARY_KEYS.iter().find(|(tool, _)| *tool == name)?;
+    input.get(*key).and_then(Value::as_str).map(request_text)
 }
 
 /// The first line of the request of one tool call, cut at [`MAX_SUMMARY_CHARS`].

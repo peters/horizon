@@ -158,10 +158,15 @@ impl HorizonApp {
         let wanted = &mut shared.wanted;
         let shown_mirror = self.orchestrator_dock.front_desk().mirror().cloned();
         let before = (wanted.sharing, wanted.typing, wanted.follows.len());
+        // The session that the dock shows is a wish of the window as its follows
+        // are: a change of it alone must reach the pump. A real run showed a
+        // mirrored session with its header and no entry, because this change was
+        // not counted and the pump never heard of the follow.
+        let mirror_changed = wanted.mirror.follow != shown_mirror;
         wanted.mirror.follow = shown_mirror;
         (wanted.sharing, wanted.typing) = (server.share_terminals, server.remote_typing);
         wanted.follows.retain(|follow| !follow.feed.closed());
-        let mut changed = before != (wanted.sharing, wanted.typing, wanted.follows.len());
+        let mut changed = mirror_changed || before != (wanted.sharing, wanted.typing, wanted.follows.len());
         if let Some(panels) = listed.filter(|panels| *panels != wanted.panels) {
             (wanted.panels, changed) = (panels, true);
         }

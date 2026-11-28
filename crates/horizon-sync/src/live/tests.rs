@@ -349,6 +349,46 @@ fn a_kept_frame_is_never_dropped_and_kept_frames_alone_end_the_link() {
     );
 }
 
+/// A real run with a mirror showed a window that never read the new name of a
+/// computer: the lists of the mirror had the tag of the list of the computers,
+/// and the one that came later dropped the other one while it waited.
+#[test]
+fn a_list_of_the_mirror_and_the_list_of_the_computers_do_not_replace_each_other() {
+    let outbox = Outbox::default();
+    let computers = |device: &str| LiveEvent::Computers {
+        computers: vec![LiveComputer {
+            device: text(device),
+            label: String::new(),
+            panels: Vec::new(),
+            own: false,
+        }],
+    };
+    let mirror = |device: &str| LiveEvent::MirrorComputers {
+        computers: vec![super::mirror::MirrorComputer {
+            device: text(device),
+            label: String::new(),
+            sessions: Vec::new(),
+            unreadable: Vec::new(),
+            own: false,
+        }],
+    };
+    assert_eq!(outbox.push(computers("laptop-a"), Tag::List), Push::Queued);
+    assert_eq!(outbox.push(mirror("laptop-a"), Tag::MirrorList), Push::Queued);
+    assert_eq!(outbox.push(mirror("laptop-b"), Tag::MirrorList), Push::Queued);
+
+    let Next::Event(LiveEvent::Computers { computers }) = outbox.next() else {
+        panic!("the list of the computers still waits");
+    };
+    assert_eq!(computers[0].device, "laptop-a");
+    outbox.written();
+    let Next::Event(LiveEvent::MirrorComputers { computers }) = outbox.next() else {
+        panic!("one list of the mirror waits");
+    };
+    assert_eq!(computers[0].device, "laptop-b", "the newest list of the mirror");
+    outbox.written();
+    assert_eq!(outbox.waiting().0, 0, "nothing more waits");
+}
+
 #[test]
 fn the_newest_list_replaces_the_list_that_waits() {
     let outbox = Outbox::default();

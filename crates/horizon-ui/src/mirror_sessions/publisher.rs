@@ -11,8 +11,8 @@
 //! Nothing of a session reaches a log line of this process: it installs no tracing
 //! writer, and the lines that it prints name the program and counts, never a text.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,14 +20,20 @@ use horizon_core::{SecretError, SecretId, SecretTarget};
 
 use horizon_core::server_link::JoinLink;
 use horizon_core::session_mirror::{
-    MirrorCatalog, MirrorEntry, MirrorProgram, SessionKey, process_alive, read_entries, read_list, stores_home,
+    MirrorCatalog, MirrorEntry, MirrorProgram, MirrorSessionRow, SessionKey, process_alive, read_entries, read_list,
+    source_of, stores_home,
 };
 use horizon_sync::{LinkBounds, LiveEvent, LiveHandle, LiveState, LiveSupervisor, MirrorList, SupervisorConfig};
 
 use super::home::MirrorHome;
 
-/// How often the publisher reads the stores.
+/// How often the publisher reads the sessions that a computer follows. It reads
+/// the file of such a session only when its size or its time changed.
 pub const READ_EVERY: Duration = Duration::from_secs(3);
+/// How often the publisher reads the list of the sessions. The list is the
+/// catalog of every store, which names many thousand files on a computer with
+/// much history, so it is read less often than a followed session.
+pub const LIST_EVERY: Duration = Duration::from_secs(15);
 /// How often the publisher reads the events of its link. A follow arrives within
 /// this time, and so do the entries of it.
 const TICK: Duration = Duration::from_millis(200);
@@ -48,6 +54,9 @@ enum Shown {
 struct Followed {
     entries: Vec<MirrorEntry>,
     stamp: Option<Stamp>,
+    /// The file of the entries of the session, which the publisher searches for
+    /// one time for a follow and not for each row of each list.
+    source: Option<PathBuf>,
 }
 
 /// The size and the time of one file, which say that its entries changed.
@@ -58,7 +67,7 @@ struct Stamp {
 }
 
 impl Stamp {
-    fn of(path: &PathBuf) -> Option<Self> {
+    fn of(path: &Path) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis();
         Some(Self {
@@ -163,7 +172,8 @@ fn publish(handle: &LiveHandle, stop: &std::sync::atomic::AtomicBool) -> i32 {
     let mut shown = Shown::Connecting;
     let mut sent: Option<MirrorList> = None;
     let mut followed: BTreeMap<SessionKey, Followed> = BTreeMap::new();
-    let mut sources: HashMap<SessionKey, PathBuf>;
+    let mut listed: BTreeSet<SessionKey> = BTreeSet::new();
+    let mut list_at: Option<Instant> = None;
     let mut read_at = Instant::now();
     loop {
         if stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -180,6 +190,11 @@ fn publish(handle: &LiveHandle, stop: &std::sync::atomic::AtomicBool) -> i32 {
             {
                 let key = SessionKey { program, session };
                 if watched {
+                    // A new follow is read in this pass, so the dock of the
+                    // viewer does not wait one period for its first entries.
+                    if !followed.contains_key(&key) {
+                        read_at = Instant::now().checked_sub(READ_EVERY).unwrap_or(read_at);
+                    }
                     followed.entry(key).or_default();
                 } else {
                     followed.remove(&key);
@@ -190,46 +205,67 @@ fn publish(handle: &LiveHandle, stop: &std::sync::atomic::AtomicBool) -> i32 {
         if let Some(code) = show(&state, &mut shown, &mut sent) {
             return code;
         }
-        if state == LiveState::Open && read_at.elapsed() >= READ_EVERY {
-            read_at = Instant::now();
+        if state != LiveState::Open {
+            // A link that is away has no list: the next link reads the stores at once.
+            list_at = None;
+            std::thread::sleep(TICK);
+            continue;
+        }
+        if list_at.is_none_or(|at| at.elapsed() >= LIST_EVERY) {
+            list_at = Some(Instant::now());
             let catalog = stores_home().map_or_else(MirrorCatalog::default, |home| {
                 read_list(&home, now_millis(), &|pid| process_alive(pid))
             });
             // The whole catalog is read again, so a session that left is forgotten
             // even when nobody followed it.
-            sources = catalog
-                .rows()
-                .iter()
-                .map(|row| (row.key(), row.source.clone().unwrap_or_default()))
-                .collect();
+            listed = catalog.rows().iter().map(MirrorSessionRow::key).collect();
             let list = mirror_list(&catalog);
             if sent.as_ref() != Some(&list) {
                 handle.set_mirror_list(list.clone());
                 sent = Some(list);
                 println!("horizon mirror: the list holds {}.", counts(&catalog));
             }
-            let keys: Vec<SessionKey> = followed.keys().cloned().collect();
-            for key in keys {
-                let Some(source) = sources.get(&key).filter(|source| !source.as_os_str().is_empty()) else {
-                    continue;
-                };
-                let stamp = Stamp::of(source);
-                let followed = followed.entry(key.clone()).or_default();
-                if stamp.is_some() && followed.stamp == stamp {
-                    continue;
-                }
-                followed.stamp = stamp;
-                let entries = read_entries(key.program, source);
-                let (frame, tail) = next_entries(&followed.entries, entries.clone());
-                if frame.is_empty() {
-                    continue;
-                }
-                if handle.mirror_entries(key.program.key(), &key.session, frame, tail) {
-                    followed.entries = entries;
-                }
-            }
+        }
+        if read_at.elapsed() >= READ_EVERY {
+            read_at = Instant::now();
+            send_followed(handle, &listed, &mut followed);
         }
         std::thread::sleep(TICK);
+    }
+}
+
+/// Reads the sessions that a computer follows and sends what is new in each. A
+/// session that the list does not name is not searched for, so a follow names no
+/// file of this computer but one of a listed session. The file of a session is
+/// searched for one time, and a file whose size and time did not change is not
+/// read again.
+fn send_followed(handle: &LiveHandle, listed: &BTreeSet<SessionKey>, followed: &mut BTreeMap<SessionKey, Followed>) {
+    let Some(home) = stores_home() else {
+        return;
+    };
+    for (key, followed) in followed.iter_mut() {
+        if !listed.contains(key) {
+            continue;
+        }
+        if followed.source.is_none() {
+            followed.source = source_of(&home, key.program, &key.session);
+        }
+        let Some(source) = followed.source.as_deref() else {
+            continue;
+        };
+        let stamp = Stamp::of(source);
+        if stamp.is_some() && followed.stamp == stamp {
+            continue;
+        }
+        followed.stamp = stamp;
+        let entries = read_entries(key.program, source);
+        let (frame, tail) = next_entries(&followed.entries, entries.clone());
+        if frame.is_empty() {
+            continue;
+        }
+        if handle.mirror_entries(key.program.key(), &key.session, frame, tail) {
+            followed.entries = entries;
+        }
     }
 }
 

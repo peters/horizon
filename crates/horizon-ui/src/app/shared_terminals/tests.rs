@@ -63,6 +63,10 @@ struct Relay {
     waiting: bool,
     events: Vec<LiveEvent>,
     panels: Vec<LivePanel>,
+    /// How many times the pump told the link that the window reads the mirror,
+    /// and the sessions of the mirror that it follows, as `device/program/session`.
+    mirror_opens: usize,
+    mirror_follows: Vec<String>,
     followed: Vec<String>,
     /// The panels that the follower of this window waits for a screen of, and
     /// the panels whose screen it is taking now: the relay of the server.
@@ -223,11 +227,18 @@ impl StandIn {
 }
 
 impl LiveLink for StandIn {
-    fn open_mirror(&self) {}
+    fn open_mirror(&self) {
+        self.relay().mirror_opens += 1;
+    }
 
-    fn follow_mirror(&self, _owner: &str, _program: &str, _session: &str) {}
+    fn follow_mirror(&self, owner: &str, program: &str, session: &str) {
+        self.relay().mirror_follows.push(format!("{owner}/{program}/{session}"));
+    }
 
-    fn unfollow_mirror(&self, _owner: &str, _program: &str, _session: &str) {}
+    fn unfollow_mirror(&self, owner: &str, program: &str, session: &str) {
+        let key = format!("{owner}/{program}/{session}");
+        self.relay().mirror_follows.retain(|follow| *follow != key);
+    }
 
     fn set_panels(&self, panels: Vec<LivePanel>) {
         let mut relay = self.relay();

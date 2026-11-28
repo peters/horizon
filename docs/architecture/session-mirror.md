@@ -67,6 +67,17 @@ One entry of a session is one of three kinds, as the dock draws them:
 - the text of the agent;
 - the name of a tool and the first line of what it was asked to do.
 
+The text of the person and of the agent keeps its lines, so the dock draws its
+paragraphs and its lists. Each other control character leaves.
+
+An agent program also writes text in the turn of the person: a reminder, the
+output of one of its commands, a message of another session. The person did not
+type such a text. The publisher sends in its place one entry of Horizon that
+reads `A message that the program added`, and it sends no word of that text.
+The publisher knows such a text by the tag at its start: the name of the tag
+holds a hyphen or an underscore, as `<system-reminder>` does. A text of the
+person that starts with such a tag is read as a text of the program.
+
 The publisher sends **no result of a tool**. A result is where a file, a key or
 the output of a command stands, and the mirror exists to follow the work, not to
 copy what the work read.
@@ -81,7 +92,8 @@ copy what the work read.
 | One text of the person or of the agent | 4,000 characters |
 | The first line of a tool request | 200 characters |
 | Bytes read from the end of one session file | 1 MiB |
-| How often the publisher reads the stores | once in 3 seconds, and only the files whose size or time changed |
+| How often the publisher reads the list of the sessions | once in 15 seconds |
+| How often the publisher reads a followed session | once in 3 seconds, and only when the size or the time of its file changed |
 | One frame of the mirror | 256 KiB |
 | The entries of one session in one frame | 192 KiB, so the rest of the document fits |
 

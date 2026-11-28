@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use horizon_core::{FollowFeed, ShareSource};
 use horizon_sync::{LiveComputer, LiveEvent, LivePanel, LiveState};
 
-use crate::app::session_mirror::{Mirror, MirrorView, MirrorWanted};
+use crate::app::session_mirror::{Mirror, MirrorKey, MirrorView, MirrorWanted};
 
 use super::follower::Follow;
 use super::owner::Watched;
@@ -188,6 +188,8 @@ impl Pump {
             changed: false,
             session_mirror: Mirror::default(),
             mirror_sent: MirrorWanted::default(),
+            mirror_opened: false,
+            mirror_listed: false,
         };
         let state = Arc::clone(&shared);
         let thread = std::thread::Builder::new().name("share-pump".to_owned());
@@ -233,6 +235,13 @@ pub(super) struct Run {
     /// The frames of the mirror that this pass read, and what the link has of them.
     session_mirror: Mirror,
     mirror_sent: MirrorWanted,
+    /// Whether this pump told the link that the window reads the mirror. A window
+    /// reads the lists of the other computers always, also while its dock shows no
+    /// session of them.
+    mirror_opened: bool,
+    /// Whether a list of the mirror came since the pump last looked for a follow
+    /// that it must ask for again.
+    mirror_listed: bool,
 }
 
 impl Run {
@@ -267,6 +276,7 @@ impl Run {
             self.apply_wanted();
             self.apply_mirror();
         }
+        self.follow_mirror_again();
         if let Some(view) = self.session_mirror.snapshot() {
             self.found.mirror = view;
             self.changed = true;
@@ -313,7 +323,7 @@ impl Run {
             | LiveEvent::MirrorEntries { .. }
             | LiveEvent::MirrorEnded { .. }
             | LiveEvent::MirrorWatched { .. } => {
-                self.session_mirror.apply(&event);
+                self.mirror_event(&event);
             }
             stream => self.stream(stream),
         }
@@ -331,16 +341,69 @@ impl Run {
             // again, and this window follows its session again.
             self.session_mirror.clear();
             self.mirror_sent = MirrorWanted::default();
+            self.mirror_opened = false;
+        }
+    }
+
+    /// Takes one frame of the mirror. A follow that the server ended is a follow
+    /// that the link does not have, and a new list is when the window asks for it
+    /// again. A real run showed a session with no entry after its publisher
+    /// started again: the server ended the follow, the session came back in the
+    /// list, and nothing followed it again.
+    fn mirror_event(&mut self, event: &LiveEvent) {
+        match event {
+            LiveEvent::MirrorEnded {
+                owner,
+                program,
+                session,
+                ..
+            } => {
+                let ended = |follow: &MirrorKey| {
+                    follow.device == *owner && follow.program.key() == program && follow.session == *session
+                };
+                if self.mirror_sent.follow.as_ref().is_some_and(ended) {
+                    self.mirror_sent.follow = None;
+                }
+            }
+            LiveEvent::MirrorComputers { .. } => self.mirror_listed = true,
+            _ => {}
+        }
+        self.session_mirror.apply(event);
+    }
+
+    /// Follows the session of the dock again after a new list, when the link does
+    /// not follow it and the list names it. A session that the list does not name
+    /// waits for the next list, so a follow that the server refuses is not asked
+    /// for in each pass.
+    fn follow_mirror_again(&mut self) {
+        if !std::mem::take(&mut self.mirror_listed) || self.wanted.mirror == self.mirror_sent {
+            return;
+        }
+        let listed = self
+            .wanted
+            .mirror
+            .follow
+            .as_ref()
+            .is_some_and(|follow| self.session_mirror.lists(follow));
+        if listed {
+            self.apply_mirror();
         }
     }
 
     /// Tells the link what the window wants of the mirror: whether it reads the
     /// frames of the mirror at all, and the one session that the dock shows.
     fn apply_mirror(&mut self) {
+        // The list of the sessions of another computer shows in the sidebar before
+        // the person opens one of them, so the window reads the mirror from the
+        // first pass. A real run showed the computer with no session under it: the
+        // window opened the mirror only with its first follow.
+        if !self.mirror_opened {
+            self.link.open_mirror();
+            self.mirror_opened = true;
+        }
         if self.wanted.mirror == self.mirror_sent {
             return;
         }
-        self.link.open_mirror();
         if let Some(before) = self.mirror_sent.follow.as_ref()
             && self.wanted.mirror.follow.as_ref() != Some(before)
         {

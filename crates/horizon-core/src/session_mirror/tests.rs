@@ -151,7 +151,10 @@ fn the_list_holds_the_sessions_of_every_program_that_this_build_reads() {
         row.session.title, "Claude session",
         "a transcript without a last prompt names the program"
     );
-    assert!(row.source.is_some(), "the row names the file of its entries");
+    assert!(
+        super::source_of(home.path(), MirrorProgram::Claude, &claude).is_some(),
+        "the file of the entries of a session is found from its id"
+    );
     let codex_row = catalog.row(MirrorProgram::Codex, codex).expect("the Codex row");
     assert_eq!(codex_row.session.title, format!("made-up title {codex}"));
     assert_eq!(
@@ -256,20 +259,29 @@ fn the_entries_of_a_codex_and_of_a_pi_session_are_the_three_kinds() {
     write(
         &rollout,
         &format!(
-            "{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n",
             serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user",
-                "content": [{"type": "input_text", "text": "made-up request"}]}}),
+            "content": [
+                {"type": "input_text", "text": "# AGENTS.md instructions for /repo\n\nmade-up rules"},
+                {"type": "input_text", "text": "<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"},
+                {"type": "input_text", "text": "made-up request"},
+            ]}}),
             serde_json::json!({"type": "response_item", "payload": {"type": "reasoning",
                 "content": [{"type": "reasoning_text", "text": "made-up thinking"}]}}),
             serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "assistant",
                 "content": [{"type": "output_text", "text": "made-up answer"}]}}),
             serde_json::json!({"type": "response_item", "payload": {"type": "function_call",
                 "name": "shell", "arguments": "{\"command\":\"made-up command\"}"}}),
+            serde_json::json!({"type": "response_item", "payload": {"type": "custom_tool_call",
+                "name": "exec", "input": "made-up script\nits second line"}}),
         ),
     );
     assert_eq!(
         read_entries(MirrorProgram::Codex, &rollout),
         vec![
+            MirrorEntry::Notice {
+                text: super::PROGRAM_TEXT_NOTICE.to_owned()
+            },
             MirrorEntry::Person {
                 text: "made-up request".to_owned()
             },
@@ -278,9 +290,14 @@ fn the_entries_of_a_codex_and_of_a_pi_session_are_the_three_kinds() {
             },
             MirrorEntry::Tool {
                 name: "shell".to_owned(),
-                request: "{\"command\":\"made-up command\"}".to_owned()
+                request: "made-up command".to_owned()
             },
-        ]
+            MirrorEntry::Tool {
+                name: "exec".to_owned(),
+                request: "made-up script".to_owned()
+            },
+        ],
+        "the blocks that Codex writes before the words of the person are one notice"
     );
 
     let pi = "01a17ba5-0000-7000-8000-000000000033";
@@ -288,7 +305,7 @@ fn the_entries_of_a_codex_and_of_a_pi_session_are_the_three_kinds() {
     write(
         &transcript,
         &format!(
-            "{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n",
             serde_json::json!({"type": "session", "id": pi, "cwd": "/repo"}),
             serde_json::json!({"type": "message", "message": {"role": "user",
                 "content": [{"type": "text", "text": "made-up request"}]}}),
@@ -296,7 +313,10 @@ fn the_entries_of_a_codex_and_of_a_pi_session_are_the_three_kinds() {
                 "content": [{"type": "thinking", "thinking": "made-up thinking"}]}}),
             serde_json::json!({"type": "message", "message": {"role": "assistant",
                 "content": [{"type": "toolCall", "id": "t1", "name": "bash",
-                    "arguments": "{\"command\":\"made-up command\"}"}]}}),
+                    "arguments": {"command": "made-up command\nits second line", "timeout": 60}}]}}),
+            serde_json::json!({"type": "message", "message": {"role": "assistant",
+                "content": [{"type": "toolCall", "id": "t2", "name": "write",
+                    "arguments": {"path": "made-up/file.txt", "content": "made-up content of a file"}}]}}),
         ),
     );
     assert_eq!(
@@ -307,9 +327,108 @@ fn the_entries_of_a_codex_and_of_a_pi_session_are_the_three_kinds() {
             },
             MirrorEntry::Tool {
                 name: "bash".to_owned(),
-                request: "{\"command\":\"made-up command\"}".to_owned()
+                request: "made-up command".to_owned()
             },
-        ]
+            MirrorEntry::Tool {
+                name: "write".to_owned(),
+                request: "made-up/file.txt".to_owned()
+            },
+        ],
+        "the request of a Pi tool is the first line of its one key, and the content of a file is no request"
+    );
+}
+
+/// A real store of eleven thousand files ended the search for the file of a new
+/// session before the search reached it, and the dock showed that session empty.
+#[test]
+fn the_file_of_a_new_codex_session_is_found_in_a_store_of_many_old_files() {
+    let home = home();
+    let old = home.path().join(".codex/sessions/2025/01/01");
+    std::fs::create_dir_all(&old).expect("the old folder");
+    for index in 0..4_100 {
+        std::fs::write(old.join(format!("rollout-made-up-{index}.jsonl")), "").expect("an old file");
+    }
+    let id = "0199aaaa-0000-7000-8000-000000000077";
+    let rollout = codex_session(home.path(), id, "/repo", now());
+    assert_eq!(
+        super::source_of(home.path(), MirrorProgram::Codex, id),
+        Some(rollout),
+        "the newest folders are searched first"
+    );
+}
+
+/// A real run showed the text of an agent as one long line: its list and its
+/// paragraphs were gone, and the marks of the list stood in the middle of a row.
+#[test]
+fn the_text_of_the_person_and_of_the_agent_keeps_its_lines() {
+    let home = home();
+    let id = claude_id(41);
+    let path = claude_transcript(
+        home.path(),
+        &id,
+        &[
+            person_line("Do two things:\r\n  1. build\t\n  2. test\n\n\n\nThen stop."),
+            agent_line("m1", "Done:\n- built\n- tested   \n"),
+            agent_line("m1", "Nothing more waits.\u{7}"),
+        ],
+    );
+    assert_eq!(
+        read_entries(MirrorProgram::Claude, &path),
+        vec![
+            MirrorEntry::Person {
+                text: "Do two things:\n  1. build\n  2. test\n\nThen stop.".to_owned()
+            },
+            MirrorEntry::Agent {
+                text: "Done:\n- built\n- tested\n\nNothing more waits.".to_owned()
+            },
+        ],
+        "the lines stay, a control character does not, and two parts of one message are two paragraphs"
+    );
+}
+
+/// A real run showed a message of another session, with the words of the program
+/// around it, as the words of the person.
+#[test]
+fn a_text_that_the_program_wrote_in_the_turn_of_the_person_is_one_notice() {
+    let home = home();
+    let id = claude_id(42);
+    let meta = serde_json::json!({
+        "type": "user", "isMeta": true,
+        "message": {"role": "user", "content": "Caveat: the program wrote this line."},
+    })
+    .to_string();
+    let path = claude_transcript(
+        home.path(),
+        &id,
+        &[
+            person_line("Start."),
+            person_line("<system-reminder>\nA made-up reminder.\n</system-reminder>"),
+            person_line("  <cross-session-message from=\"made-up\">hello</cross-session-message>"),
+            person_line("<made-up-tag>\nA tag that no list names.\n</made-up-tag>"),
+            person_line("<environment_context/>"),
+            person_line("[Request interrupted by user]"),
+            meta,
+            person_line("<div> is what I typed, and a < b-c too."),
+            person_line("<a-b"),
+        ],
+    );
+    assert_eq!(
+        read_entries(MirrorProgram::Claude, &path),
+        vec![
+            MirrorEntry::Person {
+                text: "Start.".to_owned()
+            },
+            MirrorEntry::Notice {
+                text: super::PROGRAM_TEXT_NOTICE.to_owned()
+            },
+            MirrorEntry::Person {
+                text: "<div> is what I typed, and a < b-c too.".to_owned()
+            },
+            MirrorEntry::Person {
+                text: "<a-b".to_owned()
+            },
+        ],
+        "the texts of the program in a row are one notice, a line that the program marks is out, and a tag with no hyphen is the text of the person"
     );
 }
 

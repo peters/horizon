@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::file::Parsed;
-use super::{MAX_SUMMARY_CHARS, MAX_TEXT_CHARS, MirrorEntry, MirrorSessionRow, one_line, session_row};
+use super::{MAX_SUMMARY_CHARS, MirrorEntry, MirrorSessionRow, one_line, session_row};
 
 /// The most session files whose names one search reads.
 const MAX_FILES: usize = 4_000;
@@ -69,7 +69,6 @@ pub(super) fn rows(home: &Path, now_millis: i64) -> Vec<MirrorSessionRow> {
                 return None;
             }
             Some(MirrorSessionRow {
-                source: source(home, &session),
                 session: session_row(&record, super::MirrorProgram::Pi, home, false, session),
             })
         })
@@ -99,9 +98,7 @@ pub(super) fn entries(text: &str) -> Parsed {
             Some("user") => {
                 for block in blocks(message) {
                     if let Some(text) = block.get("text").and_then(Value::as_str) {
-                        parsed.push(MirrorEntry::Person {
-                            text: one_line(text, MAX_TEXT_CHARS),
-                        });
+                        parsed.person(text);
                     }
                 }
             }
@@ -133,9 +130,12 @@ fn assistant(message: &Value, parsed: &mut Parsed, mut last_agent: Option<usize>
             }
             Some("toolCall") => {
                 let name = block.get("name").and_then(Value::as_str).unwrap_or_default();
+                // Pi writes the arguments of a call as an object. Only the one
+                // key of the tool is read, so the content of a `write` and the
+                // edits of an `edit` never become a request.
                 parsed.push(MirrorEntry::Tool {
                     name: one_line(name, MAX_SUMMARY_CHARS),
-                    request: super::request_text(block.get("arguments").and_then(Value::as_str).unwrap_or_default()),
+                    request: super::summary(name, block.get("arguments")),
                 });
             }
             _ => {}

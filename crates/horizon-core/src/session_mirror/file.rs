@@ -30,22 +30,33 @@ pub(super) struct Parsed {
 }
 
 impl Parsed {
-    /// Keeps one entry.
+    /// Keeps one entry. A notice that repeats the notice before it is one notice.
     pub(super) fn push(&mut self, entry: MirrorEntry) {
+        if matches!(entry, MirrorEntry::Notice { .. }) && self.entries.last() == Some(&entry) {
+            return;
+        }
         self.entries.push(entry);
+    }
+
+    /// Keeps one text of the turn of the person, when it holds a text.
+    pub(super) fn person(&mut self, text: &str) {
+        if let Some(entry) = super::person_entry(text) {
+            self.push(entry);
+        }
     }
 
     /// Joins `text` to the text of the agent entry at `last` when that entry holds
     /// one message, and starts a new entry at the end otherwise. Answers the index
     /// of the entry that holds the message of `text`.
     pub(super) fn agent(&mut self, last: Option<usize>, text: &str) -> Option<usize> {
-        let text = super::one_line(text, super::MAX_TEXT_CHARS);
+        let text = super::text_block(text, super::MAX_TEXT_CHARS);
         if text.is_empty() {
             return last;
         }
         if let Some(MirrorEntry::Agent { text: held }) = last.and_then(|index| self.entries.get_mut(index)) {
-            let joined = format!("{held} {text}");
-            *held = super::one_line(&joined, super::MAX_TEXT_CHARS);
+            // Two parts of one message are two paragraphs of it.
+            let joined = format!("{held}\n\n{text}");
+            *held = super::text_block(&joined, super::MAX_TEXT_CHARS);
             return last;
         }
         self.entries.push(MirrorEntry::Agent { text });

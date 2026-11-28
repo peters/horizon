@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::file::Parsed;
-use super::{MAX_SUMMARY_CHARS, MAX_TEXT_CHARS, MirrorEntry, one_line};
+use super::{MAX_SUMMARY_CHARS, MirrorEntry, one_line};
 
 /// The most session files that a search of one session reads the names of.
 const MAX_FILES: usize = 4_000;
@@ -35,20 +35,29 @@ pub(super) fn source(home: &Path, session: &str) -> Option<PathBuf> {
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
-        for entry in entries.flatten() {
+        // The folders of the store are the year, the month and the day of the
+        // start of a session. The names are read in their order, so the folder
+        // that the search opens next is the newest one: a session of the list
+        // is a new session, and a store of many thousand files does not end the
+        // search before it reaches that session. A real store of eleven
+        // thousand files did so.
+        let mut names: Vec<(std::ffi::OsString, bool)> = entries
+            .flatten()
+            .map(|entry| {
+                let folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                (entry.file_name(), folder)
+            })
+            .collect();
+        names.sort();
+        for (name, is_folder) in names {
             seen += 1;
             if seen > MAX_FILES {
                 return None;
             }
-            let path = entry.path();
-            if path.is_dir() {
-                folders.push(path);
-            } else if path
-                .file_name()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|name| name.ends_with(&suffix))
-            {
-                return Some(path);
+            if is_folder {
+                folders.push(folder.join(name));
+            } else if name.to_str().is_some_and(|name| name.ends_with(&suffix)) {
+                return Some(folder.join(name));
             }
         }
     }
@@ -94,44 +103,49 @@ pub(super) fn entries(text: &str) -> Parsed {
 
 /// One message of the person or of the agent.
 fn message(payload: &Value, parsed: &mut Parsed, last_agent: Option<usize>) -> Option<usize> {
-    let text = texts(payload.get("content"), "input_text", "output_text");
     match payload.get("role").and_then(Value::as_str) {
         Some("user") => {
-            if !text.is_empty() {
-                parsed.push(MirrorEntry::Person {
-                    text: one_line(&text, MAX_TEXT_CHARS),
-                });
+            // Codex sends the instruction files of a folder and the context of a
+            // session as blocks of the first message of the person. Each block is
+            // judged alone, so the words of the person do not stand in one text
+            // with what the program wrote before them.
+            for text in blocks_text(payload.get("content"), "input_text") {
+                parsed.person(text);
             }
             None
         }
-        Some("assistant") => parsed.agent(last_agent, &text),
+        Some("assistant") => {
+            let text = blocks_text(payload.get("content"), "output_text")
+                .collect::<Vec<_>>()
+                .join("\n");
+            parsed.agent(last_agent, &text)
+        }
         _ => last_agent,
     }
 }
 
-/// The text of the blocks of one message: the input blocks of the person beside the
-/// output blocks of the agent.
-fn texts(content: Option<&Value>, input: &str, output: &str) -> String {
-    let Some(blocks) = content.and_then(Value::as_array) else {
-        return String::new();
-    };
-    blocks
+/// The texts of the blocks of the kind `kind` of one message, in their order.
+fn blocks_text<'a>(content: Option<&'a Value>, kind: &'a str) -> impl Iterator<Item = &'a str> {
+    content
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
-        .filter(|block| {
-            matches!(
-                block.get("type").and_then(Value::as_str),
-                Some(kind) if kind == input || kind == output
-            )
-        })
+        .filter(move |block| block.get("type").and_then(Value::as_str) == Some(kind))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// One tool call of the agent.
 fn tool(name: &str, request: Option<&str>) -> MirrorEntry {
+    let request = request.unwrap_or_default();
+    // The arguments of a function call are a document in a text. The request is
+    // the one key of the tool when the document holds it, and the first line of
+    // the text otherwise.
+    let of_key = serde_json::from_str::<Value>(request)
+        .ok()
+        .and_then(|input| super::key_request(name, &input));
     MirrorEntry::Tool {
         name: one_line(name, MAX_SUMMARY_CHARS),
-        request: super::request_text(request.unwrap_or_default()),
+        request: of_key.unwrap_or_else(|| super::request_text(request)),
     }
 }

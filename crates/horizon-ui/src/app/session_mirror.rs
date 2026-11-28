@@ -106,6 +106,11 @@ pub(in crate::app) struct Mirror {
 }
 
 impl Mirror {
+    /// Whether the newest list names the session of `key`.
+    pub(in crate::app) fn lists(&self, key: &MirrorKey) -> bool {
+        self.view.session(key).is_some()
+    }
+
     /// Takes one event of the link. An event that only the mirror reads answers
     /// `false`, so the pump does not hand it to a part of the shared terminals.
     pub(in crate::app) fn apply(&mut self, event: &LiveEvent) -> bool {

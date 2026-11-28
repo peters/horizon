@@ -308,14 +308,32 @@ fn a_viewer_reads_the_list_of_a_publisher_and_the_entries_of_one_session() {
     a.send(LiveRequest::MirrorEntries {
         program: "claude".to_owned(),
         session: session(1, true).session,
-        entries: vec![MirrorEntry::Agent {
-            text: "made-up answer".to_owned(),
-        }],
+        entries: vec![
+            MirrorEntry::Agent {
+                text: "made-up answer:\n- one\u{7}\n- two".to_owned(),
+            },
+            MirrorEntry::Tool {
+                name: "Bash".to_owned(),
+                request: "made-up\nrequest".to_owned(),
+            },
+        ],
         tail: false,
     });
     let (_, _, _, read, tail) = b.entries();
     assert!(!tail, "a later frame holds the new entries alone");
-    assert_eq!(read.len(), 1, "{read:?}");
+    assert_eq!(
+        read,
+        vec![
+            MirrorEntry::Agent {
+                text: "made-up answer:\n- one\n- two".to_owned(),
+            },
+            MirrorEntry::Tool {
+                name: "Bash".to_owned(),
+                request: "made-uprequest".to_owned(),
+            },
+        ],
+        "the text of the agent keeps its lines and loses its other control characters, and a request is one line"
+    );
 }
 
 fn b_reads(computers: &[MirrorComputer], device: &str) -> usize {

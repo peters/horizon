@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::file::Parsed;
-use super::{MAX_SUMMARY_CHARS, MAX_TEXT_CHARS, MirrorEntry, one_line};
+use super::{MAX_SUMMARY_CHARS, MirrorEntry, one_line};
 
 /// The transcript of the session `session` of `home`.
 pub(super) fn source(home: &Path, session: &str) -> Option<PathBuf> {
@@ -76,19 +76,19 @@ pub(super) fn entries(text: &str) -> Parsed {
 
 /// The blocks of one line of the person.
 fn person(value: &Value, parsed: &mut Parsed) {
+    // A line that the program marks as its own is no text of the person.
+    if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        return;
+    }
     match value.pointer("/message/content") {
-        Some(Value::String(text)) => parsed.push(MirrorEntry::Person {
-            text: one_line(text, MAX_TEXT_CHARS),
-        }),
+        Some(Value::String(text)) => parsed.person(text),
         Some(Value::Array(blocks)) => {
             for block in blocks {
                 if block.get("type").and_then(Value::as_str) != Some("text") {
                     continue;
                 }
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    parsed.push(MirrorEntry::Person {
-                        text: one_line(text, MAX_TEXT_CHARS),
-                    });
+                    parsed.person(text);
                 }
             }
         }

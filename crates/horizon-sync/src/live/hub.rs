@@ -622,7 +622,7 @@ impl State {
         let devices: Vec<String> = self.mirror_links.iter().cloned().collect();
         for device in devices.iter().filter(|device| Some(device.as_str()) != except) {
             let computers = computers.clone();
-            self.send(device, LiveEvent::MirrorComputers { computers }, Tag::List);
+            self.send(device, LiveEvent::MirrorComputers { computers }, Tag::MirrorList);
         }
     }
 
