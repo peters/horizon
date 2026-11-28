@@ -251,8 +251,12 @@ injects into that program.
 - The MCP server refuses a caller that has no `horizon:` actor and no live host
   instance with `caller_unavailable`.
 - The UI resolves the actor to an agent panel of its own board, or to the
-  orchestrator of a workspace of that board. A request whose actor is neither is
-  `caller_unavailable`, and a request of another host is `wrong_host`.
+  orchestrator of a workspace of that board while the dock holds a running bridge
+  for that workspace. A request whose actor is neither is `caller_unavailable`,
+  and a request of another host is `wrong_host`. The identity of an orchestrator
+  belongs to the program that Horizon started and not to the workspace: a
+  workspace whose program ended accepts no request of that actor, and a read of a
+  card of that owner follows the same rule.
 - One card has one owner: the actor that created it. `update`, `visibility` and
   `close` require the exact owner, and another agent of the same workspace gets
   `not_owner`. One agent owns at most eight cards in one workspace.
@@ -342,7 +346,10 @@ Horizon types one line into the terminal of the panel that owns the card.
 - The write uses the encoder of a person's paste and then Enter, so the agent
   TUI receives one complete line. It runs on the UI thread and touches no file.
 - Horizon writes to no other panel, and a card panel has no terminal to write
-  to.
+  to. An orchestrator has no terminal either: the same constant reaches the
+  program of the dock as one turn of its conversation, under the same rules, as
+  [the section on that caller](#the-orchestrator-of-a-workspace-is-a-caller-without-a-panel)
+  says.
 
 ## Horizon owns the frame and the reading of a document
 
@@ -413,13 +420,14 @@ The program that the orchestrator dock runs speaks for one workspace. Its actor 
 
 - **Untrusted: the actor string of a request.** It arrives in the request file
   like every other field. The host accepts it only when it parses as an actor of
-  an orchestrator and the local id in it names a workspace of this board
+  an orchestrator, the local id in it names a workspace of this board, and the
+  dock holds a running bridge for that workspace
   (`crates/horizon-core/src/agent_bridge/actor.rs`,
-  `crates/horizon-ui/src/app/block_requests.rs`, `request_caller`). The form of
-  that local id admits 36 bytes of lower-case hexadecimal and hyphens and nothing
-  else, so no slash, dot, space or control character of a caller reaches the
-  host. An unknown workspace is `caller_unavailable`, and the answer names the
-  caller and no workspace.
+  `crates/horizon-ui/src/app/block_requests/caller.rs`, `request_caller`). The
+  form of that local id admits 36 bytes of lower-case hexadecimal and hyphens and
+  nothing else, so no slash, dot, space or control character of a caller reaches
+  the host. An unknown workspace, and a workspace whose program ended, are
+  `caller_unavailable`, and the answer names the caller and no workspace.
 - **Every card document of that child is untrusted in the same way.** The bounds
   of this page hold for it without a change, and the host checks the document in
   the MCP server and again in the UI.
@@ -444,8 +452,27 @@ The program that the orchestrator dock runs speaks for one workspace. Its actor 
   answers `true` while the dock holds a running bridge for that workspace, so a
   control of the card is live only while that program runs. No other state of a
   card changes with the caller.
-- **No wake line is typed for it.** The owner has no terminal, so Horizon writes
-  the wake line nowhere and the click waits in the queue of the card.
+- **The wake line reaches the bridge, and it is the same constant.** The owner has
+  no terminal, so Horizon sends [`WAKE_LINE`](../../../crates/horizon-core/src/block_panel/wake.rs)
+  to the program as one turn of its conversation, under the rules of
+  `wake_verdict`: the owner is present, holds no open `next_click`, is not in the
+  middle of a turn, has not been woken for this streak of presses, and no line
+  went to it in the last 30 seconds. The line carries no text of the card, and the
+  program reads it as a message of its input. The conversation names that turn
+  with the notice `A press on a card woke the orchestrator` and adds no message of
+  the person.
+- **Untrusted: the heading of a card, in a reference row of the dock.** The dock
+  draws one row for each card that the program drew, and the heading of that row
+  is the text of the document. The host cuts it to 80 characters and replaces each
+  control character, and the dock draws it as plain text on one line with an
+  ellipsis: no markup, no link and no path becomes active, and the heading cannot
+  set a colour, a size or a position. The row holds the local id of the card and
+  no other field of the document, and a press on it sends nothing to the program.
+  A card that is no longer on the board reads as a closed row and takes no press.
+- **The line of a press is the words of Horizon.** The notice
+  `You pressed <label> on <heading>` carries the label of the button and the
+  heading of the card, each cut to 40 characters with each control character
+  replaced, and no other field.
 - **Does not guarantee:** that the program behind the actor is the orchestrator of
   that workspace. The identity is the variable that Horizon injected into the
   child, and a process of the same user that writes a request file can name any

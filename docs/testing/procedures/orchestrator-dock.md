@@ -476,27 +476,29 @@ isolated desktop only, so the window of the candidate keeps the same canvas.
 
 ### 6.17 OD-16 — A press reaches the orchestrator
 
-The program of the dock reads a press only through the `next_click` that it keeps
-open, because Horizon types no wake line for an owner without a terminal.
+The program of the dock reads a press through the `next_click` that it keeps open,
+and Horizon wakes it with one line when no wait is open.
 
 1. Do the steps 1 to 4 of OD-15.
 
 2. Click the button `Go` of the card.
 
-   Result: The list of the dock shows one more text of the agent,
-   `You pressed go`, and the cost of the header grows by one turn. The state chip
-   of the card reads `Claude`, without the dot of a wait, because the one
-   `next_click` of the program ended with that press.
+   Result: The list of the dock shows one notice in the middle,
+   `You pressed Go on Plan`, and one more text of the agent, `You pressed go`. The
+   cost of the header grows by one turn. The state chip of the card reads
+   `Claude`, without the dot of a wait, because the one `next_click` of the
+   program ended with that press.
 
 3. Take a picture of the whole desktop and keep it as the evidence of this task.
 
-   Result: The picture shows the card, the text `You pressed go` in the dock, and
-   the chip `Claude`.
+   Result: The picture shows the card, the notice `You pressed Go on Plan`, the
+   text `You pressed go` in the dock, and the chip `Claude`.
 
 4. Click the button `Cancel`, and wait for the wait of the program to end.
 
    Result: The dock adds no text, because the program holds no `next_click` any
-   more. The press waits in the queue of the card for five minutes.
+   more. The press waits in the queue of the card for five minutes, and the list
+   shows the notice `You pressed Cancel on Plan`.
 
 ### 6.18 OD-17 — The setting of Settings turns the dock on
 
@@ -727,6 +729,90 @@ passes the stored session id to the program as one argument.
    Result: The bubble `bravo` and its answer follow the entries of step 1. The
    notice of step 2 stays above them.
 
+### 6.25 OD-24 — The dock names the card that the orchestrator drew
+
+Do this task on the isolated desktop of the fixture, with `--screen 2400x1100`.
+The window of the candidate keeps the size of the fixture.
+
+1. Stop the fixture and start it again with the switch of the dock, the stand-in
+   and the state folder `<evidence>/dock-row`.
+
+   ```sh
+   HORIZON_ORCHESTRATOR_DOCK=1 \
+   HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py \
+     python3 scripts/device-smoke/serve.py \
+       --horizon <candidate>/horizon --native-view --screen 2400x1100 \
+       --state <evidence>/dock-row
+   ```
+
+2. Open a Device panel on the address of the fixture in the current workspace.
+
+3. Click in the field of the dock, type `draw a card`, and press the send control.
+
+   Result: The list holds the bubble `draw a card`, the text `You said: draw a
+   card`, one row of a card, and the text that names the id of the new card. The
+   row stands under the two texts, indented as a tool row, and it holds the glyph
+   of a card, the heading `Plan` and `on the canvas` at its right end.
+
+4. Move the pointer over the row, and then away from it.
+
+   Result: The outline of the row is `ACCENT` under the pointer, the pointer is a
+   pointing hand, and the outline returns to its light accent when the pointer
+   leaves.
+
+5. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the row `Plan` between the two texts of the program,
+   with its fill, its outline, its glyph and `on the canvas`.
+
+### 6.26 OD-25 — A press of a card of the orchestrator is a line of the conversation
+
+1. Do the steps 1 to 3 of OD-24.
+
+2. Click the row `Plan` in the dock.
+
+   Result: The canvas moves to the card of the orchestrator, the sidebar marks the
+   row `CARD Plan`, and the dock takes no text of the person.
+
+3. Click the button `Go` of the card.
+
+   Result: The list gains one notice in the middle, `You pressed Go on Plan`, and
+   one text of the agent, `You pressed go`. The state chip of the card reads
+   `Claude`, and the cost of the header grows by one turn.
+
+4. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the card, the notice `You pressed Go on Plan` above
+   the text `You pressed go`, and the row `Plan` of the dock.
+
+### 6.27 OD-26 — A press wakes an orchestrator that holds no wait
+
+1. Stop the fixture and start it again with the arguments of OD-24 and the state
+   folder `<evidence>/dock-wake`.
+
+2. Open a Device panel on the address of the fixture in the current workspace.
+
+3. Click in the field of the dock, type `sleepy card`, and press the send control.
+
+   Result: The list holds the bubble `sleepy card`, the row `Plan`, and the text
+   `I drew the card <id> and I hold no wait for it. Press Go or Cancel and one
+   notice of the dock wakes me.` The state chip of the card reads `Claude`,
+   because the program holds no `next_click`.
+
+4. Click the row `Plan` in the dock, and then the button `Go` of the card.
+
+   Result: The list gains the notice `You pressed Go on Plan`, then the notice
+   `A press on a card woke the orchestrator`, then the text
+   `You said: A button was pressed on your Horizon card. Call the block_panel
+   tool with operation next_click to read it.`, and then the text
+   `Woken, you pressed go`. The header chip reads `working` while that turn runs
+   and `ready` after it.
+
+5. Take a picture of the whole desktop and keep it as the evidence of this task.
+
+   Result: The picture shows the card with the chip `Claude`, the two notices of
+   step 4, the wake line as the text of the program, and `Woken, you pressed go`.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.
@@ -780,6 +866,17 @@ passes the stored session id to the program as one argument.
   `next_click` open, and `Claude` after the wait ends.
 - A press on a button of the card reaches the program of the dock, and the dock
   shows the text that names the button.
+- The dock draws one row for each card that the program of the conversation drew,
+  with its glyph, the heading of the card and `on the canvas` at its right end.
+  The row stays when the person sends another message, and a second update of the
+  same card changes its heading and adds no row.
+- A press on that row brings the card into view, and the row of a card that is no
+  longer on the board reads dim, says `closed` and takes no press.
+- Horizon sends the line of one wake to the program of the dock when the person
+  presses a card that holds no open `next_click`, and the conversation shows the
+  notice `A press on a card woke the orchestrator` and no bubble of the person.
+- One notice of the conversation names each press of a button of a card of an
+  orchestrator, as `You pressed <label> on <heading>`.
 - The setting **Orchestrator dock** turns the dock on and off without a restart,
   and it is saved. The palette turns the dock of one run over and writes no
   setting.

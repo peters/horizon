@@ -45,6 +45,9 @@ pub(super) const UNSENT_NOTICE: &str = "The message was not sent to the program.
 /// The notice of a stored session that the program did not continue.
 pub(super) const RESUME_FAILURE_NOTICE: &str =
     "The earlier session could not continue. A new one starts with your next message.";
+/// The notice of the turn that Horizon started for the press of the person, and
+/// that the program of this conversation did not write itself.
+pub(in crate::app) const WAKE_NOTICE: &str = "A press on a card woke the orchestrator";
 
 /// The state of one conversation, as the second line of the header names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +246,31 @@ impl Session {
             self.conversation.notice(UNSENT_NOTICE);
             Said::StartAfter(bridge)
         }
+    }
+
+    /// Sends the one wake line of Horizon to the program of this conversation as
+    /// a turn of its own, so the program learns that a press waits, and names
+    /// that turn in the conversation. The turn is no message of the person, so
+    /// it adds no [`Entry::Person`]. It answers whether the line went out.
+    pub(super) fn wake(&mut self, line: &str) -> bool {
+        let Some(bridge) = self.bridge.take() else {
+            return false;
+        };
+        if bridge.send(line.to_owned()).is_err() {
+            // The program took no line, so its end arrives with the events of this
+            // bridge: no notice claims a wake that did not go out.
+            self.bridge = Some(bridge);
+            return false;
+        }
+        self.bridge = Some(bridge);
+        self.conversation.system_said(WAKE_NOTICE);
+        true
+    }
+
+    /// Adds or moves the reference row of the card `panel` of this workspace,
+    /// which the dock draws under the text of the program.
+    pub(super) fn card_row(&mut self, panel: &str, title: &str) {
+        self.conversation.card_drawn(panel, title);
     }
 
     /// Takes the request of one start, and makes every start in flight stale.

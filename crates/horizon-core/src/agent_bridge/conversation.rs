@@ -26,6 +26,10 @@ use super::codec::{cut_bytes, tidy};
 use super::event::{BridgeEvent, DropReason};
 use super::{MAX_ENTRIES, MAX_SUMMARY_CHARS, MAX_TEXT_BYTES};
 
+/// The most characters of the heading of a card that its reference row of the
+/// dock keeps.
+pub const MAX_CARD_TITLE_CHARS: usize = 80;
+
 /// The link of one bridge, as the person sees it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Link {
@@ -71,6 +75,11 @@ pub enum Entry {
     /// A line that Horizon writes for the person: a refusal, a dropped line or
     /// the end of the program.
     Notice { text: String },
+    /// A reference to a card that the program drew in this workspace: the local
+    /// id of that card and the heading it held. The dock draws one row that
+    /// brings the card into view, so the person reads which card the program
+    /// speaks about. A card that is gone reads as a closed row.
+    Card { panel: String, title: String },
 }
 
 /// The limit of the account that the program reported.
@@ -201,6 +210,45 @@ impl Conversation {
         snapshot.entries.push(Entry::Notice {
             text: tidy(text, MAX_SUMMARY_CHARS),
         });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Appends one line that Horizon writes for a turn of its own, such as the
+    /// wake of an orchestrator after a press, and marks the conversation busy.
+    /// The wake line itself is no message of the person, so it adds no [`Entry::Person`].
+    pub fn system_said(&mut self, text: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.busy = true;
+        snapshot.entries.push(Entry::Notice {
+            text: tidy(text, MAX_SUMMARY_CHARS),
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Adds the reference row of the card `panel`, or moves the row that the
+    /// card already has to its heading now. One card keeps one row, so a second
+    /// create or an update of the same card changes that row and adds none.
+    /// The heading is untrusted text of the program, so it is cut here.
+    pub fn card_drawn(&mut self, panel: &str, title: &str) {
+        let title = tidy(title, MAX_CARD_TITLE_CHARS);
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        let found = snapshot
+            .entries
+            .iter()
+            .position(|entry| matches!(entry, Entry::Card { panel: shown, .. } if shown.as_str() == panel));
+        match found {
+            Some(index) => {
+                if let Entry::Card { title: shown, .. } = &mut snapshot.entries[index] {
+                    *shown = title;
+                }
+            }
+            None => snapshot.entries.push(Entry::Card {
+                panel: panel.to_owned(),
+                title,
+            }),
+        }
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
     }
 

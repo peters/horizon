@@ -72,6 +72,7 @@ impl HorizonApp {
         let dock = &mut self.orchestrator_dock;
         let mut asked = composer::Asked::Nothing;
         let mut picked = None;
+        let mut pressed_card: Option<String> = None;
         egui::Panel::right(DOCK_PANEL_ID)
             .exact_size(rect.width())
             .frame(
@@ -109,13 +110,16 @@ impl HorizonApp {
                 };
                 asked = composer::render(ui, &composer, draft, local_id.is_some(), busy);
                 match snapshot {
-                    Some(snapshot) if !snapshot.entries.is_empty() => list::render(
-                        ui,
-                        parts.body,
-                        local_id.unwrap_or_default(),
-                        &snapshot.entries,
-                        list::waits_for_text(&snapshot.entries, snapshot.busy),
-                    ),
+                    Some(snapshot) if !snapshot.entries.is_empty() => {
+                        pressed_card = list::render(
+                            ui,
+                            parts.body,
+                            local_id.unwrap_or_default(),
+                            &snapshot.entries,
+                            list::waits_for_text(&snapshot.entries, snapshot.busy),
+                            &|panel| board.panel_id_by_local_id(panel).is_some(),
+                        );
+                    }
                     _ => picked = empty::render(ui, parts.body),
                 }
                 #[cfg(test)]
@@ -134,6 +138,14 @@ impl HorizonApp {
         {
             ui.ctx()
                 .memory_mut(|memory| memory.request_focus(egui::Id::unique(composer::FIELD_ID)));
+        }
+        // A press on the reference row of a card brings that card into view, as the
+        // row of the sidebar does. The row of a card that left the board takes no
+        // press, so no press names a panel that is gone.
+        if let Some(panel) = pressed_card
+            && let Some(id) = self.board.panel_id_by_local_id(&panel)
+        {
+            self.reveal_selected_panel(ui.ctx(), id);
         }
         match asked {
             composer::Asked::Send => self.send_orchestrator_message(ui.ctx(), &local_id),

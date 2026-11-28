@@ -17,6 +17,7 @@ use egui::{
     Align, FontId, Label, Mesh, Rangef, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder,
     pos2, vec2,
 };
+use egui::{Color32, CursorIcon};
 use horizon_core::agent_bridge::{Entry, ToolState};
 
 use crate::loading_spinner;
@@ -63,6 +64,37 @@ const TOOL_GAP_AFTER_NAME: f32 = 8.0;
 /// The mauve of the workspace accents, which the bar of an agent text ends at.
 const AGENT_BAR_END_ACCENT: usize = 6;
 
+/// The air between a reference row of a card and the left edge of the list: the
+/// indent of a tool row.
+const CARD_INDENT: f32 = TOOL_INDENT;
+/// The share of the list width that a reference row of a card takes at most.
+const CARD_SHARE: f32 = 0.96;
+/// The height of one reference row.
+const CARD_HEIGHT: f32 = 34.0;
+const CARD_RADIUS: u8 = 10;
+/// The alpha of the fill of a row whose card stands on the canvas.
+const CARD_FILL_ALPHA: u8 = 18;
+/// The alpha of its outline.
+const CARD_OUTLINE_ALPHA: u8 = 115;
+/// The padding of a row at its left and at its right.
+const CARD_PADDING_X: f32 = 10.0;
+/// The size of the glyph of a card: a small card at the left of the row.
+const CARD_GLYPH: [f32; 2] = [22.0, 16.0];
+const CARD_GLYPH_RADIUS: u8 = 4;
+const CARD_GLYPH_STROKE: f32 = 1.5;
+/// How far under the top edge of the glyph its one line stands.
+const CARD_GLYPH_LINE_DROP: f32 = 3.0;
+/// The air between that line and the two sides of the glyph.
+const CARD_GLYPH_LINE_INSET: f32 = 4.0;
+/// The air between the glyph and the heading of the card.
+const CARD_GAP_AFTER_GLYPH: f32 = 10.0;
+const CARD_TITLE_SIZE: f32 = 12.5;
+const CARD_STATE_SIZE: f32 = 11.0;
+/// The right end of a row whose card stands on the canvas.
+const CARD_STATE: &str = "on the canvas";
+/// The right end of a row whose card left the board.
+const CARD_STATE_CLOSED: &str = "closed";
+
 const NOTICE_FONT_SIZE: f32 = 10.5;
 const NOTICE_GAP: f32 = 8.0;
 /// The least length of a line of a notice at one side of its text.
@@ -77,11 +109,22 @@ const WORKING_SIZE: f32 = 12.0;
 /// composer, with the row of `working` under them while a turn waits for the
 /// first text of the agent. `local_id` names the workspace of the conversation:
 /// the place of the list belongs to that workspace, so the scroll of one
-/// conversation never shows in another.
-pub(super) fn render(ui: &mut Ui, body: Rect, local_id: &str, entries: &[Entry], working: bool) {
+/// conversation never shows in another. `card_present` says whether the board
+/// still holds a card of a reference row.
+///
+/// It answers the card whose reference row the person pressed, so the frame
+/// brings that card into view.
+pub(super) fn render(
+    ui: &mut Ui,
+    body: Rect,
+    local_id: &str,
+    entries: &[Entry],
+    working: bool,
+    card_present: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     let width = (body.width() - 2.0 * LIST_PADDING).max(0.0);
     if width <= 0.0 || body.height() <= 0.0 {
-        return;
+        return None;
     }
     let area = Rect::from_min_max(
         pos2(body.min.x + LIST_PADDING, body.min.y),
@@ -89,6 +132,7 @@ pub(super) fn render(ui: &mut Ui, body: Rect, local_id: &str, entries: &[Entry],
     );
     let mut area_ui = ui.new_child(UiBuilder::new().max_rect(area));
     area_ui.shrink_clip_rect(area);
+    let mut picked = None;
     egui::ScrollArea::vertical()
         .id_salt(("orchestrator_dock_list", local_id))
         .auto_shrink([false, false])
@@ -103,7 +147,11 @@ pub(super) fn render(ui: &mut Ui, body: Rect, local_id: &str, entries: &[Entry],
             let mut previous: Option<&Entry> = None;
             for entry in &entries[skipped..] {
                 ui.add_space(gap(previous, entry));
-                entry_row(ui, entry, width);
+                if entry_row(ui, entry, width, card_present)
+                    && let Entry::Card { panel, .. } = entry
+                {
+                    picked = Some(panel.clone());
+                }
                 previous = Some(entry);
             }
             if working {
@@ -112,6 +160,7 @@ pub(super) fn render(ui: &mut Ui, body: Rect, local_id: &str, entries: &[Entry],
             }
             ui.add_space(LIST_PADDING);
         });
+    picked
 }
 
 /// Whether a turn of this conversation waits for the first text of the agent:
@@ -140,20 +189,107 @@ fn skipped_notice(skipped: usize) -> String {
     format!("{skipped} earlier entries are not drawn")
 }
 
-/// Draws one entry of the list in one row of `width` points.
-fn entry_row(ui: &mut Ui, entry: &Entry, width: f32) {
+/// Draws one entry of the list in one row of `width` points, and answers whether
+/// the person pressed it.
+fn entry_row(ui: &mut Ui, entry: &Entry, width: f32, card_present: &dyn Fn(&str) -> bool) -> bool {
     match entry {
-        Entry::Person { text } => person_row(ui, text, width),
-        Entry::Agent { text, .. } => agent_row(ui, text, width),
+        Entry::Person { text } => {
+            person_row(ui, text, width);
+            false
+        }
+        Entry::Agent { text, .. } => {
+            agent_row(ui, text, width);
+            false
+        }
         Entry::Tool {
             name,
             summary,
             result,
             state,
             ..
-        } => tool_row(ui, name, summary, result.as_deref(), *state, width),
-        Entry::Notice { text } => notice_row(ui, text, width),
+        } => {
+            tool_row(ui, name, summary, result.as_deref(), *state, width);
+            false
+        }
+        Entry::Notice { text } => {
+            notice_row(ui, text, width);
+            false
+        }
+        Entry::Card { panel, title } => card_row(ui, panel, title, width, card_present(panel)),
     }
+}
+
+/// One reference row of a card that the program drew: the glyph of a card, its
+/// heading and where the card stands, with a fill and an outline of the accent.
+/// A card that the board no longer holds reads dim and takes no press.
+fn card_row(ui: &mut Ui, panel: &str, title: &str, width: f32, present: bool) -> bool {
+    let row_width = (width * CARD_SHARE).min(width - CARD_INDENT).max(1.0);
+    let (row, _) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
+    let rect = Rect::from_min_size(pos2(row.min.x + CARD_INDENT, row.min.y), vec2(row_width, row.height()));
+    let sense = if present { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(rect, ui.make_persistent_id(("orchestrator_dock_card", panel)), sense);
+    let hovered = present && response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let state_text = if present { CARD_STATE } else { CARD_STATE_CLOSED };
+    let state_galley = text::line(
+        ui,
+        state_text,
+        CARD_STATE_SIZE,
+        Weight::Regular,
+        theme::FG_DIM(),
+        row_width,
+    );
+    let glyph_left = rect.min.x + CARD_PADDING_X;
+    let title_left = glyph_left + CARD_GLYPH[0] + CARD_GAP_AFTER_GLYPH;
+    let title_width =
+        (rect.max.x - CARD_PADDING_X - state_galley.size().x - CARD_GAP_AFTER_GLYPH - title_left).max(1.0);
+    let title_color = if present { theme::FG() } else { theme::FG_DIM() };
+    let title_galley = text::line(ui, title, CARD_TITLE_SIZE, Weight::Medium, title_color, title_width);
+    let (fill, outline) = if present {
+        let outline = if hovered {
+            theme::ACCENT()
+        } else {
+            theme::alpha(theme::ACCENT(), CARD_OUTLINE_ALPHA)
+        };
+        (theme::alpha(theme::ACCENT(), CARD_FILL_ALPHA), outline)
+    } else {
+        (Color32::TRANSPARENT, theme::BORDER_SUBTLE())
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        CARD_RADIUS,
+        fill,
+        Stroke::new(1.0_f32, outline),
+        StrokeKind::Inside,
+    );
+    let glyph = Rect::from_min_size(
+        pos2(glyph_left, rect.center().y - CARD_GLYPH[1] / 2.0),
+        vec2(CARD_GLYPH[0], CARD_GLYPH[1]),
+    );
+    let glyph_stroke = Stroke::new(CARD_GLYPH_STROKE, theme::ACCENT());
+    painter.rect_stroke(glyph, CARD_GLYPH_RADIUS, glyph_stroke, StrokeKind::Inside);
+    painter.hline(
+        Rangef::new(glyph.min.x + CARD_GLYPH_LINE_INSET, glyph.max.x - CARD_GLYPH_LINE_INSET),
+        glyph.min.y + CARD_GLYPH_LINE_DROP,
+        glyph_stroke,
+    );
+    painter.galley(
+        pos2(title_left, rect.center().y - title_galley.size().y / 2.0),
+        title_galley,
+        title_color,
+    );
+    painter.galley(
+        pos2(
+            rect.max.x - CARD_PADDING_X - state_galley.size().x,
+            rect.center().y - state_galley.size().y / 2.0,
+        ),
+        state_galley,
+        theme::FG_DIM(),
+    );
+    present && response.clicked()
 }
 
 /// One message of the person: a bubble at the right of the list.

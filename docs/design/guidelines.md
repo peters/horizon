@@ -1357,6 +1357,19 @@ start.
   that follow each other stand 4 points apart.
 - An entry of a notice of Horizon is centred at 10.5 JetBrains Mono `FG_DIM`,
   with a 1 px `BORDER_SUBTLE` line at each side that takes the free width.
+- An entry of a card is one reference row, indented 13 points like a tool row and
+  at most 96 percent of the list width: one row of 34 points, radius 10, a fill of
+  `alpha(ACCENT, 18)`, a 1 px outline of `alpha(ACCENT, 115)` and 10 points of
+  padding at each side. The glyph of a card stands at its left: 22 by 16 points, a
+  rounded rectangle of radius 4 with a 1.5 px `ACCENT` outline and one 1.5 px
+  `ACCENT` line 3 points under its top edge, inset 4 points at each side. 10
+  points right of the glyph is the heading of the card at 12.5 Medium `FG`, on one
+  line with an ellipsis. At the right end, 10 points inside the row, reads
+  `on the canvas` at 11 Regular `FG_DIM`. A pointer over the row outlines it in
+  `ACCENT` and shows the pointing hand, and a press brings the card into view. A
+  row whose card is no longer on the board has no fill, an outline of
+  `BORDER_SUBTLE`, its heading in `FG_DIM` and `closed` at its right end, and a
+  press on it does nothing.
 - While a turn is busy and no text of the agent came for it, one row stands at
   the left: the spinner of the interface and `working` at 12 `FG_DIM` after it.
   Only a frame that draws this row asks for the frame of the next step.

@@ -1,5 +1,7 @@
 //! The click waits of a card, and the wake line that reaches its owner.
 
+mod orchestrator;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -123,7 +125,7 @@ fn wait_answer(app: &mut HorizonApp, ctx: &Context, root: &Path, request: &Reque
 }
 
 /// Queues one click on a card, as the widget does.
-fn press(app: &mut HorizonApp, id: PanelId, component_id: &str) {
+pub(super) fn press(app: &mut HorizonApp, id: PanelId, component_id: &str) {
     let document = card_document(app, id);
     let revision = app.board.panel(id).and_then(Panel::block).expect("a card").revision;
     let card = app.panel_render_caches.card_runtime.entry(id).or_default();
@@ -469,7 +471,7 @@ fn a_queued_click_is_a_wake_for_an_idle_owner_that_is_not_typing() {
     press(&mut app, id, "continue");
     app.board.focused = None;
     let _ = app.settle_block_clicks();
-    assert_eq!(app.planned_wakes(), vec![(id, owner)]);
+    assert_eq!(app.planned_wakes(), vec![(id, WakeTarget::Panel(owner))]);
 
     app.board.focused = Some(owner);
     assert!(
@@ -490,7 +492,7 @@ fn a_click_that_an_agent_waits_for_is_no_wake() {
     app.board.focused = None;
     let _ = app.settle_block_clicks();
     assert!(app.planned_wakes().is_empty(), "a listening owner needs no line");
-    assert!(!app.block_clicks.last_wake.contains_key(&owner));
+    assert!(!app.block_clicks.last_wake.contains_key(&WakeTarget::Panel(owner)));
 }
 
 #[test]

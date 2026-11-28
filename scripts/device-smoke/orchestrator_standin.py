@@ -11,15 +11,21 @@ optional long answer, the state of the limit of the plan, and the result of the
 turn with its cost. A turn whose text holds `slow` waits two seconds before its
 answer, so a run shows the working state of the dock.
 
-The words `tool`, `fail`, `long`, `slow` and `card` choose what a turn answers: a
-tool call that succeeds, a tool call that fails with a result of two lines, a
-long answer, a wait before the answer, or a card. A turn whose text holds `card`
-draws one card in the workspace of the conversation through a real
+The words `tool`, `fail`, `long`, `slow`, `card` and `sleepy` choose what a turn
+answers: a tool call that succeeds, a tool call that fails with a result of two
+lines, a long answer, a wait before the answer, or a card. A turn whose text
+holds `card` draws one card in the workspace of the conversation through a real
 `horizon --browser-mcp` child, with the identity that Horizon gave this program,
 and then keeps one `next_click` open for that card in a thread of its own. A
 press of the person answers that wait, and the thread prints the text of the
-agent and the result of that turn. The program ends when the standard input
-closes, as an agent program of a conversation does.
+agent and the result of that turn.
+
+A turn whose text holds `sleepy` draws the same card and opens no `next_click`, so
+the press of the person waits in the queue of the card until a later turn holds
+the wake line that Horizon sends to the orchestrator of the workspace. That turn
+reads the one press with a short wait, and prints `Woken, you pressed <id>`. The
+program ends when the standard input closes, as an agent program of a
+conversation does.
 
 Usage, inside the isolated fixture:
 
@@ -46,7 +52,8 @@ COST_USD = 0.01
 DURATION_MS = 12
 SLOW_SECONDS = 2
 LONG_LINES = 40
-TURN_WORDS = {'tool': 'tool', 'fail': 'fail', 'long': 'long', 'slow': 'slow', 'card': 'card'}
+TURN_WORDS = {'tool': 'tool', 'fail': 'fail', 'long': 'long', 'slow': 'slow', 'card': 'card',
+              'sleepy': 'sleepy'}
 TOOL_NAME = 'Bash'
 TOOL_COMMAND = 'echo stand-in'
 TOOL_RESULT = 'stand-in'
@@ -63,6 +70,17 @@ CARD_BUTTONS = ({'id': 'go', 'label': 'Go', 'tone': 'primary'},
 CLICK_TIMEOUT_MILLIS = 300_000
 CARD_TIMEOUT_SECONDS = 30.0
 CARD_WAIT_TIMEOUT_SECONDS = CLICK_TIMEOUT_MILLIS / 1000.0 + 60.0
+# The first words of the one line that Horizon sends to an orchestrator when the
+# person presses a button of its card and no `next_click` waits. It is a part of
+# `WAKE_LINE` of `crates/horizon-core/src/block_panel/wake.rs`, and a test of this
+# file holds the two together.
+WAKE_LINE_TEXT = 'A button was pressed on your Horizon card'
+# How long the wake turn of a `sleepy` card waits for the press that woke it.
+WAKE_TIMEOUT_MILLIS = 5_000
+WAKE_WAIT_TIMEOUT_SECONDS = WAKE_TIMEOUT_MILLIS / 1000.0 + 30.0
+# The card of a `sleepy` turn whose `next_click` a later wake line opens: the
+# client of its MCP server, its panel id, and the number of the turn that drew it.
+QUIET_CARD = {}
 # The variable that Horizon sets in every program it starts: the program that runs
 # this Horizon, which serves the MCP tools of the card.
 EXECUTABLE_ENV = 'HORIZON_EXECUTABLE'
@@ -213,8 +231,10 @@ def watch_card(session, number, client, panel_id):
     thread.start()
 
 
-def card_turn(session, number):
-    """Draws one card in the workspace of this conversation and listens for it."""
+def card_turn(session, number, listen=True):
+    """Draws one card in the workspace of this conversation, and listens for it
+    unless `listen` is false: then only the wake line of a later turn reads the
+    press, and the client of that card stays in `QUIET_CARD`."""
     command = mcp_command()
     if not command:
         text(session, f'msg-{number}-card',
@@ -225,9 +245,46 @@ def card_turn(session, number):
     except Fatal as refusal:
         text(session, f'msg-{number}-card', f'The stand-in drew no card: {one_line(str(refusal))}')
         return
+    if not listen:
+        QUIET_CARD.update(client=client, panel_id=panel_id, number=number)
+        text(session, f'msg-{number}-card',
+             f'I drew the card {panel_id} and I hold no wait for it. Press Go or Cancel and one notice '
+             'of the dock wakes me.')
+        return
     text(session, f'msg-{number}-card',
          f'I drew the card {panel_id} in this workspace. Press Go or Cancel and I read it.')
     watch_card(session, number, client, panel_id)
+
+
+def wake_turn(session, number):
+    """Reads the one press that woke this program, with a short wait.
+
+    The card of a `sleepy` turn opened no `next_click`, so the press waited in
+    the queue of the card until Horizon sent the wake line. This turn reads that
+    press once: the card is taken out of `QUIET_CARD` first, so a second wake line
+    opens no second wait.
+    """
+    card = dict(QUIET_CARD)
+    QUIET_CARD.clear()
+    client, panel_id = card.get('client'), card.get('panel_id')
+    if client is None or not panel_id:
+        text(session, f'msg-{number}-wake', 'The stand-in holds no card to read.')
+        return
+    try:
+        answer = client.call_tool(
+            'block_panel',
+            {'operation': 'next_click', 'panel_id': panel_id,
+             'timeout_millis': WAKE_TIMEOUT_MILLIS},
+            WAKE_WAIT_TIMEOUT_SECONDS)
+    except Fatal as refusal:
+        client.close()
+        text(session, f'msg-{number}-wake', f'The wait of the card ended: {one_line(str(refusal))}')
+        return
+    client.close()
+    click = answer.get('click') if isinstance(answer.get('click'), dict) else {}
+    component = click.get('component_id')
+    if isinstance(component, str) and component:
+        text(session, f'msg-{number}-wake', f'Woken, you pressed {component}')
 
 
 def answer(session, number, words):
@@ -238,14 +295,20 @@ def answer(session, number, words):
         time.sleep(SLOW_SECONDS)
     message_id = f'msg-{number}'
     text(session, message_id, f'You said: {words}')
-    if TURN_WORDS['card'] in words:
-        card_turn(session, number)
-    if TURN_WORDS['fail'] in words:
-        tool(session, message_id, failed=True)
-    elif TURN_WORDS['tool'] in words:
-        tool(session, message_id)
-    if TURN_WORDS['long'] in words:
-        long_answer(session, message_id)
+    if WAKE_LINE_TEXT in words:
+        # The wake line carries the words `card` and `tool`, and it is no request
+        # of the person: this turn reads the one press that woke the program and
+        # draws nothing and calls nothing else.
+        wake_turn(session, number)
+    else:
+        if TURN_WORDS['card'] in words:
+            card_turn(session, number, listen=TURN_WORDS['sleepy'] not in words)
+        if TURN_WORDS['fail'] in words:
+            tool(session, message_id, failed=True)
+        elif TURN_WORDS['tool'] in words:
+            tool(session, message_id)
+        if TURN_WORDS['long'] in words:
+            long_answer(session, message_id)
     limit(session)
     result(session, f'You said: {words}', int((time.monotonic() - started) * 1000) + DURATION_MS)
 

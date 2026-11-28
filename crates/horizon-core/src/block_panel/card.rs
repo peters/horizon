@@ -51,6 +51,9 @@ pub struct CardRuntime {
     chosen: BTreeSet<usize>,
     /// A wake line already went to the owner for this streak of clicks.
     wake_sent: bool,
+    /// The label of a button that the person pressed since the host read it,
+    /// which the host names in the conversation of an orchestrator.
+    press_note: Option<String>,
     /// The footer label of the revision it was formatted for. A frame reuses it
     /// instead of formatting a clock time, so a card never builds the text it
     /// draws again.
@@ -388,6 +391,19 @@ impl CardRuntime {
     pub fn reset_wake_streak(&mut self) {
         self.wake_sent = false;
     }
+
+    /// Records the label of the button that the person just pressed, which the
+    /// host names in the conversation of the workspace. The host takes it one
+    /// time, so a button that the person presses twice makes two notes.
+    pub fn note_press(&mut self, label: &str) {
+        self.press_note = Some(label.to_owned());
+    }
+
+    /// The label of the press that the host did not name yet, removed: one press
+    /// gives one line of the conversation.
+    pub fn take_press_note(&mut self) -> Option<String> {
+        self.press_note.take()
+    }
 }
 
 #[cfg(test)]
@@ -634,5 +650,17 @@ mod tests {
         );
         runtime.reset_wake_streak();
         assert!(!runtime.wake_sent());
+    }
+
+    #[test]
+    fn one_press_gives_one_note_to_the_host() {
+        let mut runtime = CardRuntime::default();
+        assert!(runtime.take_press_note().is_none(), "no press yet");
+        runtime.note_press("Go");
+        assert_eq!(runtime.take_press_note(), Some("Go".to_owned()));
+        assert!(
+            runtime.take_press_note().is_none(),
+            "the label of a press reaches the host one time"
+        );
     }
 }

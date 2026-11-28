@@ -50,6 +50,11 @@ use self::programs::Program;
 use self::session::{Session, Start};
 use super::HorizonApp;
 
+/// The notice that names the turn of a wake in a conversation of the dock, which
+/// the tests of the module of the clicks of a card write too.
+#[cfg(test)]
+pub(in crate::app) use self::session::WAKE_NOTICE;
+
 /// The environment switch of this part. `1` turns the dock on, for the fixture of
 /// the smoke test: the setting `features.orchestrator_dock` turns it on for a
 /// person.
@@ -497,6 +502,41 @@ impl OrchestratorDock {
     /// a card of it reports that its owner is here while this answers `true`.
     pub(in crate::app) fn running(&self, local_id: &str) -> bool {
         self.sessions.get(local_id).is_some_and(Session::has_bridge)
+    }
+
+    /// Sends the one wake line of [`horizon_core::WAKE_LINE`] to the program of
+    /// the conversation of `local_id`, as a turn of its own, and names that turn
+    /// in the conversation. It answers whether the line went out: a conversation
+    /// that runs no bridge, or a program that took no line, takes none.
+    pub(in crate::app) fn wake(&mut self, local_id: &str) -> bool {
+        self.sessions
+            .get_mut(local_id)
+            .is_some_and(|session| session.wake(horizon_core::WAKE_LINE))
+    }
+
+    /// Adds or moves the reference row of the card `panel` in the conversation of
+    /// `local_id`, under the text of the program that drew it.
+    pub(in crate::app) fn card_row(&mut self, local_id: &str, panel: &str, title: &str) {
+        self.session_mut(local_id).card_row(panel, title);
+    }
+
+    /// Adds one line of Horizon to the conversation of `local_id`, such as the
+    /// line that names the press of the person on a card of its orchestrator. A
+    /// workspace that holds no conversation keeps none: the line of a card of
+    /// another workspace belongs to no conversation of this dock.
+    pub(in crate::app) fn session_notice(&mut self, local_id: &str, text: &str) {
+        if let Some(session) = self.sessions.get_mut(local_id) {
+            session.notice(text);
+        }
+    }
+
+    /// The entries of the conversation of `local_id`, which a test of another
+    /// module reads.
+    #[cfg(test)]
+    pub(in crate::app) fn conversation_entries(&self, local_id: &str) -> Vec<horizon_core::agent_bridge::Entry> {
+        self.sessions
+            .get(local_id)
+            .map_or_else(Vec::new, |session| session.snapshot().entries.clone())
     }
 
     /// Whether the conversation of `local_id` runs a turn now, which the button

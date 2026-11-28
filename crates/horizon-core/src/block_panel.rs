@@ -82,6 +82,21 @@ impl BlockPanelState {
         }
     }
 
+    /// The heading of the document, or the title without one: the line that
+    /// names the card. A create and an update read it for the reference row of
+    /// the dock, so the row follows the heading that the document holds now.
+    #[must_use]
+    pub fn heading(&self) -> &str {
+        self.document
+            .components
+            .iter()
+            .find_map(|component| match component {
+                Component::Heading { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap_or(&self.title)
+    }
+
     /// Whether the card is one line: as the person left it, or because its job is finished.
     #[must_use]
     pub fn folded(&self) -> bool {

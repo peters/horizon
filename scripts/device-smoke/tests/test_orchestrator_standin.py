@@ -21,6 +21,7 @@ import orchestrator_standin  # noqa: E402
 import serve  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / serve.ORCHESTRATOR_STANDIN_PROGRAM
+REPO = Path(__file__).resolve().parents[3]
 HORIZON_ARGUMENTS = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
                      '--verbose', '--session-id', '00000000-0000-4000-8000-000000000001']
 
@@ -31,14 +32,18 @@ def request(text):
         {'type': 'text', 'text': text}]}}) + '\n'
 
 
-def run(turns):
+def run(turns, horizon_program=None):
     """Every line of the program after it read one line for each text of `turns`.
 
     The environment names no Horizon program, so a turn that holds `card` draws
-    no card and starts no MCP server: these tests start no Horizon host.
+    no card and starts no MCP server: these tests start no Horizon host. A test
+    that needs the card path names a program that does not exist and reads the
+    refusal, so no MCP server starts either.
     """
     environment = {name: value for name, value in os.environ.items()
                    if name != orchestrator_standin.EXECUTABLE_ENV}
+    if horizon_program:
+        environment[orchestrator_standin.EXECUTABLE_ENV] = horizon_program
     environment['PYTHONDONTWRITEBYTECODE'] = '1'
     answer = subprocess.run([str(SCRIPT), *HORIZON_ARGUMENTS], input=''.join(request(text) for text in turns),
                             text=True, capture_output=True, timeout=120, env=environment)
@@ -118,6 +123,46 @@ class OrchestratorStandinTests(unittest.TestCase):
         self.assertEqual(len(texts), 2, 'the answer and the notice, and no card text')
         self.assertEqual(records[-1]['type'], 'result', 'the turn ends with its result')
         self.assertEqual(texts_of(run(['hello there'])), ['You said: hello there'])
+
+    def test_the_word_sleepy_draws_a_card_without_a_wait(self):
+        records = run(['sleepy card'])
+        texts = texts_of(records)
+        self.assertEqual(texts[0], 'You said: sleepy card')
+        self.assertIn(
+            orchestrator_standin.EXECUTABLE_ENV,
+            texts[1],
+            'the turn names that no program of Horizon draws its card and no wait opens',
+        )
+        self.assertEqual(len(texts), 2, 'the answer and the notice, and no card text')
+        self.assertEqual(records[-1]['type'], 'result', 'the turn ends with its result')
+        self.assertEqual(orchestrator_standin.QUIET_CARD, {}, 'a turn without a card holds none')
+
+    def test_a_wake_turn_without_a_card_answers_that_it_holds_none(self):
+        records = run([orchestrator_standin.WAKE_LINE_TEXT])
+        texts = texts_of(records)
+        self.assertEqual(texts[0], f'You said: {orchestrator_standin.WAKE_LINE_TEXT}')
+        self.assertIn('The stand-in holds no card to read.', texts)
+        self.assertEqual(records[-1]['type'], 'result', 'the turn ends with its result')
+
+    def test_a_wake_turn_draws_no_card_and_calls_no_tool(self):
+        # The wake line holds the words `card` and `tool`, and it asks for neither:
+        # the turn reads the press of the card that its sleepy turn drew.
+        records = run([orchestrator_standin.WAKE_LINE_TEXT], horizon_program='/nonexistent/horizon')
+        texts = texts_of(records)
+        self.assertIn('The stand-in holds no card to read.', texts)
+        self.assertFalse([text for text in texts if text.startswith('The stand-in drew no card')],
+                         'the wake turn draws no card')
+        calls = [block for record in records if record.get('type') == 'assistant'
+                 for block in record['message']['content'] if block.get('type') == 'tool_use']
+        self.assertEqual(calls, [], 'the wake turn calls no tool')
+
+    def test_the_wake_text_of_the_stand_in_is_part_of_the_line_of_horizon(self):
+        source = REPO / 'crates/horizon-core/src/block_panel/wake.rs'
+        self.assertIn(
+            orchestrator_standin.WAKE_LINE_TEXT,
+            source.read_text(encoding='utf-8'),
+            'the stand-in answers the line that Horizon sends to an orchestrator',
+        )
 
     def test_the_command_of_the_mcp_server_is_the_program_of_horizon(self):
         with unittest.mock.patch.dict('os.environ', {orchestrator_standin.EXECUTABLE_ENV: ''}):

@@ -27,12 +27,20 @@ workspace, which [has no panel](#when-you-are-the-orchestrator-of-a-workspace).
 
 The orchestrator of a workspace is the agent program that the dock runs. It has
 no terminal panel. Its actor is `horizon:orchestrator/<workspace id>`, and the
-host accepts it while a workspace of that id is on the board.
+host accepts it while the dock runs your program for that workspace: after the
+program ends, the same actor answers `caller_unavailable`.
 
-- **You have no terminal.** Horizon types no wake line for you, because there is
-  no terminal to type into. Keep one `next_click` open while a card of yours waits
-  for the person. A press that no `next_click` waits for stays in the queue of the
-  card for five minutes, and nothing tells you that it came.
+- **A press wakes you with one line.** Horizon types no wake line into a terminal,
+  because you have none. When the person presses a button of your card and no
+  `next_click` of yours waits, Horizon sends the same fixed line to your input as
+  one turn:
+  `A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.`
+  Your conversation shows that turn as the notice
+  `A press on a card woke the orchestrator`. The line arrives only while you are
+  between turns, at most once for one streak of presses and at most every 30
+  seconds. Keep one `next_click` open while a card of yours waits all the same: the
+  press then reaches you at once, and a press that no wait and no wake reads stays
+  in the queue of the card for five minutes.
 - **Your cards land in your workspace.** Horizon places a card of yours on a free
   tile of the workspace that your actor names, where it covers no panel. You have
   no panel, so `beside` is not available to you and no card of yours stands in the
@@ -906,6 +914,14 @@ terminal. It arrives only when the owner's agent panel is idle and holds no
 keyboard focus, at most once per streak of clicks and at most every 30 seconds
 per agent panel. Do not wait for it when you are already in `next_click`: while
 it listens, the click is delivered at once and no line is typed.
+
+The orchestrator of a workspace has no terminal, so Horizon sends that same line
+to its input as one turn of its conversation, under the same conditions where
+they apply: the program runs, it is between turns, no `next_click` of it waits,
+one line per streak of presses and at most every 30 seconds. Its conversation
+names that turn with the notice `A press on a card woke the orchestrator`, and it
+adds no message of the person. Keep a `next_click` open while a card of yours
+waits all the same, so the press needs no wake.
 
 An agent that ignores the line never reads the click. `listening` and
 `pending_clicks` in `list` and `inspect` say whether a click waits.

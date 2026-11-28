@@ -7,7 +7,8 @@
 //! of one owner, and a card of another workspace is never readable through it.
 //!
 //! Nothing here changes the board or reads the disk: the checks read the
-//! manifest of the request, the board and the machine list that the frame holds.
+//! manifest of the request, the board, the dock and the machine list that the
+//! frame holds.
 
 use horizon_core::WorkspaceId;
 use horizon_core::agent_bridge::actor;
@@ -67,14 +68,15 @@ impl HorizonApp {
             return Ok(CardCaller::Panel(panel));
         }
         // The orchestrator of a workspace asks as `horizon:orchestrator/<local
-        // id>`. The id in the actor is checked against this board, and that
-        // workspace is the whole right of this caller: it has no panel.
+        // id>`. The identity belongs to a program that Horizon started, so the
+        // host accepts it only while the dock holds a running bridge for that
+        // workspace: a stale actor of a program that ended is refused, also when
+        // the workspace is still on the board.
         if let Some(local_id) = actor::workspace_of(&request.actor) {
-            let workspace = self
-                .board
-                .workspace_id_by_local_id(local_id)
-                .ok_or_else(caller_unavailable)?;
-            return Ok(CardCaller::Orchestrator { workspace });
+            return self
+                .orchestrator_workspace(local_id)
+                .map(|workspace| CardCaller::Orchestrator { workspace })
+                .ok_or_else(caller_unavailable);
         }
         let (machine, _session) = node_cards::actor_parts(&request.actor).ok_or_else(caller_unavailable)?;
         if self.machine_list.find(machine).is_none() {
@@ -90,7 +92,7 @@ impl HorizonApp {
             return Some(panel.workspace_id);
         }
         if let Some(local_id) = actor::workspace_of(owner) {
-            return self.board.workspace_id_by_local_id(local_id);
+            return self.orchestrator_workspace(local_id);
         }
         let (machine, _session) = node_cards::actor_parts(owner)?;
         self.board
@@ -98,5 +100,15 @@ impl HorizonApp {
             .iter()
             .find(|workspace| workspace.name == machine)
             .map(|workspace| workspace.id)
+    }
+
+    /// The workspace of the orchestrator that `local_id` names, while the dock
+    /// runs its program: the identity of that caller is the bridge, so a read of
+    /// its cards follows the same rule as every other request of it.
+    fn orchestrator_workspace(&self, local_id: &str) -> Option<WorkspaceId> {
+        self.orchestrator_dock
+            .running(local_id)
+            .then(|| self.board.workspace_id_by_local_id(local_id))
+            .flatten()
     }
 }

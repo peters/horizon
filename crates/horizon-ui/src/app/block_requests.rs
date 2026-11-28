@@ -9,21 +9,21 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use egui::Context;
-use horizon_browser_control::block::{BlockDocument, parse_sent_document};
-use horizon_browser_control::manifest::block_machines;
-use horizon_browser_control::manifest::block_terminal;
-use horizon_core::browser::manifest::{
-    self,
-    block::{self, CardSummary, Operation, Outcome, Request},
-};
-use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
-
 use super::HorizonApp;
 use super::answer_retries::{RefusedAnswer, RefusedAnswers};
 use super::block_machine_keys;
 use super::browser_requests::{ActorPanel, actor_panel};
 use super::device_requests::HOST_REQUEST_POLL;
+use egui::Context;
+use horizon_browser_control::block::{BlockDocument, parse_sent_document};
+use horizon_browser_control::manifest::block_machines;
+use horizon_browser_control::manifest::block_terminal;
+use horizon_core::agent_bridge::actor;
+use horizon_core::browser::manifest::{
+    self,
+    block::{self, CardSummary, Operation, Outcome, Request},
+};
+use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 mod caller;
 
@@ -486,6 +486,7 @@ impl HorizonApp {
             self.board.focus(focused);
         }
         self.settle_card_fold(ctx, id, false);
+        self.note_card_row(id);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         let Some(panel) = self.board.panel(id) else {
@@ -495,6 +496,29 @@ impl HorizonApp {
             panel_id: panel.local_id.clone(),
             revision,
         }
+    }
+
+    /// Adds or moves the reference row of the card `id` in the conversation of
+    /// its workspace, when the orchestrator of that workspace owns the card. The
+    /// dock draws one row for the card, which brings it into view.
+    fn note_card_row(&mut self, id: PanelId) {
+        let Some(panel) = self.board.panel(id) else {
+            return;
+        };
+        let Some(heading) = panel.block().map(|block| block.heading().to_owned()) else {
+            return;
+        };
+        let (local_id, workspace) = (panel.local_id.clone(), panel.workspace_id);
+        let Some(owner_local_id) = card_owner(panel).and_then(actor::workspace_of).map(str::to_owned) else {
+            return;
+        };
+        // A program of the dock reads and closes only the cards of the workspace
+        // that its actor names, so the row of a card of another workspace is no
+        // reference to this conversation.
+        if self.board.workspace_id_by_local_id(&owner_local_id) != Some(workspace) {
+            return;
+        }
+        self.orchestrator_dock.card_row(&owner_local_id, &local_id, &heading);
     }
 
     fn update_card(&mut self, panel_id: &str, document: &serde_json::Value, owner: &str, ctx: &Context) -> Outcome {
@@ -519,6 +543,7 @@ impl HorizonApp {
         // The card takes the width that its document asks for in the pass that
         // fits it, after the body measured the content of this revision.
         self.settle_card_fold(ctx, id, false);
+        self.note_card_row(id);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         Outcome::Updated {

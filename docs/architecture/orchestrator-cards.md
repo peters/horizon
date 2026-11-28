@@ -60,9 +60,12 @@ The host maps an actor to a caller before it applies a request
 
 - A panel actor is the caller `Panel`, as before.
 - An actor that parses as an orchestrator actor is the caller `Orchestrator`, and
-  only while a workspace with that local id is on the board. A request of an
-  unknown workspace is `caller_unavailable`, and the answer names the caller and
-  no workspace.
+  only while the dock holds a running bridge for the workspace with that local
+  id (`OrchestratorDock::running`). The identity belongs to a program that
+  Horizon started, and not to the workspace: a workspace on the board whose
+  orchestrator ended, or that never started one, refuses the actor with
+  `caller_unavailable`. A read of a card of that owner follows the same rule, and
+  the answer names the caller and no workspace.
 - A machine session actor is the caller `Session`, as before.
 
 A caller of `Orchestrator` has no panel, so:
@@ -91,11 +94,54 @@ the workspace that its actor names. The state chip of the card names the program
 of the dock and says whether it listens. While no bridge runs, the chip says
 `No agent` and every control of the card is drawn disabled.
 
-Horizon types no wake line for this owner, because the owner has no terminal. An
-orchestrator must keep a `next_click` open while a card of its own waits for the
-person, as an agent of a session of a machine does. A press that no wait of the
-owner reads stays in the queue of the card for five minutes, 32 presses per card,
-and nothing tells the program that the press came.
+## The wake of the orchestrator
+
+A press on a card whose owner holds no open `next_click` wakes the owner. An agent
+panel reads that wake in its terminal; an orchestrator has no terminal, so the
+same line reaches its program as one turn of its bridge
+(`crates/horizon-ui/src/app/block_clicks.rs`, `WakeTarget`).
+
+- The line is the constant [`WAKE_LINE`](../../../crates/horizon-core/src/block_panel/wake.rs)
+  of the terminal wake. The rules of that file decide whether it goes out:
+  `wake_verdict` holds it while the owner is absent or works on a turn, while a
+  line already went out for this streak of presses, and for 30 seconds after the
+  last line to that owner. Horizon copies no rule and adds none.
+- The turn of the wake makes the conversation busy, and the conversation names it
+  with the notice `A press on a card woke the orchestrator`. It adds no message
+  of the person: the wake line is Horizon's own sentence, and the program answers
+  it as an ordinary turn.
+- `Conversation::system_said` adds that notice and the busy state with no
+  [`Entry::Person`](../../../crates/horizon-core/src/agent_bridge/conversation.rs).
+  A conversation that runs a turn is `Working` for `wake_verdict`, so a second
+  press of the same streak waits for a later frame.
+- An orchestrator should still keep one `next_click` open while a card of its own
+  waits for the person: a press then reaches the program at once, and no wake
+  line is needed. A press that no wait and no wake reads stays in the queue of the
+  card for five minutes, at most 32 presses per card.
+
+## The reference rows of the cards of a conversation
+
+The dock draws one row for each card that its program drew in the workspace of the
+conversation (`Entry::Card` of `horizon-core`).
+
+- A create and an update of a card add the row of that card, or move the row that
+  the card already has to the heading of its document. One card keeps one row,
+  and a second create of the same panel adds none.
+- The row holds the local id of the card and the heading of its document, cut to
+  80 characters, with each control character replaced. The heading is text of the
+  program, so the dock draws it as plain text, with an ellipsis at the end of one
+  line (`crates/horizon-ui/src/app/orchestrator_dock/list.rs`).
+- A press on the row brings the card into view, through the same path that the row
+  of the sidebar uses (`reveal_selected_panel`). The row sends nothing to the
+  program.
+- A row whose card left the board is drawn dim, says `closed` at its right end,
+  and takes no press. The stored conversation keeps that row, so the row of a card
+  of an earlier run reads as a closed row after a restart: Horizon loads the local
+  id of the card, and no panel of the board answers to it.
+- The person reads the press of a button of such a card in the conversation too:
+  the notice `You pressed <label> on <heading>` names it, with the label and the
+  heading cut to 40 characters each. The notice is the words of Horizon and it
+  holds no other field of the card.
 
 ## The operations of this caller
 
@@ -116,11 +162,6 @@ Nothing in this table is a right that an agent panel does not have.
 
 ## What is not built
 
-- **No wake.** A `next_click` is the only way that a press reaches the
-  orchestrator, as for an agent of a machine session.
-- **No row in the dock.** The dock draws its conversation and no reference to a
-  card: the person finds a card of the orchestrator in the canvas and in the
-  sidebar, as every card.
 - **No named secret.** A later part decides whether the orchestrator gets a key
   of the person.
 - **No work ledger.** The program gets no work-resume plugin and no

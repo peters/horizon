@@ -368,8 +368,9 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// The four kinds of entry, with a tool call that ended and one that failed.
-    fn five_entries() -> Vec<Entry> {
+    /// Every kind of entry, with a tool call that ended, one that failed and the
+    /// reference row of a card.
+    fn stored_entries() -> Vec<Entry> {
         vec![
             Entry::Person {
                 text: "alpha".to_owned(),
@@ -395,6 +396,10 @@ mod tests {
             Entry::Notice {
                 text: "a notice".to_owned(),
             },
+            Entry::Card {
+                panel: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".to_owned(),
+                title: "Plan".to_owned(),
+            },
         ]
     }
 
@@ -404,12 +409,28 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_row_of_a_card_loads_as_a_closed_row_after_a_restart() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let path = path(folder.path());
+        let rows = vec![Entry::Card {
+            panel: "a-card-that-is-gone".to_owned(),
+            title: "Plan".to_owned(),
+        }];
+        append(&path, &rows).expect("the row is written");
+
+        let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the row is read");
+
+        assert_eq!(loaded, rows, "the row keeps the card and the heading alone");
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
     fn every_kind_of_entry_survives_the_file() {
         let folder = tempfile::tempdir().expect("a folder");
         let path = path(folder.path());
-        append(&path, &five_entries()).expect("the entries are written");
+        append(&path, &stored_entries()).expect("the entries are written");
         let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
-        assert_eq!(loaded, five_entries());
+        assert_eq!(loaded, stored_entries());
         assert_eq!(dropped, 0, "every line of the file parses");
         // The file is private, and so is its folder.
         let file_mode = std::fs::metadata(&path).expect("the file").permissions().mode() & 0o777;
@@ -426,10 +447,10 @@ mod tests {
     fn a_second_append_keeps_the_entries_of_the_first() {
         let folder = tempfile::tempdir().expect("a folder");
         let path = path(folder.path());
-        append(&path, &five_entries()[..2]).expect("the first entries are written");
-        append(&path, &five_entries()[2..]).expect("the next entries are written");
+        append(&path, &stored_entries()[..2]).expect("the first entries are written");
+        append(&path, &stored_entries()[2..]).expect("the next entries are written");
         let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
-        assert_eq!(loaded, five_entries());
+        assert_eq!(loaded, stored_entries());
         assert_eq!(dropped, 0);
     }
 
@@ -437,7 +458,7 @@ mod tests {
     fn a_bad_line_and_a_long_line_are_dropped_and_counted() {
         let folder = tempfile::tempdir().expect("a folder");
         let path = path(folder.path());
-        append(&path, &five_entries()).expect("the entries are written");
+        append(&path, &stored_entries()).expect("the entries are written");
         let mut file = OpenOptions::new()
             .append(true)
             .open(&path)
@@ -450,7 +471,7 @@ mod tests {
         drop(file);
 
         let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
-        assert_eq!(loaded, five_entries(), "the lines that parse stay");
+        assert_eq!(loaded, stored_entries(), "the lines that parse stay");
         assert_eq!(dropped, 3, "a bad line, a long line and a line of a later version");
     }
 
@@ -557,7 +578,7 @@ mod tests {
     fn a_file_within_its_bound_keeps_every_line_of_a_compaction() {
         let folder = tempfile::tempdir().expect("a folder");
         let path = path(folder.path());
-        append(&path, &five_entries()).expect("the entries are written");
+        append(&path, &stored_entries()).expect("the entries are written");
         let before = std::fs::read_to_string(&path).expect("the file");
 
         compact(&path).expect("the file is within its bound");
@@ -569,7 +590,7 @@ mod tests {
     fn a_removed_file_takes_its_entries_with_it() {
         let folder = tempfile::tempdir().expect("a folder");
         let path = path(folder.path());
-        append(&path, &five_entries()).expect("the entries are written");
+        append(&path, &stored_entries()).expect("the entries are written");
         remove(&path).expect("the file is removed");
         assert!(!path.exists());
         assert_eq!(load(&path, MAX_ENTRIES).expect("no file, no entry").0, Vec::new());

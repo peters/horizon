@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::app::block_machines::settle_machine_load;
-use crate::app::orchestrator_dock::OrchestratorDock;
-use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
+use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
 use horizon_browser_control::manifest::block_terminal::TerminalRoute;
+use horizon_core::agent_bridge::Entry;
 use horizon_core::agent_bridge::actor;
 use horizon_core::{MachineKeys, RuntimeState, StartupDecision};
 
@@ -66,6 +66,18 @@ fn queue(temp: &tempfile::TempDir) -> PathBuf {
     let root = temp.path().join("block-panel-requests");
     fs::create_dir_all(&root).expect("the queue directory");
     root
+}
+
+/// A request of the agent panel with `local_id`, which is the actor of a panel of
+/// this board.
+fn panel_request(local_id: &str, operation: Operation) -> Request {
+    Request {
+        request_id: "test-panel".into(),
+        actor: format!("horizon:{local_id}"),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation,
+    }
 }
 
 /// The document of a card that asks for one press.
@@ -130,7 +142,8 @@ fn code(outcome: &Outcome) -> &str {
 
 #[test]
 fn every_request_of_an_orchestrator_names_the_orchestrator_of_its_workspace() {
-    let (_temp, _ctx, app) = app();
+    let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 1);
     let local_id = workspace_local_id(&app, 1);
     let workspace = app.board.workspaces[1].id;
     let request = orchestrator_request(&app, 1, Operation::List);
@@ -170,7 +183,8 @@ fn an_orchestrator_actor_of_an_unknown_workspace_is_caller_unavailable() {
 
 #[test]
 fn a_card_of_an_orchestrator_lands_in_the_workspace_of_its_actor() {
-    let (_temp, ctx, mut app) = app();
+    let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 0);
     let active = app.board.active_workspace.expect("an active workspace");
     let first = app.board.workspaces[0].id;
     let second = app.board.workspaces[1].id;
@@ -211,7 +225,8 @@ fn a_card_of_an_orchestrator_lands_in_the_workspace_of_its_actor() {
 
 #[test]
 fn every_card_operation_of_an_orchestrator_works() {
-    let (_temp, ctx, mut app) = app();
+    let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 1);
     let card = created_in(&mut app, &ctx, 1, "Plan");
 
     // update
@@ -239,6 +254,9 @@ fn every_card_operation_of_an_orchestrator_works() {
     assert_eq!(panels.len(), 1);
     assert_eq!(panels[0].panel_id, card);
     assert!(panels[0].owned_by_caller, "the orchestrator owns the card");
+    // The orchestrator of the other workspace runs too, so its read is accepted
+    // and answers the cards of its own workspace alone.
+    present(&mut app, &ctx, temp.path(), 0);
     let other = app.apply_block_request(&orchestrator_request(&app, 0, Operation::List), &ctx);
     let Outcome::Panels { panels } = &other else {
         panic!("expected the card list: {other:?}");
@@ -248,10 +266,22 @@ fn every_card_operation_of_an_orchestrator_works() {
         "the orchestrator of another workspace reads no card of this one"
     );
 
+    every_card_read_of_an_orchestrator(&mut app, &ctx, &card);
+}
+
+/// The reads and the changes of one card of an orchestrator that remains on the
+/// board: `inspect`, `visibility` and the card of the list.
+fn every_card_read_of_an_orchestrator(app: &mut HorizonApp, ctx: &Context, card: &str) {
     // inspect
     let inspected = app.apply_block_request(
-        &orchestrator_request(&app, 1, Operation::Inspect { panel_id: card.clone() }),
-        &ctx,
+        &orchestrator_request(
+            app,
+            1,
+            Operation::Inspect {
+                panel_id: card.to_owned(),
+            },
+        ),
+        ctx,
     );
     let Outcome::Inspected {
         owned_by_caller,
@@ -263,22 +293,22 @@ fn every_card_operation_of_an_orchestrator_works() {
     };
     assert!(owned_by_caller);
     assert!(
-        !agent_present,
-        "no bridge runs for this workspace in a test, so its orchestrator is not present"
+        *agent_present,
+        "the program of the dock runs for this workspace, so its orchestrator is present"
     );
 
     // next_click, with the click that a person made
-    press(&mut app, &card, "go");
+    press(app, card, "go");
     let clicked = app.apply_block_request(
         &orchestrator_request(
-            &app,
+            app,
             1,
             Operation::NextClick {
                 panel_id: None,
                 timeout_millis: Some(0),
             },
         ),
-        &ctx,
+        ctx,
     );
     let Outcome::Clicked { click } = &clicked else {
         panic!("the wait of the orchestrator reads its click: {clicked:?}");
@@ -289,14 +319,14 @@ fn every_card_operation_of_an_orchestrator_works() {
     // visibility
     let hidden = app.apply_block_request(
         &orchestrator_request(
-            &app,
+            app,
             1,
             Operation::Visibility {
-                panel_id: card.clone(),
+                panel_id: card.to_owned(),
                 visible: false,
             },
         ),
-        &ctx,
+        ctx,
     );
     assert!(
         matches!(hidden, Outcome::Visibility { visible: false, .. }),
@@ -305,8 +335,14 @@ fn every_card_operation_of_an_orchestrator_works() {
 
     // close
     let closed = app.apply_block_request(
-        &orchestrator_request(&app, 1, Operation::Close { panel_id: card.clone() }),
-        &ctx,
+        &orchestrator_request(
+            app,
+            1,
+            Operation::Close {
+                panel_id: card.to_owned(),
+            },
+        ),
+        ctx,
     );
     let Outcome::Closed {
         by_owner,
@@ -319,14 +355,15 @@ fn every_card_operation_of_an_orchestrator_works() {
     assert!(by_owner);
     assert!(by.is_empty(), "the caller has no panel of this board to name");
     assert!(
-        app.board.panel_id_by_local_id(&card).is_none(),
+        app.board.panel_id_by_local_id(card).is_none(),
         "the card left the board"
     );
 }
 
 #[test]
 fn a_next_click_that_names_the_card_of_an_orchestrator_waits_for_it() {
-    let (_temp, ctx, mut app) = app();
+    let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 1);
     let card = created_in(&mut app, &ctx, 1, "Plan");
     let wait = app.apply_block_request_waiting(
         &orchestrator_request(
@@ -355,6 +392,7 @@ fn a_next_click_that_names_the_card_of_an_orchestrator_waits_for_it() {
 #[test]
 fn the_machine_operations_of_an_orchestrator_reach_the_machine_list() {
     let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 1);
     let root = queue(&temp);
     let key_directory = MachineKeys::from_home(app.session_store.home()).key_directory();
     fs::create_dir_all(&key_directory).expect("the key directory");
@@ -423,6 +461,7 @@ fn answered(app: &mut HorizonApp, ctx: &Context, root: &Path, index: usize, oper
 #[test]
 fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
     let (temp, ctx, mut app) = app();
+    present(&mut app, &ctx, temp.path(), 1);
     let root = queue(&temp);
     let terminal = app.apply_block_request(
         &orchestrator_request(
@@ -471,10 +510,6 @@ fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
     assert_eq!(code(&panel), "caller_unavailable", "{panel:?}");
 }
 
-/// The window of the test that draws frames of the dock: wide enough that the
-/// dock stands beside the canvas.
-const WIDE: [f32; 2] = [2000.0, 1000.0];
-
 /// The stand-in program of the dock: it names its session and then reads the
 /// lines of the person until the bridge stops, so a test holds a running bridge
 /// without an agent program.
@@ -482,133 +517,66 @@ const SILENT: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","sessio
 while IFS= read -r line; do :; done
 "#;
 
-/// The board of the test that draws frames: the same two workspaces, with the
-/// editor panels that a frame draws without an agent program.
-fn frame_app() -> TestApp {
-    let runtime = RuntimeState {
-        workspaces: vec![
-            editor_workspace_state(FIRST, [0.0, 0.0]),
-            editor_workspace_state(SECOND, [900.0, 0.0]),
-        ],
-        ..RuntimeState::default()
-    };
-    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-        runtime_state: Box::new(runtime),
-    });
-    settle_machine_load(&mut app);
-    // The frames of a person's window, as the tests of the dock settle them: no
-    // deferred theme and no one-shot startup layout takes the input of a frame.
-    app.theme_applied = true;
-    app.initial_pan_done = true;
-    app.startup_workspace_organization_pending = false;
-    app.root_viewport_stabilizer = None;
-    for _ in 0..3 {
-        let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(WIDE, None));
-    }
-    (temp, ctx, app)
-}
+/// The stand-in program of a conversation whose program ends at once, so a test
+/// reads an ended bridge.
+const EXITING: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
+exit 0
+"#;
 
-/// One frame of the window whose pointer stands at `at`, pressed or released.
-fn pointer_frame(at: egui::Pos2, pressed: bool) -> egui::RawInput {
-    let mut input = raw_input(WIDE, None);
-    input.events = vec![
-        egui::Event::PointerMoved(at),
-        egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        },
-    ];
-    input
-}
-
-/// One frame of the window that presses the Enter key.
-fn enter_frame() -> egui::RawInput {
-    let mut input = raw_input(WIDE, None);
-    input.events = vec![egui::Event::Key {
-        key: egui::Key::Enter,
-        physical_key: Some(egui::Key::Enter),
-        pressed: true,
-        repeat: false,
-        modifiers: egui::Modifiers::NONE,
-    }];
-    input
-}
-
-/// A request of the agent panel with `local_id`, which is the actor of a panel
-/// of this board.
-fn panel_request(local_id: &str, operation: Operation) -> Request {
-    Request {
-        request_id: "test-panel".into(),
-        actor: format!("horizon:{local_id}"),
-        host_instance: manifest::host_instance().into(),
-        deadline_at_millis: manifest::now_millis() + 10_000,
-        operation,
-    }
-}
-
-/// Starts the program of the dock for the workspace that the dock draws, as a
-/// person does: a click in the field of the draft and the Enter key. It answers
-/// the local id of that workspace, whose bridge is the presence of its
-/// orchestrator.
-fn start_dock_bridge(app: &mut HorizonApp, ctx: &Context, folder: &Path) -> String {
-    let program = horizon_core::stand_in_program_in(folder, "stand-in.sh", SILENT).expect("the stand-in program");
-    app.orchestrator_dock = OrchestratorDock::with_program(true, program);
-    let local_id = app
-        .board
-        .active_workspace
-        .and_then(|id| app.board.workspace(id))
-        .map(|workspace| workspace.local_id.clone())
-        .expect("the active workspace of the board");
-    app.orchestrator_dock.draft_mut(&local_id).push_str("hello");
-    // The dock takes the right edge of the window in a frame, so it knows the
-    // rectangles of its parts after one frame.
-    let _ = run_app_frame_with_input(ctx, app, raw_input(WIDE, None));
-    let field = app
-        .orchestrator_dock
-        .last_frame()
-        .expect("the frame of the dock")
-        .field
-        .center();
-    let _ = run_app_frame_with_input(ctx, app, pointer_frame(field, true));
-    let _ = run_app_frame_with_input(ctx, app, pointer_frame(field, false));
-    let _ = run_app_frame_with_input(ctx, app, enter_frame());
+/// Starts the program of the dock for the workspace at `index` with the stand-in
+/// `body`, and answers the local id of that workspace. The stricter caller rule
+/// accepts the actor of an orchestrator only while this bridge runs.
+fn present_with(app: &mut HorizonApp, ctx: &Context, folder: &Path, index: usize, body: &str) -> String {
+    let program = horizon_core::stand_in_program_in(folder, "stand-in.sh", body).expect("the stand-in program");
+    app.orchestrator_dock.set_program(program);
+    let local_id = workspace_local_id(app, index);
+    assert!(
+        app.say_to_orchestrator(ctx, &local_id, "hello"),
+        "the message of the person reaches the conversation of the workspace"
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !app.orchestrator_dock.running(&local_id) {
         assert!(std::time::Instant::now() < deadline, "the program of the dock starts");
-        let _ = run_app_frame_with_input(ctx, app, raw_input(WIDE, None));
+        app.poll_orchestrator_dock();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(
-        app.orchestrator_dock.draft_mut(&local_id).is_empty(),
-        "the message of the person left the field of the dock"
-    );
     local_id
+}
+
+/// [`present_with`] with the stand-in that reads the lines of the person.
+fn present(app: &mut HorizonApp, ctx: &Context, folder: &Path, index: usize) -> String {
+    present_with(app, ctx, folder, index, SILENT)
+}
+
+/// Waits until the bridge of the workspace `local_id` ended, which the program of
+/// its conversation does by itself.
+fn wait_until_ended(app: &mut HorizonApp, local_id: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app.orchestrator_dock.running(local_id) {
+        assert!(std::time::Instant::now() < deadline, "the program of the dock ends");
+        app.poll_orchestrator_dock();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]
 fn a_card_that_the_person_moved_to_another_workspace_has_no_present_owner() {
-    let (temp, ctx, mut app) = frame_app();
+    let (temp, ctx, mut app) = app();
     let second = app.board.workspaces[1].id;
     let owner_panel = app.board.panels[0].local_id.clone();
     let closing_panel = app.board.panels[1].local_id.clone();
 
-    // The card of the orchestrator of the workspace that the dock draws.
+    // The card of the orchestrator of the first workspace of this board.
+    let local_id = present(&mut app, &ctx, temp.path(), 0);
+    assert_eq!(local_id, workspace_local_id(&app, 0));
     let card = created_in(&mut app, &ctx, 0, "Plan");
-    let local_id = start_dock_bridge(&mut app, &ctx, temp.path());
-    assert_eq!(
-        local_id,
-        workspace_local_id(&app, 0),
-        "the dock draws the first workspace of this board"
-    );
     let id = app.board.panel_id_by_local_id(&card).expect("the card");
     assert!(
         app.card_agent_present(id),
         "the program of the dock runs, so the card of its orchestrator is live"
     );
-    // The two panels of this board are agent panels after the frames of the dock,
-    // so an actor of either of them reaches the card operations.
+    // The two panels of this board are agent panels, so an actor of either of
+    // them reaches the card operations.
     for panel in &mut app.board.panels {
         if panel.local_id == owner_panel || panel.local_id == closing_panel {
             panel.kind = PanelKind::Claude;
@@ -669,12 +637,17 @@ fn a_card_that_the_person_moved_to_another_workspace_has_no_present_owner() {
 
 #[test]
 fn the_buttons_of_a_card_of_an_orchestrator_are_dark_without_its_bridge() {
-    let (_temp, ctx, mut app) = app();
+    let (temp, ctx, mut app) = app();
+    // The card of an orchestrator is drawn while its program runs, so the stop of
+    // that program is the state that this test reads.
+    let local_id = present(&mut app, &ctx, temp.path(), 1);
     let card = created_in(&mut app, &ctx, 1, "Plan");
     let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    assert!(app.card_agent_present(id), "the program of the dock runs");
+    app.stop_orchestrator_conversation(&local_id);
     assert!(
         !app.card_agent_present(id),
-        "no bridge runs for the workspace of this card in a test"
+        "the stopped conversation holds no bridge, so the card has no present owner"
     );
     let chip = app.card_titlebar_chip(id).expect("the card has a state chip");
     assert_eq!(
@@ -683,15 +656,136 @@ fn the_buttons_of_a_card_of_an_orchestrator_are_dark_without_its_bridge() {
         "the chip of a card without its orchestrator says `No agent`"
     );
     // A press that no wait of the orchestrator reads stays in the queue of the
-    // card: the owner has no terminal, so Horizon types no wake line for it.
+    // card: the stopped program takes no wake, so this frame sends nothing.
     press(&mut app, &card, "go");
     assert!(
         !app.settle_block_clicks(),
-        "no wake line and no answer leaves this frame for a caller without a panel"
+        "no wake line and no answer leaves this frame for a caller without a bridge"
     );
     assert_eq!(
         app.card_pending_clicks(id),
         1,
         "the press waits in the queue of the card for the next wait of its owner"
+    );
+}
+
+#[test]
+fn an_orchestrator_is_a_caller_only_while_its_bridge_runs() {
+    let (temp, ctx, mut app) = app();
+    let request = orchestrator_request(&app, 0, Operation::List);
+
+    // No bridge runs for this workspace, so the actor of its orchestrator names no
+    // caller, although the workspace is on the board.
+    assert_eq!(
+        code(&app.apply_block_request(&request, &ctx)),
+        "caller_unavailable",
+        "an identity of a program that Horizon did not start is no caller"
+    );
+    assert!(
+        app.owner_workspace(&request.actor).is_none(),
+        "and its cards are unreadable"
+    );
+
+    let local_id = present(&mut app, &ctx, temp.path(), 0);
+    assert!(
+        matches!(app.request_caller(&request), Ok(CardCaller::Orchestrator { .. })),
+        "the running program of the dock is the caller of its workspace"
+    );
+    assert_eq!(app.owner_workspace(&request.actor), Some(app.board.workspaces[0].id));
+
+    // A program that ends takes the identity with it.
+    app.stop_orchestrator_conversation(&local_id);
+    assert!(
+        !app.orchestrator_dock.running(&local_id),
+        "a stopped conversation owns no bridge"
+    );
+    assert_eq!(
+        code(&app.apply_block_request(&request, &ctx)),
+        "caller_unavailable",
+        "the identity ends with the bridge of the program"
+    );
+}
+
+#[test]
+fn an_ended_bridge_is_no_caller_either() {
+    let (temp, ctx, mut app) = app();
+    let local_id = present_with(&mut app, &ctx, temp.path(), 0, EXITING);
+    wait_until_ended(&mut app, &local_id);
+    let request = orchestrator_request(&app, 0, Operation::List);
+
+    assert_eq!(
+        code(&app.apply_block_request(&request, &ctx)),
+        "caller_unavailable",
+        "a program that ended leaves no caller behind"
+    );
+    assert!(app.owner_workspace(&request.actor).is_none());
+}
+
+#[test]
+fn the_conversation_of_the_workspace_names_the_card_of_its_orchestrator() {
+    let (temp, ctx, mut app) = app();
+    let local_id = present(&mut app, &ctx, temp.path(), 0);
+    let card = created_in(&mut app, &ctx, 0, "Plan");
+
+    let rows = |app: &HorizonApp| -> Vec<(String, String)> {
+        app.orchestrator_dock
+            .conversation_entries(&local_id)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Card { panel, title } => Some((panel, title)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        rows(&app),
+        vec![(card.clone(), "Plan".to_owned())],
+        "the create adds one reference row of the card"
+    );
+
+    // A second create of the same card, and an update of its heading, keep one row.
+    let again = created_in(&mut app, &ctx, 0, "Plan");
+    assert_ne!(again, card, "a second create draws a second card");
+    let updated = created_in(&mut app, &ctx, 0, "Plan");
+    app.apply_block_request(
+        &orchestrator_request(
+            &app,
+            0,
+            Operation::Update {
+                panel_id: updated.clone(),
+                document: document("Plan, second revision"),
+            },
+        ),
+        &ctx,
+    );
+    let rows_now = rows(&app);
+    assert_eq!(
+        rows_now.len(),
+        3,
+        "one row for each card of the conversation: {rows_now:?}"
+    );
+    assert!(
+        rows_now.contains(&(updated.clone(), "Plan, second revision".to_owned())),
+        "the row of a card follows the heading of its document: {rows_now:?}"
+    );
+    assert_eq!(
+        rows_now.iter().filter(|(panel, _)| *panel == updated).count(),
+        1,
+        "an update adds no second row"
+    );
+
+    // A card that leaves the board keeps its row: the dock draws it as a closed
+    // row, which is what a restart reads as well.
+    app.apply_block_request(
+        &orchestrator_request(&app, 0, Operation::Close { panel_id: card.clone() }),
+        &ctx,
+    );
+    assert!(
+        rows(&app).iter().any(|(panel, _)| *panel == card),
+        "the row of a closed card stays, so the person reads that it closed"
+    );
+    assert!(
+        app.board.panel_id_by_local_id(&card).is_none(),
+        "the card left the board"
     );
 }

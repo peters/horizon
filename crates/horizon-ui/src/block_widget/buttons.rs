@@ -285,7 +285,13 @@ fn draw_button(ui: &mut Ui, button: &Button, rect: Rect, is_primary: bool, view:
             *view.pressed = Some(button.id.clone());
         } else {
             let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
-            view.card.press(&button.id, revision, document, now_millis);
+            if view.card.press(&button.id, revision, document, now_millis) {
+                // The host names the press of a card of an orchestrator in the
+                // conversation of that workspace, so the person reads there what
+                // the program was told.
+                let label = button.label.clone();
+                view.card.note_press(&label);
+            }
         }
         ui.ctx().request_repaint();
     }

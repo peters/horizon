@@ -16,15 +16,20 @@ use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
 use horizon_core::agent_bridge::actor;
 use horizon_core::node_cards;
-use horizon_core::{
-    AgentStatus, BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict,
-    WorkspaceId, browser_actor, wake_verdict,
-};
+use horizon_core::{BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, WorkspaceId, browser_actor};
 
 use crate::block_widget::{CardChip, chip::ChipState};
 
 use super::HorizonApp;
 use super::block_requests::{BlockAnswer, card_owner};
+
+mod wake;
+
+pub(in crate::app) use self::wake::WakeTarget;
+
+/// The most characters of a button label and of a card heading that the line of
+/// one press keeps.
+const PRESS_LINE_CHARS: usize = 40;
 
 /// A `next_click` that waits until a click arrives or the person's wait ends.
 pub(in crate::app) struct ClickWaiter {
@@ -50,14 +55,14 @@ impl ClickWaiter {
 }
 
 /// What this host owes a card's owner: the open `next_click` waits, and the
-/// last wake line to each agent panel.
+/// last wake of each owner.
 #[derive(Default)]
 pub(in crate::app) struct BlockClickState {
     /// The waits that name one card, by that card.
     card_waiters: HashMap<PanelId, ClickWaiter>,
     /// The waits that cover every card of an owner, by that owner's actor.
     agent_waiters: HashMap<String, ClickWaiter>,
-    last_wake: HashMap<PanelId, Instant>,
+    last_wake: HashMap<WakeTarget, Instant>,
 }
 
 impl BlockClickState {
@@ -344,13 +349,49 @@ impl HorizonApp {
     }
 
     /// Answers each wait that has a click, a passed deadline or no card left,
-    /// drops the clicks that aged out, and wakes an owner when a click waits and
-    /// nobody listens. Runs on every frame and on every request pump wake.
+    /// names the press of each card in the conversation of an orchestrator, drops
+    /// the clicks that aged out, and wakes an owner when a click waits and nobody
+    /// listens. Runs on every frame and on every request pump wake.
     pub(super) fn settle_block_clicks(&mut self) -> bool {
         let now_millis = manifest::now_millis();
         let answered = self.settle_card_answers();
         self.prune_card_clicks(now_millis);
-        answered || self.settle_click_waiters(now_millis) || self.wake_card_owners()
+        let noted = self.note_card_presses();
+        let waited = self.settle_click_waiters(now_millis);
+        let woken = self.wake_card_owners();
+        answered || noted || waited || woken
+    }
+
+    /// Adds one line to the conversation of the workspace of a card of an
+    /// orchestrator for each button that the person pressed there, so the person
+    /// reads in the dock what the program was told. The line is Horizon's words:
+    /// the label and the heading are text of the program, cut here.
+    fn note_card_presses(&mut self) -> bool {
+        let presses: Vec<(PanelId, String)> = self
+            .panel_render_caches
+            .card_runtime
+            .iter_mut()
+            .filter_map(|(panel_id, card)| card.take_press_note().map(|label| (*panel_id, label)))
+            .collect();
+        let mut noted = false;
+        for (panel_id, label) in presses {
+            let Some(panel) = self.board.panel(panel_id) else {
+                continue;
+            };
+            let Some(heading) = panel.block().map(|block| block.heading().to_owned()) else {
+                continue;
+            };
+            let Some(local_id) = card_owner(panel).and_then(actor::workspace_of).map(str::to_owned) else {
+                continue;
+            };
+            if self.board.workspace_id_by_local_id(&local_id) != Some(panel.workspace_id) {
+                continue;
+            }
+            self.orchestrator_dock
+                .session_notice(&local_id, &press_line(&label, &heading));
+            noted = true;
+        }
+        noted
     }
 
     /// Carries the answer that the person pressed to the saved card, and the
@@ -526,96 +567,6 @@ impl HorizonApp {
         });
     }
 
-    /// Types the wake line into an idle owner's terminal when a click waits and
-    /// nobody listens. A wake that a condition holds is tried again on a later
-    /// frame.
-    fn wake_card_owners(&mut self) -> bool {
-        let wakes = self.planned_wakes();
-        let now = Instant::now();
-        let mut woken: Vec<PanelId> = Vec::new();
-        for (panel_id, owner) in wakes {
-            // One line per agent panel: its cards keep their streak for a later
-            // frame, behind the interval of the line.
-            if woken.contains(&owner) {
-                continue;
-            }
-            if !self.send_wake_line(owner) {
-                continue;
-            }
-            self.block_clicks.last_wake.insert(owner, now);
-            if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&panel_id) {
-                card.mark_wake_sent();
-            }
-            woken.push(owner);
-        }
-        !woken.is_empty()
-    }
-
-    /// The cards whose owner the wake line should reach this frame, with that
-    /// owner's agent panel.
-    fn planned_wakes(&self) -> Vec<(PanelId, PanelId)> {
-        let mut wakes = Vec::new();
-        for (panel_id, pending, wake_sent) in self.card_click_facts() {
-            if pending == 0 || self.block_listening(panel_id) {
-                continue;
-            }
-            let Some(panel) = self.board.panel(panel_id) else {
-                continue;
-            };
-            let owner = self.card_owner_panel(panel);
-            if wake_verdict(&self.wake_context(owner, pending, wake_sent)) == WakeVerdict::Send
-                && let Some(owner) = owner
-            {
-                wakes.push((panel_id, owner));
-            }
-        }
-        wakes
-    }
-
-    /// The clicks and wake streak of each card, in board-independent order.
-    fn card_click_facts(&self) -> Vec<(PanelId, usize, bool)> {
-        let mut facts: Vec<(PanelId, usize, bool)> = self
-            .panel_render_caches
-            .card_runtime
-            .iter()
-            .map(|(panel_id, card)| (*panel_id, card.queued(), card.wake_sent()))
-            .collect();
-        facts.sort_by_key(|(panel_id, _, _)| panel_id.0);
-        facts
-    }
-
-    /// What the wake decision of one card needs, from the board and the last
-    /// wake line to its owner.
-    fn wake_context(&self, owner: Option<PanelId>, queued: usize, wake_sent: bool) -> WakeContext {
-        let owner_panel = owner.and_then(|owner| self.board.panel(owner));
-        WakeContext {
-            queued_clicks: queued,
-            listening: false,
-            owner_present: owner_panel.is_some(),
-            owner_focused: owner.is_some_and(|owner| self.board.focused == Some(owner)),
-            owner_status: owner_panel.map_or(AgentStatus::Idle, Panel::agent_status),
-            wake_already_sent: wake_sent,
-            since_last_wake: owner
-                .and_then(|owner| self.block_clicks.last_wake.get(&owner))
-                .map(Instant::elapsed),
-        }
-    }
-
-    /// Types the one wake line into an agent panel's terminal, encoded as a
-    /// person's paste is, then Enter.
-    fn send_wake_line(&mut self, owner: PanelId) -> bool {
-        let Some(panel) = self.board.panel_mut(owner) else {
-            return false;
-        };
-        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-            return false;
-        };
-        let mut bytes = crate::input::paste_bytes(WAKE_LINE, mode, true);
-        bytes.push(b'\r');
-        panel.write_input(&bytes);
-        true
-    }
-
     /// Whether a `next_click` or a card of Horizon that asks about a setting
     /// holds this host open. The request pump wakes slowly while one does, so a
     /// deadline passes also when no frame runs.
@@ -629,6 +580,22 @@ impl HorizonApp {
 /// The window the host has to apply a card request, in milliseconds.
 fn host_apply_millis() -> i64 {
     i64::try_from(HOST_APPLY_TIMEOUT.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// The line of the conversation that names one press of the person on a card of
+/// an orchestrator. The label and the heading are text of the program, so each is
+/// cut to [`PRESS_LINE_CHARS`] characters.
+fn press_line(label: &str, heading: &str) -> String {
+    format!("You pressed {} on {}", cut_line(label), cut_line(heading))
+}
+
+/// One line of at most [`PRESS_LINE_CHARS`] characters, without a control
+/// character.
+fn cut_line(text: &str) -> String {
+    text.chars()
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .take(PRESS_LINE_CHARS)
+        .collect()
 }
 
 #[cfg(test)]

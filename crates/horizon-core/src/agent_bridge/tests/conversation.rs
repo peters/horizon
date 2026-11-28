@@ -474,3 +474,88 @@ fn a_restored_history_keeps_the_cap_of_the_conversation() {
         "one notice names the entries that the cap dropped"
     );
 }
+
+#[test]
+fn a_turn_of_horizon_makes_the_conversation_busy_and_names_it_in_a_notice() {
+    let mut conversation = Conversation::new();
+    conversation.person_said("alpha");
+    conversation.apply(BridgeEvent::TurnEnded {
+        failed: false,
+        duration_ms: None,
+        cost_usd: None,
+    });
+    assert!(!conversation.snapshot().busy);
+
+    conversation.system_said("A press on a card woke the orchestrator");
+
+    let snapshot = conversation.snapshot();
+    assert!(snapshot.busy, "the turn that Horizon started runs");
+    assert_eq!(
+        snapshot
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Person { .. }))
+            .count(),
+        1,
+        "the wake line is no message of the person"
+    );
+    assert_eq!(
+        snapshot.entries.last(),
+        Some(&Entry::Notice {
+            text: "A press on a card woke the orchestrator".to_owned()
+        })
+    );
+}
+
+#[test]
+fn one_card_keeps_one_reference_row_and_its_heading_follows_an_update() {
+    let mut conversation = Conversation::new();
+    conversation.card_drawn("card-1", "Plan");
+    conversation.card_drawn("card-2", "Notes");
+    assert_eq!(
+        entries(&conversation),
+        vec![
+            Entry::Card {
+                panel: "card-1".to_owned(),
+                title: "Plan".to_owned()
+            },
+            Entry::Card {
+                panel: "card-2".to_owned(),
+                title: "Notes".to_owned()
+            },
+        ]
+    );
+
+    conversation.card_drawn("card-1", "Plan, second revision");
+
+    assert_eq!(
+        entries(&conversation),
+        vec![
+            Entry::Card {
+                panel: "card-1".to_owned(),
+                title: "Plan, second revision".to_owned()
+            },
+            Entry::Card {
+                panel: "card-2".to_owned(),
+                title: "Notes".to_owned()
+            },
+        ],
+        "a second create of one card moves its row and adds none"
+    );
+}
+
+#[test]
+fn the_heading_of_a_reference_row_is_cut_and_keeps_no_control_character() {
+    let mut conversation = Conversation::new();
+    let long: String = "x".repeat(crate::agent_bridge::conversation::MAX_CARD_TITLE_CHARS + 20);
+    conversation.card_drawn("card-1", &format!("a\tb\nc{long}"));
+    let Some(Entry::Card { title, .. }) = conversation.snapshot().entries.last().cloned() else {
+        panic!("the row of the card: {:?}", entries(&conversation));
+    };
+    assert!(!title.contains('\t') && !title.contains('\n'), "{title:?}");
+    assert_eq!(
+        title.chars().count(),
+        crate::agent_bridge::conversation::MAX_CARD_TITLE_CHARS,
+        "the heading is cut to the bound of the row"
+    );
+}

@@ -7,5 +7,6 @@ mod drafts;
 mod frame;
 mod geometry;
 mod lifecycle;
+mod rows;
 mod storage;
 mod switch;
