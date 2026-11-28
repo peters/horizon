@@ -74,13 +74,15 @@ Prove these results:
 
    Result: The private home holds three conversations in two folders.
 
-2. Start Horizon with that home and the default board:
+2. Start Horizon with that home, the default board and the dock off:
 
    ```bash
-   HOME=$PRIVATE_HOME ./target/debug/horizon
+   HORIZON_ORCHESTRATOR_DOCK=0 HOME=$PRIVATE_HOME ./target/debug/horizon
    ```
 
-   Result: The first start page shows, with four tiles.
+   Result: The first start page of a window without the dock shows, with four
+   tiles. The section **Pick up where you left off** belongs to that page: the page
+   of the front desk, which a new window shows, does not draw it.
 
 ## 6. Tasks
 

@@ -6,8 +6,8 @@
 
 use egui::{Context, Key};
 
+use super::tiles_app;
 use super::{frame_shapes_at, frame_with, key_press, text_box, tile_rects};
-use crate::app::test_support::test_app;
 use crate::app::welcome::{HEADING, SHORTCUTS_LEAD, WelcomeTile};
 
 /// The two smallest windows of the live look, which hold no whole page.
@@ -40,7 +40,7 @@ fn scroll_to_tile(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 2
 #[test]
 fn a_small_window_reaches_the_four_choices_and_the_last_row() {
     for size in SMALL {
-        let (_temp, mut app) = test_app();
+        let (_temp, mut app) = tiles_app();
         let ctx = Context::default();
         let shapes = frame_shapes_at(&ctx, &mut app, size);
         let canvas = app.canvas_rect(&ctx);
@@ -75,7 +75,7 @@ fn a_small_window_reaches_the_four_choices_and_the_last_row() {
 #[test]
 fn the_wheel_moves_a_page_that_is_taller_than_the_canvas() {
     let size = [800.0, 600.0];
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes_at(&ctx, &mut app, size);
     let top = tile_rects(&shapes)[0].min.y;
@@ -105,7 +105,7 @@ fn the_wheel_moves_a_page_that_is_taller_than_the_canvas() {
 #[test]
 fn tab_brings_a_tile_below_the_canvas_into_view() {
     let size = [800.0, 600.0];
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let _ = frame_shapes_at(&ctx, &mut app, size);
     for _ in 0..WelcomeTile::ALL.len() {
@@ -123,7 +123,7 @@ fn tab_brings_a_tile_below_the_canvas_into_view() {
 #[test]
 fn a_window_that_holds_the_page_keeps_it_where_it_is() {
     let size = [1600.0, 1000.0];
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes_at(&ctx, &mut app, size);
     let tiles = tile_rects(&shapes);

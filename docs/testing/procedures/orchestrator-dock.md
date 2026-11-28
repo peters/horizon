@@ -13,8 +13,9 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests the orchestrator dock at the right edge of the root window,
-and the conversation that it runs. It proves that the dock draws only after its
-setting turns it on, that the canvas ends at its left edge, that the minimap
+and the conversation that it runs. It proves that the dock draws at the first
+start, that its setting and its environment switch turn it off, that the canvas
+ends at its left edge, that the minimap
 stays on the canvas, that each workspace keeps its own draft and its own
 conversation, and that a message of the person reaches an agent program with no
 terminal and comes back as an answer. It also tests the two parts of the sidebar
@@ -55,7 +56,8 @@ gradient bar of an agent text, and the chevron of the three chips.
    Result: The candidate does not change during the run.
 
 2. Start the fixture with the switch of the dock on and the stand-in as the
-   program of the orchestrator.
+   program of the orchestrator. The setting is on at first, so the switch repeats
+   the default of a new home, and OD-1 turns it off.
 
    ```sh
    HORIZON_ORCHESTRATOR_DOCK=1 \
@@ -85,12 +87,15 @@ gradient bar of an agent text, and the chevron of the three chips.
 
 ## 6. Tasks
 
-### 6.1 OD-1 — The dock is off without the switch
+### 6.1 OD-1 — The dock is off with the switch `0`
 
-1. Stop the fixture. Start it again with the same arguments, but without
-   `HORIZON_ORCHESTRATOR_DOCK=1`, and use `--state <evidence>/dock-off`.
+1. Stop the fixture. Start it again with the same arguments, but with
+   `HORIZON_ORCHESTRATOR_DOCK=0` in the place of `HORIZON_ORCHESTRATOR_DOCK=1`,
+   and use `--state <evidence>/dock-off`.
 
-   Result: The Horizon window shows no column at its right edge.
+   Result: The Horizon window shows no column at its right edge. The switch `0`
+   wins over the setting, which is on at first, and the first start page shows the
+   four starts and no page of the front desk.
 
 2. Look at the canvas and at the minimap.
 

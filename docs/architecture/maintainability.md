@@ -597,6 +597,14 @@ when it names one of those kinds.
   sentence, `app::panels::mic` draws the icon of the title bar, and
   `app::settings::speech` is the **Speech** tab.
 
+- `app::welcome` is the first start page. `welcome.rs` picks the form of the page
+  and draws the frame that both forms share, `welcome/front_desk.rs` is the page
+  that sends the person to the front desk, with its steps, its link and the four
+  starts under it, `welcome/tiles.rs` holds the four starts, `welcome/cache.rs`
+  keeps the layout of both pages and the state of the link, `welcome/layout.rs`
+  holds the width rule, `welcome/pickup.rs` is the section **Pick up where you
+  left off** and `welcome/art.rs` draws the small drawings of the four starts.
+
 - `app::orchestrator_dock` is the conversation dock at the right edge of the root
   window, and the one caller of `horizon_core::agent_bridge`. `layout.rs` holds
   the width rule, the rectangle of a frame and `leftmost_panel`, which decides
@@ -627,10 +635,13 @@ when it names one of those kinds.
   worker took one, and `programs.rs` records the identity of each program whose
   stop is owed, so the close of Horizon can end it. `text.rs` lays the text of
   the dock out. The switch of this part is the setting
-  `features.orchestrator_dock`, which the window reads on every frame, and the
-  environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns the dock on as well
-  for the fixture of the smoke test. The palette turns the dock of one run over
-  and writes no setting. The program of a conversation is
+  `features.orchestrator_dock`, which is on at first and which the window reads on
+  every frame. The environment variable of the fixture of the smoke test wins over
+  it: `HORIZON_ORCHESTRATOR_DOCK=1` turns the dock on for the run and
+  `HORIZON_ORCHESTRATOR_DOCK=0` turns it off. The first start page follows the
+  switch: a window that shows the dock draws the page of the front desk, and a
+  window without it draws the page of four starts (`app::welcome`). The palette
+  turns the dock of one run over and writes no setting. The program of a conversation is
   `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and the conversation of a saved
   session lives on disk (`crates/horizon-core/src/agent_bridge/store.rs`).
   `say_to_orchestrator` is the one send of a message, which the composer and the

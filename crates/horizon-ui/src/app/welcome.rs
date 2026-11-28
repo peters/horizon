@@ -1,21 +1,24 @@
 //! The first start page: what a person can do with an empty window.
 //!
-//! The page replaces the one card that greeted a first start. It names four
-//! starts in plain words, each with a small drawing, one sentence and the press
-//! that begins it, and the row of shortcuts underneath names the keys of this
-//! computer. It shows while the board has no workspace and no panel, exactly
-//! where the old card showed, and the same rule covers a window that a person
-//! detached.
+//! The page has two forms, and the dock decides which one a window shows. A
+//! window that shows the orchestrator dock draws the page that sends the person
+//! to the front desk ([`front_desk`]): one heading, one sentence, three steps and
+//! a link that turns the four starts over. A window without the dock keeps the
+//! page of four tiles, which names four starts in plain words, each with a small
+//! drawing, one sentence and the press that begins it. Both pages draw the row of
+//! shortcuts underneath, and both show while the board has no workspace and no
+//! panel, exactly where the old card showed; the same rule covers a window that a
+//! person detached.
 //!
-//! Every tile is a real control: it takes the keyboard with Tab, it starts on
-//! Enter or Space, a reader hears its three lines, and it shows the hover and
-//! the focus ring of its tokens. Nothing repaints while the pointer and the
-//! keyboard are still: the drawings, the wrapped sentences and every position
-//! are built once per width and theme, and a frame that changes nothing only
-//! paints them again.
+//! A tile is a real control: it takes the keyboard with Tab, it starts on Enter or
+//! Space, a reader hears its three lines, and it shows the hover and the focus
+//! ring of its tokens. Nothing repaints while the pointer and the keyboard are
+//! still: the drawings, the wrapped sentences and every position are built once
+//! per width and theme, and a frame that changes nothing only paints them again.
 
 mod art;
 mod cache;
+mod front_desk;
 mod layout;
 mod pickup;
 mod tiles;
@@ -109,8 +112,32 @@ pub(in crate::app) const SHORTCUTS_LEAD: &str = "You know Horizon already?";
 
 impl HorizonApp {
     /// Draws the first start page, while the board holds no workspace and no
-    /// panel.
+    /// panel. The dock decides the form of the page: a window that shows the dock
+    /// sends the person to the front desk, and a window without it names the four
+    /// starts.
     pub(super) fn render_welcome_page(&mut self, ctx: &Context) {
+        if !self.welcome_page_visible() {
+            return;
+        }
+        if self.front_desk_page_shows() {
+            self.render_front_desk_page(ctx);
+        } else {
+            self.render_tiles_page(ctx);
+        }
+    }
+
+    /// Whether the page sends the person to the front desk: the dock is on and it
+    /// took its column in this frame.
+    ///
+    /// A window that leaves less than 320 points of canvas beside the dock draws
+    /// no dock, and then the page of four tiles stands unchanged, as it does while
+    /// the setting is off or the environment switch is `0`.
+    pub(in crate::app) fn front_desk_page_shows(&self) -> bool {
+        self.orchestrator_dock.visible() && self.orchestrator_dock.frame_rect().is_some()
+    }
+
+    /// Draws the page of four tiles, which a window without the dock shows.
+    fn render_tiles_page(&mut self, ctx: &Context) {
         if !self.welcome_page_visible() {
             return;
         }
@@ -135,54 +162,19 @@ impl HorizonApp {
         // air on both sides of the block.
         let left = canvas.min.x + (canvas.width() - width) * 0.5;
         let inner = Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, canvas.max.y));
-        let mut pressed = None;
-        let mut pickup_press = None;
+        let painted = page_frame(
+            ctx,
+            inner,
+            metrics.block_height + PAGE_PAD_BOTTOM,
+            "welcome_page",
+            |ui, content| paint_page(ui, content, metrics, &shortcut_lines, &pickup, &self.session_pickup),
+        );
+        let painted = painted.unwrap_or_default();
 
-        egui::Area::new(Id::unique("welcome_page"))
-            .fixed_pos(inner.min)
-            .order(Order::Foreground)
-            // The page stands where the canvas puts it. egui keeps the area of the
-            // frame before inside the screen, and the size of that area belongs to
-            // the window of the frame before, so a window that becomes smaller
-            // would move the whole page to the corner of the screen for one frame.
-            .constrain(false)
-            .show(ctx, |ui| {
-                // The page owns the rect that the canvas gives it, so a tall
-                // block scrolls inside the canvas and a block that fits is drawn
-                // whole, whatever room the layer around the page has.
-                ui.set_max_size(inner.size());
-                // A page that is taller than the canvas moves one canvas for Page
-                // Up and Page Down, in the sign of the scroll of the page.
-                if metrics.block_height + PAGE_PAD_BOTTOM > inner.height() {
-                    let step = page_step(ui, inner.height());
-                    if step != 0.0 {
-                        ui.scroll_with_delta(Vec2::new(0.0, step));
-                    }
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("welcome_page_scroll")
-                    .max_height(inner.height())
-                    // A block that fits draws no scrollbar, and the bar that a
-                    // taller block needs takes no room from the tiles.
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_width(inner.width());
-                        ui.spacing_mut().item_spacing = Vec2::ZERO;
-                        let (content, _) = ui.allocate_exact_size(
-                            Vec2::new(inner.width(), metrics.block_height + PAGE_PAD_BOTTOM),
-                            Sense::hover(),
-                        );
-                        let painted = paint_page(ui, content, metrics, &shortcut_lines, &pickup, &self.session_pickup);
-                        pressed = painted.tile;
-                        pickup_press = painted.pickup;
-                    });
-            });
-
-        if let Some(tile) = pressed {
+        if let Some(tile) = painted.tile {
             self.start_welcome_tile(ctx, tile);
         }
-        if let Some(press) = pickup_press {
+        if let Some(press) = painted.pickup {
             self.apply_pickup_press(ctx, &press);
         }
     }
@@ -278,6 +270,52 @@ fn page_top(canvas_height: f32, block_height: f32) -> f32 {
     } else {
         top
     }
+}
+
+/// Draws the block of a first start page in `inner` for `content_height` points
+/// of content, and gives the rectangle of the block to `paint`.
+///
+/// A page that is taller than the canvas scrolls inside it, and Page Up and Page
+/// Down move one canvas in the sign of the scroll of the page. A page that the
+/// canvas holds whole draws no scrollbar, and a block that fits is drawn whole,
+/// whatever room the layer around the page has.
+fn page_frame<R>(
+    ctx: &Context,
+    inner: Rect,
+    content_height: f32,
+    id: &str,
+    paint: impl FnOnce(&mut Ui, Rect) -> R,
+) -> Option<R> {
+    let mut answer = None;
+    egui::Area::new(Id::unique(id))
+        .fixed_pos(inner.min)
+        .order(Order::Foreground)
+        // The page stands where the canvas puts it. egui keeps the area of the frame
+        // before inside the screen, and the size of that area belongs to the window
+        // of the frame before, so a window that becomes smaller would move the whole
+        // page to the corner of the screen for one frame.
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_max_size(inner.size());
+            if content_height > inner.height() {
+                let step = page_step(ui, inner.height());
+                if step != 0.0 {
+                    ui.scroll_with_delta(Vec2::new(0.0, step));
+                }
+            }
+            egui::ScrollArea::vertical()
+                .id_salt((id, "scroll"))
+                .max_height(inner.height())
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_width(inner.width());
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    let (content, _) = ui.allocate_exact_size(Vec2::new(inner.width(), content_height), Sense::hover());
+                    answer = Some(paint(ui, content));
+                });
+        });
+    answer
 }
 
 /// How far Page Up and Page Down move a page of a canvas `page` high, in the sign

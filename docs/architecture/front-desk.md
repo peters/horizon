@@ -33,6 +33,24 @@ beside `workspaces`, because the board holds no workspace for it. A state file o
 an older build holds no such field, and it loads: the front desk then starts a new
 session.
 
+## The default of the dock
+
+The dock shows at the first start of Horizon. The setting
+`features.orchestrator_dock` is on at first (`crates/horizon-core/src/config.rs`),
+so a new window opens the front desk at its right edge.
+
+- A store that holds `false` keeps the dock off. A store of an older build holds
+  no row for the setting and reads the default, which is on.
+- The environment switch `HORIZON_ORCHESTRATOR_DOCK=1` shows the dock for the run
+  and `HORIZON_ORCHESTRATOR_DOCK=0` hides it for the run, whatever the setting
+  says. No other value of the variable is a switch.
+- A window that leaves less than 320 points of canvas beside the dock draws no
+  dock, so a narrow window keeps its canvas.
+
+While the dock is visible, the first start page sends the person to the front desk
+([the design](../design/guidelines.md#the-page-of-the-front-desk)). While it is
+not visible, the first start page keeps the four starts.
+
 ## Which conversation the dock shows
 
 The dock shows one conversation at a time, and one flag of this run chooses it.

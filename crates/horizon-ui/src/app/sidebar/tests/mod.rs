@@ -231,7 +231,7 @@ fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
     use crate::test_egui::DiscardTextures;
     use egui::epaint::Shape;
 
-    let (_temp, mut app) = crate::app::test_support::test_app();
+    let (_temp, mut app) = crate::app::test_support::test_app_without_dock();
     app.template_config.features.sidebar_accordion = true;
     let workspace = app.board.create_workspace("Quiet zone");
     let first = app
@@ -287,7 +287,7 @@ fn keyboard_focus_on_a_panel_row_shows_its_close_button() {
 
 #[test]
 fn the_snapshot_labels_only_the_panel_rows_that_show() {
-    let (_temp, mut app) = crate::app::test_support::test_app();
+    let (_temp, mut app) = crate::app::test_support::test_app_without_dock();
     let shown = app.board.create_workspace("shown");
     let hidden = app.board.create_workspace("hidden");
     app.board

@@ -157,7 +157,11 @@ The flag changes no file outside the fixture. A filesystem namespace masks the
 developer's home with private state
 for this child; it does not change the real HOME value or existing sessions.
 The harness removes `HORIZON_HOME` from the child environment, so the fixture
-keeps its state in `.horizon` of the masked home.
+keeps its state in `.horizon` of the masked home. The rest of the environment of
+the shell that starts the fixture stays in the environment of the candidate, so
+`HORIZON_ORCHESTRATOR_DOCK=1` shows its orchestrator dock and
+`HORIZON_ORCHESTRATOR_DOCK=0` hides it, whatever the settings of the private home
+say.
 The same namespace gives namespaced processes a private writable `/tmp` and a
 session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
 runtime, so native applications and `dbus-run-session` can bind sockets. A panel

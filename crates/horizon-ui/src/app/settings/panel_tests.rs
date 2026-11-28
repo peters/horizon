@@ -467,6 +467,9 @@ pub(super) fn settings_frame(
 }
 
 fn run_settings_frame(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2]) -> egui::FullOutput {
+    // The panel stands at the right edge of the window, and the tests measure it
+    // there, with no dock beside it.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     crate::app::test_support::run_app_frame_with_input(ctx, app, crate::app::test_support::raw_input(viewport, None))
 }
 

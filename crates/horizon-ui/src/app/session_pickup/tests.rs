@@ -101,6 +101,9 @@ fn app_with_pickup(folders: Vec<PickupFolder>) -> (tempfile::TempDir, Context, c
         runtime_state: Box::new(horizon_core::RuntimeState::default()),
     });
     app.session_pickup = SessionPickup::with_list(PickupList::new(folders));
+    // The section stands on the page of four tiles, which a window without the
+    // dock shows.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     (temp, ctx, app)
 }
 

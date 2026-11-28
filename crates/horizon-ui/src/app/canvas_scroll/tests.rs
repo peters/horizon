@@ -37,6 +37,8 @@ fn app_fixture() -> (TempDir, Context, HorizonApp) {
     app.theme_applied = true;
     app.initial_pan_done = true;
     app.root_viewport_stabilizer = None;
+    // The wheel of the canvas is measured on a window without a dock beside it.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     for time in [0.0, 0.016, 0.032] {
         let mut input = raw_input([1400.0, 900.0], None);
         input.time = Some(time);

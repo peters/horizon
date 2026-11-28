@@ -381,6 +381,8 @@ mod tests {
         app.board.focus_workspace(workspace);
         let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
 
+        // The test turns the dock on itself, so it starts from a window without it.
+        app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
         app.orchestrator_dock.toggle();
         assert!(app.dock_shows(&local_id), "the dock draws the active workspace");
         assert!(

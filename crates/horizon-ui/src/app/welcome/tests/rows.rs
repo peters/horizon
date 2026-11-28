@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use egui::Context;
 use horizon_core::{PanelKind, PickupFolder, PickupList, PickupRow, PickupState};
 
+use super::tiles_app;
 use super::{AppWindow, frame_shapes_at, painted_text_starting_with};
 use crate::app::session_pickup::SessionPickup;
-use crate::app::test_support::test_app;
 
 /// The height of one row of the section.
 const ROW_HEIGHT: f32 = 44.0;
@@ -29,7 +29,7 @@ const LONG_PATH: &str = "/a/long/path/that/keeps/going/and/going/more/and/more/u
 
 /// The detail of the row of a page that holds one session.
 fn page_detail(size: [f32; 2], state: PickupState) -> (String, egui::Rect, egui::Rect) {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     app.session_pickup = SessionPickup::with_list(PickupList::new(vec![PickupFolder {
         path: PathBuf::from(LONG_PATH),
         name: "shop".to_string(),
@@ -148,7 +148,7 @@ fn the_state_of_a_row_stays_at_the_end_of_its_detail() {
 #[test]
 fn the_row_of_a_wide_canvas_is_as_wide_as_the_block_of_the_page() {
     let size = [5000.0, 1348.0];
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     app.session_pickup = SessionPickup::with_list(PickupList::new(vec![PickupFolder {
         path: PathBuf::from(LONG_PATH),
         name: "shop".to_string(),

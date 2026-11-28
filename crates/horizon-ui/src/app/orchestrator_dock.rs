@@ -73,9 +73,10 @@ pub(super) const TURN_FAILED_LINE: &str = "the turn failed";
 #[cfg(test)]
 pub(in crate::app) use self::session::WAKE_NOTICE;
 
-/// The environment switch of this part. `1` turns the dock on, for the fixture of
-/// the smoke test: the setting `features.orchestrator_dock` turns it on for a
-/// person.
+/// The environment switch of this part. `1` turns the dock on for the run and
+/// `0` turns it off for the run, whatever the setting `features.orchestrator_dock`
+/// says: the fixture of the smoke test needs both values. No other value is a
+/// switch, and then the setting decides.
 pub(in crate::app) const DOCK_SWITCH: &str = "HORIZON_ORCHESTRATOR_DOCK";
 /// The environment variable that replaces the program path of the orchestrator.
 /// The arguments of the program stay the same. It exists for the stand-in of the
@@ -94,8 +95,10 @@ pub(in crate::app) struct OrchestratorDock {
     /// the settings of the person, and a dock whose start named its switch, as a
     /// test does, keeps it.
     follows_setting: bool,
-    /// The environment switch of the fixture, which holds for the whole run.
-    environment: bool,
+    /// The environment switch of the fixture, which holds for the whole run:
+    /// `Some(true)` for `1`, `Some(false)` for `0`, and `None` when the run names
+    /// no switch, and then the setting decides.
+    environment: Option<bool>,
     /// The switch of this run after the palette turned it: `None` until that
     /// press, and then the choice of the person for this run. The setting stays
     /// as Settings holds it.
@@ -154,12 +157,12 @@ pub(in crate::app) struct LastFrame {
 }
 
 impl OrchestratorDock {
-    /// The dock of a start whose settings hold `setting`: the dock is on when the
-    /// setting is on, or when the fixture names the environment switch.
+    /// The dock of a start whose settings hold `setting`: the dock follows that
+    /// setting, and the environment switch of the fixture wins over it.
     pub(in crate::app) fn from_settings(setting: bool) -> Self {
         let mut dock = Self::from_values(
             setting,
-            dock_switch(std::env::var(DOCK_SWITCH).ok().as_deref()),
+            dock_switch_value(std::env::var(DOCK_SWITCH).ok().as_deref()),
             program_from_environment(std::env::var(PROGRAM_SWITCH).ok().as_deref()),
         );
         dock.follows_setting = true;
@@ -168,7 +171,7 @@ impl OrchestratorDock {
 
     /// The dock of a start that names its values: the setting and the environment
     /// switch, which a test gives without the environment of the test process.
-    fn from_values(setting: bool, environment: bool, program: PathBuf) -> Self {
+    fn from_values(setting: bool, environment: Option<bool>, program: PathBuf) -> Self {
         Self {
             setting,
             follows_setting: false,
@@ -192,7 +195,7 @@ impl OrchestratorDock {
     }
 
     pub(in crate::app) fn new(visible: bool) -> Self {
-        Self::from_values(visible, false, program_from_environment(None))
+        Self::from_values(visible, None, program_from_environment(None))
     }
 
     /// The dock of a test whose program is `program`: the seam of
@@ -200,7 +203,7 @@ impl OrchestratorDock {
     /// process.
     #[cfg(test)]
     pub(in crate::app) fn with_program(visible: bool, program: PathBuf) -> Self {
-        Self::from_values(visible, false, program)
+        Self::from_values(visible, None, program)
     }
 
     /// Replaces the program of every conversation of this dock, which a test does
@@ -213,9 +216,12 @@ impl OrchestratorDock {
 
     /// Whether the dock draws in this frame. A run that the palette did not turn
     /// keeps the setting of Settings and the environment switch of the fixture,
-    /// so a person who changes the setting sees the dock without a restart.
+    /// so a person who changes the setting sees the dock without a restart. The
+    /// switch of the run wins over both, and then the switch of the fixture wins
+    /// over the setting: `1` shows the dock and `0` hides it.
     pub(in crate::app) fn visible(&self) -> bool {
-        self.run_switch.unwrap_or(self.setting || self.environment)
+        self.run_switch
+            .unwrap_or_else(|| self.environment.unwrap_or(self.setting))
     }
 
     pub(in crate::app) fn toggle(&mut self) {
@@ -235,7 +241,7 @@ impl OrchestratorDock {
     /// dock of a run does, without the environment of the test process.
     #[cfg(test)]
     pub(in crate::app) fn following(setting: bool) -> Self {
-        let mut dock = Self::from_values(setting, false, program_from_environment(None));
+        let mut dock = Self::from_values(setting, None, program_from_environment(None));
         dock.follows_setting = true;
         dock
     }
@@ -670,6 +676,26 @@ fn dock_switch(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// Whether the switch of the dock is off: the variable holds `0` and nothing else.
+/// The fixture needs a window without the dock in a store that holds the default,
+/// which is on.
+fn dock_switch_off(value: Option<&str>) -> bool {
+    value == Some("0")
+}
+
+/// The value of the environment switch of the dock of a run: `Some(true)` for `1`,
+/// `Some(false)` for `0`, and `None` when the run names no switch, and then the
+/// setting `features.orchestrator_dock` decides.
+fn dock_switch_value(value: Option<&str>) -> Option<bool> {
+    if dock_switch(value) {
+        Some(true)
+    } else if dock_switch_off(value) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 impl HorizonApp {
     /// Sends `text` to the conversation that the dock shows, as the message of
     /// the person. It is the path of the button `+ Rent a machine`, which writes
@@ -700,26 +726,53 @@ fn program_from_environment(value: Option<&str>) -> PathBuf {
 /// variable of the fixture, and the switch that the palette turned for this run.
 #[cfg(test)]
 mod switch_tests {
-    use super::OrchestratorDock;
+    use super::{DOCK_SWITCH, OrchestratorDock, dock_switch_value};
 
-    /// A dock whose program is the default one, so no test starts a program.
-    fn dock(setting: bool, environment: bool) -> OrchestratorDock {
-        OrchestratorDock::from_values(setting, environment, std::path::PathBuf::from("claude"))
+    /// A dock whose program is the default one, so no test starts a program, and
+    /// whose environment names `switch`.
+    fn dock(setting: bool, switch: Option<bool>) -> OrchestratorDock {
+        OrchestratorDock::from_values(setting, switch, std::path::PathBuf::from("claude"))
     }
 
     #[test]
     fn the_setting_turns_the_dock_on() {
-        assert!(dock(true, false).visible(), "the setting is on");
+        assert!(dock(true, None).visible(), "the setting is on");
         assert!(
-            !dock(false, false).visible(),
-            "the setting is off and no variable names it"
+            !dock(false, None).visible(),
+            "the setting is off, and no variable names it"
         );
     }
 
     #[test]
     fn the_environment_variable_turns_the_dock_on_without_the_setting() {
-        assert!(dock(false, true).visible(), "the fixture names the variable");
-        assert!(dock(true, true).visible(), "both turn it on");
+        assert!(dock(false, Some(true)).visible(), "the fixture names the variable");
+        assert!(dock(true, Some(true)).visible(), "both turn it on");
+    }
+
+    /// The fixture needs a window without the dock in a store that holds the
+    /// default, which is on, so the value `0` hides the dock whatever the setting
+    /// says.
+    #[test]
+    fn the_environment_variable_turns_the_dock_off_over_the_setting() {
+        assert!(
+            !dock(true, Some(false)).visible(),
+            "the value 0 wins over a setting that is on"
+        );
+        assert!(!dock(false, Some(false)).visible(), "and over a setting that is off");
+    }
+
+    #[test]
+    fn the_variable_names_a_switch_in_its_two_values_alone() {
+        assert_eq!(dock_switch_value(Some("1")), Some(true), "{DOCK_SWITCH}=1 turns it on");
+        assert_eq!(
+            dock_switch_value(Some("0")),
+            Some(false),
+            "{DOCK_SWITCH}=0 turns it off"
+        );
+        assert_eq!(dock_switch_value(None), None, "no variable is no switch");
+        for other in ["", "true", "false", "2", " 1", "off"] {
+            assert_eq!(dock_switch_value(Some(other)), None, "{other:?} is no switch");
+        }
     }
 
     /// The dock of a run, whose switch is the setting of Settings.
@@ -743,7 +796,7 @@ mod switch_tests {
     /// that the palette turned keeps that choice while the setting stays as it is.
     #[test]
     fn a_dock_whose_start_named_its_switch_keeps_it() {
-        let mut dock = dock(true, false);
+        let mut dock = dock(true, None);
         dock.follow_setting(false);
 
         assert!(
@@ -763,7 +816,7 @@ mod switch_tests {
         off.toggle();
         assert!(!off.visible());
 
-        let mut named = dock(false, true);
+        let mut named = dock(false, Some(true));
         named.toggle();
         assert!(
             !named.visible(),

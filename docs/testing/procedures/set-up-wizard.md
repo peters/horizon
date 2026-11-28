@@ -148,33 +148,103 @@ Horizon before they write anything.
 
 ### 6.1 F01 — The first start page
 
+The first start of an empty state shows the orchestrator dock at the right edge of
+the window, and the page sends the person to the front desk. Steps 1 to 7 read
+that page and take their pictures. Steps 8 to 20 read the four starts of the page
+of a window without the dock: start them with the link `More ways to start` open,
+or with `HORIZON_ORCHESTRATOR_DOCK=0` in the environment of the fixture. Steps 21
+and later read the section **Pick up where you left off**, which the page of the
+front desk does not draw: run them with `HORIZON_ORCHESTRATOR_DOCK=0`.
+
 1. Examine the live view of the first start.
 
-   Result: The page says `What do you want to do?`, and the line under it is in
-   the middle of the canvas: the block of the heading, the four tiles and the
-   line of shortcuts stands in the middle of the height of the canvas, and the
-   lower half of the canvas is not empty. Under the heading is the line that
-   starts `Horizon is one canvas for your terminals`, and each of its two lines
-   is centred under the heading. Four tiles are in one row:
-   `Run agents side by side`, `Work on a bigger machine`, `Use Horizon on all
-   your computers` and `A browser that stays signed in`. Each tile holds a small
-   drawing, its title, one sentence and one line that starts with
-   `Start with one agent`, `Rent a machine`, `Set up the server` or
-   `Set up a browser`. Below the tiles is the line `You know Horizon already?`
-   with the keys of this computer. The whole line shows: no letter of it is cut,
-   and no scroll bar stands at the right edge of the last tile.
+   Result: The dock stands at the right edge of the window and it shows the front
+   desk. The page says `Start at the front desk`, and the line under it is
+   `Write what you want done in the conversation at the right. Each task becomes a
+   work item with its own orchestrator, and its work shows on this canvas.` The
+   block stands in the canvas rectangle that the dock leaves, in the middle of the
+   width of that rectangle, and its middle stands at 46 percent of the height of
+   the canvas. Under the line stand three steps in one row. Each step holds a chip
+   of 22 by 22 points with the number `1`, `2` or `3` in the accent colour, a
+   title 10 points under the chip and one sentence 4 points under the title. A
+   line of 1 point joins the chip of a step to the chip of the next step, at the
+   height of the middle of the chips, from 10 points right of one chip to 10
+   points left of the next. No tile stands on the page. The link
+   `More ways to start` stands centred under the steps, and the row
+   `You know Horizon already?` with the keys of this computer stands under the
+   link.
 
-2. Move the pointer over a tile.
+2. Point at the link and press it. Then press it again.
+
+   Result: The pointer becomes a hand over the link. The first press shows the four
+   starts `Run agents side by side`, `Work on a bigger machine`,
+   `Use Horizon on all your computers` and `A browser that stays signed in` 24
+   points under the link, in the layout of the width at hand, and the link reads
+   `Fewer ways to start`. The second press hides the four starts, and the link
+   reads `More ways to start` again.
+
+3. Read the keyboard of the window, then make the window 1100 x 800.
+
+   Result: The page takes no focus: the field of the front desk holds the keyboard,
+   and the page moves no focus into that field. At 1100 x 800 the dock keeps 360
+   points at the right edge, the canvas keeps 530 points, and the block of the page
+   is 410 points wide. A row of three steps needs 3 x 200 + 2 x 40 + 2 x 24 = 728
+   points of block, so the three steps stand in one column, aligned at the left
+   edge of the block, 20 points apart, and no line joins the chips.
+
+4. Take the picture `first-desk`. Stop the fixture and start it again with an
+   empty state folder and no saved session:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --screen 1600x1000 --plain-start --state <evidence>/first-desk
+   ```
+
+   Result: The picture shows the window of the first start with the dock at its
+   right edge and the page of the front desk: the heading, the line, the three
+   steps of one row with their joining lines, the link `More ways to start` and the
+   row of shortcuts. The page shows no tile.
+
+5. Take the picture `first-more`. Start the fixture as step 4 does, then press
+   `More ways to start` once.
+
+   Result: The four starts stand under the link, and the link reads
+   `Fewer ways to start`.
+
+6. Take the picture `first-plain`. Start the fixture with an empty state folder,
+   `--plain-start` and the switch of the dock at `0`:
+
+   ```sh
+   HORIZON_ORCHESTRATOR_DOCK=0 \
+     python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --screen 1600x1000 --plain-start --state <evidence>/first-plain
+   ```
+
+   Result: The window shows no dock, and the page of four starts stands in the
+   whole canvas: the heading `What do you want to do?`, the four tiles and the row
+   of shortcuts. The switch `0` wins over the setting, which is on at first.
+
+7. Take the picture `first-desk-narrow`. Start the fixture as step 4 does with
+   `--screen 1100x800`.
+
+   Result: The dock keeps 360 points, the canvas keeps 530 points, and the three
+   steps stand in one column at the left edge of the block, with no joining line.
+   The page of four starts does not stand in this window, because the dock draws:
+   a window too narrow for the dock leaves less than 320 points of canvas beside
+   it, and only then does the page of four starts show unchanged.
+
+8. With the four starts under the link, move the pointer over a tile.
 
    Result: The outline of that tile changes to the accent colour and the pointer
    becomes a hand.
 
-3. Push Tab four times, then Shift+Tab once.
+9. Push Tab five times, then Shift+Tab once.
 
-   Result: Each tile shows a ring of the focus colour while it holds the
-   keyboard. The ring moves with each press and back with Shift+Tab.
+   Result: The link takes the first press, and it shows a ring of the focus
+   colour. Each further press moves the ring to the next tile. The ring moves
+   back with Shift+Tab.
 
-4. Push Space while the first tile holds the keyboard.
+10. Push Space while the first tile holds the keyboard.
 
    Result: Horizon makes a workspace and opens a panel of the first agent program
    that this computer has, in the order of Settings, Presets. On a computer with
@@ -195,25 +265,25 @@ Horizon before they write anything.
    `No agent program was found on this computer (<programs>). This is a
    terminal.` The line names the programs that Horizon looked for.
 
-5. Close that workspace's panels and the workspace. Then push Enter while the
+11. Close that workspace's panels and the workspace. Then push Enter while the
    second tile holds the keyboard.
 
    Result: Set up starts, and a notice card appears, in this sandbox without an
    agent program. Task 6.4 gives the words of the notice.
 
-6. Push Ctrl+Shift+H and then Escape. Push Ctrl+Shift+K and then Escape.
+12. Push Ctrl+Shift+H and then Escape. Push Ctrl+Shift+K and then Escape.
 
    Result: The keys of the row under the tiles are the real bindings of this
    computer: Remote Hosts opens and closes, and the command palette opens and
    closes.
 
-7. Make the window narrow until the tiles are in two rows, then in one column.
+13. Make the window narrow until the tiles are in two rows, then in one column.
 
    Result: At a canvas width under about 900 points the four tiles stand in two
    rows. Under about 520 points they stand in one column. No tile cuts its
    title or its sentence.
 
-8. Make the window wide enough for four tiles, and then narrow it step by step
+14. Make the window wide enough for four tiles, and then narrow it step by step
    to about 1 200 points of window width, where a title takes two rows.
 
    Result: The four tiles of a row have one height, which follows the tallest
@@ -222,17 +292,17 @@ Horizon before they write anything.
    that line, also when its title takes two rows. The presses of the tiles of
    one row stand on one line.
 
-9. Change the theme to the light theme in the settings.
+15. Change the theme to the light theme in the settings.
 
    Result: The page, the drawings and the keys are in the light palette, and no
    text touches an edge.
 
-10. Leave the page still for one minute without a pointer move.
+16. Leave the page still for one minute without a pointer move.
 
    Result: The process uses no central processor time for the page. The
    `fps` counter of the titlebar says that no frame was drawn.
 
-11. Resize the window through these sizes, in this order. Wait for one second at
+17. Resize the window through these sizes, in this order. Wait for one second at
     each size. At each size, count the columns of tiles, look at the picture of a
     tile, look for a scroll bar at the right edge of the page, and measure the
     width of the block: the distance from the left edge of the first tile of a
@@ -255,7 +325,7 @@ Horizon before they write anything.
     the canvas to the block is the same as the distance from the block to the
     right edge.
 
-12. At the window size 800 x 600, push Page Down two times, then Page Up two
+18. At the window size 800 x 600, push Page Down two times, then Page Up two
     times. Then put the pointer on the middle of the page and roll the wheel of
     the mouse three notches down, three notches up, and two notches to the side
     while you hold Ctrl.
@@ -270,20 +340,20 @@ Horizon before they write anything.
     the right edge of the block. At the top of the page, the heading is whole and
     no part of it stands under the titlebar.
 
-13. Make the window 1600 x 1000, where the page is whole inside the canvas.
+19. Make the window 1600 x 1000, where the page is whole inside the canvas.
     Put the pointer on the middle of the page and roll the wheel down three
     notches.
 
     Result: No pixel of the window changes: a page that the window holds has
     nothing to scroll, and the board behind it does not move either.
 
-14. At the window size 800 x 600, push Page Up until the page stops. Then push
-    Tab four times.
+20. At the window size 800 x 600, push Page Up until the page stops. Then push
+    Tab five times.
 
-    Result: Each press moves the focus ring to the next tile. The fourth tile
-    comes whole into the canvas, and the page moves to it.
+    Result: Each press moves the focus ring, from the link to the four tiles. The
+    fourth tile comes whole into the canvas, and the page moves to it.
 
-15. Make the window 1000 x 700. Look at a row of the section **Pick up where you
+21. Make the window 1000 x 700. Look at a row of the section **Pick up where you
     left off** whose folder path is longer than the row.
 
     Result: The detail line of the row starts with the program of the session and
@@ -291,7 +361,7 @@ Horizon before they write anything.
     ellipsis, and the start and the end of the path stay. The press of the row
     keeps its width.
 
-16. Read the first line of that row, the title of the session, in a session whose
+22. Read the first line of that row, the title of the session, in a session whose
     prompt is longer than about 70 characters. Then make the window 5120 x 1348
     and read it again.
 
@@ -300,21 +370,21 @@ Horizon before they write anything.
     the row shows the whole prompt: no ellipsis stands at its end, and the row is
     filled from the left pad to its press.
 
-17. Make a workspace with one panel, and keep the keyboard in another workspace.
+23. Make a workspace with one panel, and keep the keyboard in another workspace.
     Point at `+ Panel` on the line of the first workspace.
 
     Result: The line of a workspace holds `Default`, `Rows`, `Cols`, `Grid`,
     `Detach`, `Tidy` and `+ Panel`, in this order. The hover text of `+ Panel` is
     `Add a panel to this workspace`.
 
-18. Click `+ Panel` and read the list that opens. Select `Shell`.
+24. Click `+ Panel` and read the list that opens. Select `Shell`.
 
     Result: The list holds the presets alone, its title is `Presets`, and it
     holds no action. The shell panel opens in the workspace whose line the press
     came from. That workspace takes the keyboard, and the workspace that held it
     before has no new panel.
 
-19. Push Ctrl+Shift+K and read the rows of the presets. On a computer without the
+25. Push Ctrl+Shift+K and read the rows of the presets. On a computer without the
     program of `Gemini CLI`, read the row of that preset.
 
     Result: The presets whose program this computer has stand first, in the order
@@ -323,12 +393,12 @@ Horizon before they write anything.
     right edge. The rows of the terminal, the browser and a card hold no such
     words.
 
-20. Select the row of `Gemini CLI` and then `Escape`.
+26. Select the row of `Gemini CLI` and then `Escape`.
 
     Result: The press opens a panel of that preset, as before the mark: the mark
     tells the person that the program is not here, and it stops nothing.
 
-21. Make the window 800 x 600. Push Ctrl+Shift+K. Then push Escape, click
+27. Make the window 800 x 600. Push Ctrl+Shift+K. Then push Escape, click
     `+ Panel` on the line of a workspace, and push Escape again.
 
     Result: At a window of 800 x 600 the whole card of each list stands inside
@@ -336,7 +406,7 @@ Horizon before they write anything.
     show whole at the top of the card. The list is shorter than in a large
     window, and it scrolls under the search field.
 
-22. With a workspace that holds one panel, look at the lower right corner of the
+28. With a workspace that holds one panel, look at the lower right corner of the
     canvas at 800 x 600 and at 1024 x 640. Then make the window 1280 x 800.
 
     Result: At a window of 800 x 600 and of 1024 x 640 the canvas shows no

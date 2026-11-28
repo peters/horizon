@@ -487,6 +487,9 @@ mod tests {
             window.app.initial_pan_done = true;
             window.app.startup_workspace_organization_pending = false;
             window.app.root_viewport_stabilizer = None;
+            // The tests read the line of a workspace beside the canvas, so the
+            // window keeps no dock at its right edge.
+            window.app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
             window.ctx.enable_accesskit();
             // The startup frames move the canvas to the workspaces, and a press
             // follows the canvas that the person sees.

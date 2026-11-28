@@ -1066,7 +1066,83 @@ the rules from the modules beside it.
 
 ### First start page
 
-The page that shows while the board is empty answers the size of the window.
+The page that shows while the board is empty has two forms, and the orchestrator
+dock chooses the form.
+
+- A window that shows the orchestrator dock draws the page of the front desk
+  ([the page of the front desk](#the-page-of-the-front-desk)). The setting
+  `features.orchestrator_dock` is on at first, so this is the page of a first
+  start.
+- A window with no dock draws the page of four starts. The dock is off when the
+  setting is off, when the environment switch is `0`, or when the window leaves
+  less than 320 points of canvas beside it.
+- Both forms show on the conditions of the page of four starts, and both stand in
+  the canvas rectangle that the dock leaves. The block of a page is centred in
+  that rectangle.
+
+#### The two texts of the toolbar
+
+- The toolbar says `work items, agents and machines` in `FG_DIM` at 10.5 after the
+  name `Horizon`.
+- The field of the toolbar search holds the hint `Search` in `FG_DIM` at 12.5
+  while it holds no query.
+
+#### The page of the front desk
+
+The page sends the person to the conversation at the right of the window.
+
+- The block of the page is centred in the canvas rectangle that the dock leaves,
+  and the middle of the block stands at 46 percent of the height of the canvas. A
+  block that is taller than the canvas keeps the top pad of 44 points and scrolls
+  under it.
+- The heading is `Start at the front desk`: 28 points, weight 700, `FG`, centred
+  in the block.
+- The line under the heading stands 8 points under it, centred, with a width of
+  560 points at most: 14 points, `FG_SOFT`,
+  `Write what you want done in the conversation at the right. Each task becomes a
+  work item with its own orchestrator, and its work shows on this canvas.`
+- The steps stand 32 points under that line, in one row of three, centred as a
+  group, with 40 points between two steps. A step is 200 points wide, and its
+  texts are aligned at its left edge.
+- The chip of a step is 22 by 22 points at radius 11, with a 1 px outline of
+  `alpha(ACCENT, 140)`. Its digit is `ACCENT` at 11.5 semibold, centred in the
+  chip.
+- The title of a step stands 10 points under its chip: 13.5 semibold, `FG`. A
+  sentence stands 4 points under the title: 12.5, `FG_SOFT`, at most 3 rows.
+- A line of 1 px `BORDER_SUBTLE` joins two chips at the height of the middle of
+  the chip. It starts 10 points right of the chip and ends 10 points left of the
+  next chip.
+- The steps stand in one column when the block is narrower than 728 points, which
+  is 3 x 200 + 2 x 40 + 2 x 24. The column is aligned at the left edge of the
+  block, with 20 points between two steps and no joining line.
+- The steps, in their order:
+
+  | Number | Title | Sentence |
+  |---|---|---|
+  | 1 | `Write a task` | `One message can hold several tasks. Say what done means.` |
+  | 2 | `Press Start` | `The front desk shows the work items first. Nothing starts and nothing costs before your press.` |
+  | 3 | `Answer what needs you` | `A question shows at the top of the sidebar with its buttons, wherever you look.` |
+
+- The link stands 32 points under the steps, centred: `More ways to start` in
+  `ACCENT` at 12.5 semibold, with the chevron of a tile action (two lines of
+  1.6 px, 5 points, 8 points after the text). A pointer over it shows the
+  pointing hand.
+- A press on the link shows the four starts of the page 24 points under the link.
+  The four starts take their layout of the width at hand, and the link reads
+  `Fewer ways to start`. A second press hides them again. The state of the link
+  belongs to the run, and no file keeps it.
+- The four starts work as they do on the page of four starts.
+- The row of shortcuts of this computer stands 28 points under the link, as the
+  page of four starts draws it.
+- The page takes no keyboard focus when it appears, and it moves no focus into
+  the field of the front desk.
+- The page keeps its layout in the cache of the first start page, with the same
+  keys and the form of the page and the state of the link. A frame that changes
+  none of them lays nothing out and asks for no repaint.
+
+#### The page of four starts
+
+The page of four starts answers the size of the window.
 
 - The block of the page takes the canvas width less 60 points on each side, and
   1 480 points at most. It stands in the middle of a wider canvas, so a large
@@ -1325,9 +1401,13 @@ The menu fill is `PANEL_BG`. The well is an inset on that fill.
 
 ### Orchestrator dock
 
-The dock is the conversation column at the right edge of the root window. One
-switch turns it on: `HORIZON_ORCHESTRATOR_DOCK=1` in the environment of the
-start.
+The dock is the conversation column at the right edge of the root window.
+
+The setting `features.orchestrator_dock` decides whether the dock shows. It is on
+at first, so a new window starts at the front desk, and a store that holds `false`
+keeps it off. The environment switch of a run wins over the setting:
+`HORIZON_ORCHESTRATOR_DOCK=1` shows the dock and `HORIZON_ORCHESTRATOR_DOCK=0`
+hides it, whatever the setting says. No other value of the variable is a switch.
 
 - The width is 27 percent of the window, between 360 and 540 points.
 - The dock keeps the right edge of the window. It starts at the bottom of the

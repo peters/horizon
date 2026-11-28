@@ -25,6 +25,8 @@ fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, H
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(runtime),
     });
+    // The card takes the room of the canvas, which a dock would take from it.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     let workspace = app.board.panels[0].workspace_id;
     let id = app
         .board
@@ -352,6 +354,8 @@ fn agent_app() -> (tempfile::TempDir, Context, HorizonApp) {
     });
     app.board.panels[0].kind = PanelKind::Claude;
     app.sidebar_visible = false;
+    // The card takes the room of the canvas, which a dock would take from it.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     (temp, ctx, app)
 }
 

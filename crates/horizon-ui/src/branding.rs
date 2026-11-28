@@ -2,7 +2,7 @@ use egui::IconData;
 
 pub const APP_NAME: &str = "Horizon";
 pub const APP_ID: &str = "horizon";
-pub const APP_TAGLINE: &str = "your work, one canvas";
+pub const APP_TAGLINE: &str = "work items, agents and machines";
 
 const ICON_SIZE: u32 = 256;
 const BG: [u8; 4] = [10, 22, 34, 255];
@@ -322,5 +322,15 @@ fn paint_glow(buffer: &mut [u8], center_x: f32, center_y: f32, radius: f32, colo
                 blend_pixel(buffer, x, y, color, alpha * 0.45);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The tagline of the titlebar names the three parts of Horizon, as the
+    /// design of the first start names them.
+    #[test]
+    fn the_tagline_is_the_one_of_the_design() {
+        assert_eq!(super::APP_TAGLINE, "work items, agents and machines");
     }
 }

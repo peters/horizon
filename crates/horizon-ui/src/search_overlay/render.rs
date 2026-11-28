@@ -10,6 +10,8 @@ use crate::theme;
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
 
 const TOOLBAR_INPUT_MARGIN: Margin = Margin::symmetric(42, 9);
+/// The hint of the field of the search while it holds no text.
+const SEARCH_HINT: &str = "Search";
 
 pub(super) fn toolbar_search_text_edit(query: &mut String, id: Id) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(query)
@@ -18,11 +20,7 @@ pub(super) fn toolbar_search_text_edit(query: &mut String, id: Id) -> egui::Text
         .font(egui::FontId::monospace(13.0))
         .text_color(theme::FG())
         .align(egui::Align2::LEFT_CENTER)
-        .hint_text(
-            egui::RichText::new("Search across all terminals...")
-                .color(theme::FG_DIM())
-                .size(12.5),
-        )
+        .hint_text(egui::RichText::new(SEARCH_HINT).color(theme::FG_DIM()).size(12.5))
 }
 
 pub(super) fn paint_toolbar_search_input(ui: &egui::Ui, rect: Rect, focused: bool, hovered: bool, has_query: bool) {
@@ -354,8 +352,14 @@ mod tests {
     use crate::test_egui::DiscardTextures;
     use egui::{Context, Direction, Layout, Pos2, RawInput, Rect, UiBuilder, Vec2};
 
-    use super::{TOOLBAR_INPUT_MARGIN, toolbar_search_text_edit};
+    use super::{SEARCH_HINT, TOOLBAR_INPUT_MARGIN, toolbar_search_text_edit};
     use crate::search_overlay::TOOLBAR_INPUT_HEIGHT;
+
+    /// The hint of the field is the one word of the design, and no sentence.
+    #[test]
+    fn the_hint_of_the_search_field_is_the_word_of_the_design() {
+        assert_eq!(SEARCH_HINT, "Search");
+    }
 
     #[test]
     fn toolbar_search_text_is_inset_and_vertically_centered() {

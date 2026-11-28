@@ -216,7 +216,7 @@ impl Default for OverlaysConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FeaturesConfig {
     #[serde(alias = "organize_workspaces_on_startup")]
@@ -224,9 +224,11 @@ pub struct FeaturesConfig {
     pub sidebar_accordion: bool,
     /// Whether the orchestrator dock stands at the right edge of the window: the
     /// conversation with one agent, which does the work of the active workspace
-    /// and shows it as cards. It is experimental and off at first. The
-    /// environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns it on as well, for
-    /// the fixture of the smoke test.
+    /// and shows it as cards. It is on at first, so a new window starts at the
+    /// front desk. A store that holds no row for it reads [`Self::default`], and a
+    /// store that holds `false` keeps it off. The environment variable
+    /// `HORIZON_ORCHESTRATOR_DOCK=1` turns it on for the run and `=0` turns it off
+    /// for the run, whatever the setting says, for the fixture of the smoke test.
     pub orchestrator_dock: bool,
     /// Whether the program of an agent panel runs in a holder that outlives a restart of Horizon.
     pub keep_agents_through_restart: bool,
@@ -237,6 +239,19 @@ pub struct FeaturesConfig {
     /// window of Horizon has the focus. A store of an older build has no such
     /// row, and it reads as the default that speaks of both changes.
     pub notifications: NotificationSetting,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            organize_workspaces_on_session_load: false,
+            sidebar_accordion: false,
+            orchestrator_dock: true,
+            keep_agents_through_restart: false,
+            when_window_closes: WindowCloseSetting::default(),
+            notifications: NotificationSetting::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1125,20 +1140,23 @@ mod tests {
     }
 
     #[test]
-    fn the_orchestrator_dock_defaults_disabled() {
-        assert!(!FeaturesConfig::default().orchestrator_dock);
-        assert!(!Config::default().features.orchestrator_dock);
+    fn the_orchestrator_dock_defaults_on() {
+        assert!(FeaturesConfig::default().orchestrator_dock);
+        assert!(Config::default().features.orchestrator_dock);
     }
 
-    /// The dock is a new field of the `features` section, so a store of an older
-    /// Horizon has no row for it and reads it as off. The rest of the section
-    /// applies.
+    /// The dock is a field of the `features` section, so a store of an older
+    /// Horizon has no row for it and reads the default, which is on. The rest of
+    /// the section applies.
     #[test]
-    fn a_store_without_the_dock_setting_reads_it_off() {
+    fn a_store_without_the_dock_setting_reads_the_default() {
         let config =
             Config::from_json(r#"{"features": {"sidebar_accordion": true}}"#).expect("config should deserialize");
 
-        assert!(!config.features.orchestrator_dock);
+        assert!(
+            config.features.orchestrator_dock,
+            "a store without the row reads the default"
+        );
         assert!(config.features.sidebar_accordion, "the rest of the section applies");
 
         let on = Config::from_json(r#"{"features": {"orchestrator_dock": true}}"#).expect("config should deserialize");
@@ -1146,6 +1164,19 @@ mod tests {
         let document = on.to_json().expect("config should serialize");
         let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
         assert!(round_tripped.features.orchestrator_dock);
+    }
+
+    /// A person who turns the dock off keeps it off: the store holds `false`, and
+    /// the default does not win over it.
+    #[test]
+    fn an_explicit_off_of_the_dock_holds() {
+        let config =
+            Config::from_json(r#"{"features": {"orchestrator_dock": false}}"#).expect("config should deserialize");
+
+        assert!(!config.features.orchestrator_dock);
+        let document = config.to_json().expect("config should serialize");
+        let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
+        assert!(!round_tripped.features.orchestrator_dock, "the stored off stays off");
     }
 
     #[test]

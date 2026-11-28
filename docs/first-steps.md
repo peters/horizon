@@ -192,8 +192,23 @@ If the build stops with a missing font, do step 6 again. On Linux, a
 
 ## The first start page and Set up
 
-The first start shows one page with four starts. Each tile is a button: click it,
-or push Tab until it has the focus ring and then push Enter or Space.
+The first start shows one page, and the page answers the window.
+
+A new window shows the orchestrator dock at its right edge, and the page sends you
+to the conversation there:
+
+- The heading is `Start at the front desk`.
+- The three steps say what to do: write a task, press Start, and answer what needs
+  you. A question waits at the top of the sidebar while a work item needs you.
+- The link `More ways to start` shows the four starts in the table under it, and a
+  second press hides them again.
+
+A window without the dock shows the four starts alone. Turn off the setting
+**Orchestrator dock** on the General tab to read that page, or start Horizon with
+`HORIZON_ORCHESTRATOR_DOCK=0`.
+
+Each tile is a button: click it, or push Tab until it has the focus ring and then
+push Enter or Space.
 
 | Tile | What it does |
 |---|---|
@@ -213,6 +228,8 @@ preset.
 
 The page follows the size of the window. On a wide screen the block of the page
 keeps a width that is easy to read, and it stands in the middle of the canvas.
+This applies to both pages: the page of the front desk takes the rectangle that
+the dock leaves at its left.
 
 A window that is too short for the whole page first draws the small picture of a
 tile smaller, and then removes the picture. A page that is still taller than the
@@ -567,8 +584,9 @@ panel run their program in another place, so a holder never serves one.
 The setting **Orchestrator dock**, on the General tab under **Features**, puts a
 column at the right edge of the window. The column holds a conversation with one
 agent program, and the agent does the work of the active workspace and shows it
-as cards on its canvas. The setting is off at first, and this feature is
-experimental.
+as cards on its canvas. The setting is on at first, so a new window starts at the
+front desk. The feature is experimental: the setting turns the column off, and the
+start `HORIZON_ORCHESTRATOR_DOCK=0` starts one window without it.
 
 The column does not start an agent program by itself. Write in the field at the
 bottom of the column and press Enter, or press **+ Rent a machine** in the

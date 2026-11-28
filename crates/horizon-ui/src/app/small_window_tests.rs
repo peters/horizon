@@ -51,6 +51,9 @@ impl Window {
         window.app.initial_pan_done = true;
         window.app.startup_workspace_organization_pending = false;
         window.app.root_viewport_stabilizer = None;
+        // These windows measure the canvas and the first start page, so they keep
+        // no dock at their right edge.
+        window.app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
         window.ctx.enable_accesskit();
         for _ in 0..3 {
             let _ = window.frame(Vec::new());

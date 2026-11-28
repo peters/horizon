@@ -3,13 +3,13 @@
 
 use egui::Context;
 
+use super::tiles_app;
 use super::{block_rect, frame_shapes_at, text_shape};
-use crate::app::test_support::test_app;
 use crate::app::welcome::{HEADING, SHORTCUTS_LEAD, layout::MAX_BLOCK_WIDTH};
 
 #[test]
 fn a_wide_canvas_keeps_the_block_at_the_reading_width_in_the_middle() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes_at(&ctx, &mut app, [5000.0, 1348.0]);
     let canvas = app.canvas_rect(&ctx);
@@ -44,7 +44,7 @@ fn a_wide_canvas_keeps_the_block_at_the_reading_width_in_the_middle() {
 
 #[test]
 fn a_canvas_under_the_reading_width_gives_the_block_the_width_of_the_canvas() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes_at(&ctx, &mut app, [1200.0, 900.0]);
     let canvas = app.canvas_rect(&ctx);

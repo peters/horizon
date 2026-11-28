@@ -1,14 +1,16 @@
 //! What the first start page remembers between frames: where its parts stand.
 //!
-//! The page is measured once per width, theme and count of the rows of the section
-//! **Pick up where you left off**. The measurement lays out the wrapped titles and
-//! sentences of the four tiles, which is the work that a still page would do on
-//! every frame; the drawings of the tiles are a few dozen shapes built from
-//! constants and are built on the frame that paints them.
+//! The page of four tiles is measured once per width, theme and count of the rows
+//! of the section **Pick up where you left off**. The page that sends the person
+//! to the front desk is measured once per width, theme, canvas height and state of
+//! its link. The measurement lays out the wrapped texts, which is the work that a
+//! still page would do on every frame; the drawings of the tiles are a few dozen
+//! shapes built from constants and are built on the frame that paints them.
 
 use egui::Painter;
 
 use super::art;
+use super::front_desk;
 use super::layout::{ROW_GAP, tile_width, welcome_columns};
 use super::pickup;
 use super::tiles::WelcomeTile;
@@ -27,6 +29,16 @@ pub(in crate::app) struct WelcomeCache {
     /// to.
     key: Option<WelcomeKey>,
     metrics: Option<WelcomeMetrics>,
+    /// The same for the page that sends the person to the front desk.
+    desk_key: Option<FrontDeskKey>,
+    desk: Option<front_desk::FrontDeskMetrics>,
+    /// Whether the page that sends the person to the front desk shows the four
+    /// tiles under its link. It is the state of this run, and no file keeps it.
+    link_open: bool,
+    /// How many times this run laid the page out, for a test that pins that a still
+    /// page lays nothing out again.
+    #[cfg(test)]
+    layouts: usize,
 }
 
 impl WelcomeCache {
@@ -56,9 +68,72 @@ impl WelcomeCache {
             self.key = Some(key);
             self.metrics = None;
         }
-        *self
-            .metrics
-            .get_or_insert_with(|| WelcomeMetrics::measure(painter, width, pickup_rows, foot_rows, canvas_height))
+        if let Some(metrics) = self.metrics {
+            return metrics;
+        }
+        #[cfg(test)]
+        {
+            self.layouts += 1;
+        }
+        let metrics = WelcomeMetrics::measure(painter, width, pickup_rows, foot_rows, canvas_height);
+        self.metrics = Some(metrics);
+        metrics
+    }
+
+    /// Whether the page that sends the person to the front desk shows its four
+    /// tiles under the link.
+    pub(in crate::app) fn link_open(&self) -> bool {
+        self.link_open
+    }
+
+    /// Turns the link of that page between `More ways to start` and
+    /// `Fewer ways to start`.
+    pub(in crate::app) fn toggle_link(&mut self) {
+        self.link_open = !self.link_open;
+    }
+
+    /// The metrics of the page that sends the person to the front desk, for
+    /// `width` and the rows of the shortcuts in `lines`. `tiles` holds the metrics
+    /// of the four tiles under the link, and `None` while the link is closed.
+    ///
+    /// The key holds the form of the page and the state of its link, so a press on
+    /// the link lays the page out once and a still page lays nothing out.
+    pub(in crate::app) fn front_desk(
+        &mut self,
+        painter: &Painter,
+        width: f32,
+        lines: &[(String, String)],
+        tiles: Option<WelcomeMetrics>,
+    ) -> front_desk::FrontDeskMetrics {
+        let key = FrontDeskKey {
+            width: width.to_bits(),
+            theme: theme::current_theme(),
+            open: self.link_open,
+            // The four tiles under the link take the height of their drawing band
+            // from the canvas, so a window that a person makes shorter lays the
+            // page out again.
+            tiles: tiles.map(|tiles| tiles.tile_height.to_bits()),
+        };
+        if self.desk_key != Some(key) {
+            self.desk_key = Some(key);
+            self.desk = None;
+        }
+        if let Some(metrics) = self.desk.clone() {
+            return metrics;
+        }
+        #[cfg(test)]
+        {
+            self.layouts += 1;
+        }
+        let metrics = front_desk::FrontDeskMetrics::measure(painter, width, lines, tiles);
+        self.desk = Some(metrics.clone());
+        metrics
+    }
+
+    /// How many times this run laid a page out, which a test of the cache reads.
+    #[cfg(test)]
+    pub(in crate::app) fn layouts(&self) -> usize {
+        self.layouts
     }
 }
 
@@ -79,6 +154,18 @@ struct WelcomeKey {
     /// The rows of the shortcuts under the tiles: a narrow page takes more than
     /// one.
     foot_rows: usize,
+}
+
+/// The key of the page that sends the person to the front desk: the width, the
+/// theme and the state of its link are part of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrontDeskKey {
+    width: u32,
+    theme: theme::ResolvedTheme,
+    /// Whether the four tiles stand under the link.
+    open: bool,
+    /// The height of a tile under the link, or `None` while the link is closed.
+    tiles: Option<u32>,
 }
 
 /// Where every part of the page stands, for one width and one theme.
@@ -235,5 +322,12 @@ impl WelcomeMetrics {
     pub(in crate::app) fn cell(&self, index: usize) -> (usize, usize) {
         let columns = self.columns.max(1);
         (index / columns, index % columns)
+    }
+
+    /// The height of the grid of the four tiles alone, without the parts that the
+    /// page draws above and under it.
+    pub(in crate::app) fn grid_height(&self) -> f32 {
+        let rows = self.rows();
+        rows * self.tile_height + (rows - 1.0).max(0.0) * ROW_GAP
     }
 }

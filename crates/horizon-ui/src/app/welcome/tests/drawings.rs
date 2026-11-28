@@ -7,8 +7,8 @@
 
 use egui::Context;
 
+use super::tiles_app;
 use super::{frame_shapes_at, painted_drawings, tile_rects};
-use crate::app::test_support::test_app;
 
 /// The sizes of the live look that found the stale drawings, and the first size
 /// again, so a page that comes back to a size paints it as it did.
@@ -23,7 +23,7 @@ const SIZES: [[f32; 2]; 6] = [
 
 #[test]
 fn the_drawing_of_a_tile_stands_in_the_band_of_its_tile_after_a_resize() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
 
     for size in SIZES {

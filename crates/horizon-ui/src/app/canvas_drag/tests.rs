@@ -15,6 +15,9 @@ fn fixture() -> (TempDir, Context, HorizonApp) {
     app.theme_applied = true;
     app.initial_pan_done = true;
     app.root_viewport_stabilizer = None;
+    // The press follows the canvas that the person sees, so the window keeps no
+    // dock beside it.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     for time in [0.0, 0.016, 0.032] {
         let _ = run_app_frame_with_input(&ctx, &mut app, frame(time, Vec::new(), Modifiers::NONE));
     }

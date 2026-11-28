@@ -7,11 +7,38 @@ use super::{
     HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_PAD, TILE_RADIUS, WelcomeTile, page_top,
     welcome_page_shows,
 };
+use crate::app::orchestrator_dock::OrchestratorDock;
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
 use crate::typeface::Weight;
 
 mod wheel;
+
+/// A first start in a window whose dock is off, so the page shows its four
+/// tiles. A test of the page that the dock shows states the other switch itself.
+pub(super) fn tiles_app() -> (tempfile::TempDir, crate::app::HorizonApp) {
+    let (temp, mut app) = test_app();
+    app.orchestrator_dock = OrchestratorDock::new(false);
+    (temp, app)
+}
+
+/// A first start in a window `width` points wide whose dock took its column at
+/// the right edge, so the page sends the person to the front desk.
+///
+/// The dock keeps 27 percent of the window, between 360 and 540 points, and a
+/// frame reads that rectangle before the page draws.
+pub(super) fn desk_app(width: f32) -> (tempfile::TempDir, crate::app::HorizonApp) {
+    let (temp, mut app) = test_app();
+    app.orchestrator_dock = OrchestratorDock::new(true);
+    app.orchestrator_dock.set_frame_rect(Some(dock_rect_of(width)));
+    (temp, app)
+}
+
+/// The rectangle of the dock at the right edge of a window `width` points wide.
+pub(super) fn dock_rect_of(width: f32) -> egui::Rect {
+    let dock = (width * 0.27).clamp(360.0, 540.0);
+    egui::Rect::from_min_max(egui::pos2(width - dock, 46.0), egui::pos2(width, 900.0))
+}
 
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
@@ -112,6 +139,8 @@ impl AppWindow {
             });
         app.theme_applied = true;
         app.initial_pan_done = true;
+        // The page of four tiles is the page of a window without the dock.
+        app.orchestrator_dock = OrchestratorDock::new(false);
         app.root_viewport_stabilizer = None;
         app.pan_target = None;
         setup(&mut app);
@@ -256,7 +285,7 @@ pub(super) fn painted_drawings(shapes: &[egui::epaint::ClippedShape]) -> Vec<Pai
 #[test]
 fn the_four_tiles_keep_their_gaps_and_one_height() {
     for width in [1_240.0, 1_300.0, 1_400.0] {
-        let (_temp, mut app) = test_app();
+        let (_temp, mut app) = tiles_app();
         let ctx = Context::default();
         let shapes = frame_shapes_at(&ctx, &mut app, [width, 900.0]);
 
@@ -386,7 +415,7 @@ fn the_block_of_the_page_is_centred_in_a_canvas_that_holds_it() {
 
 #[test]
 fn the_line_under_the_heading_is_centred_row_by_row() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes(&ctx, &mut app);
     let (text, _) = text_shape(&shapes, LEAD).expect("the line under the heading is drawn");
@@ -410,7 +439,7 @@ fn the_line_under_the_heading_is_centred_row_by_row() {
 /// hangs half outside its tile, and the first title goes under the sidebar.
 #[test]
 fn the_title_of_every_tile_starts_at_the_left_edge_of_its_tile() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes(&ctx, &mut app);
     for tile in WelcomeTile::ALL {
@@ -430,7 +459,7 @@ fn the_title_of_every_tile_starts_at_the_left_edge_of_its_tile() {
 
 #[test]
 fn the_shortcut_line_is_drawn_whole_inside_the_canvas() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes(&ctx, &mut app);
     let (text, clip) = text_shape(&shapes, SHORTCUTS_LEAD).expect("the shortcut line is drawn");
@@ -485,7 +514,7 @@ fn painted_weights(shapes: &[egui::epaint::ClippedShape], text: &str) -> Vec<Opt
 
 #[test]
 fn the_heading_is_painted_once_in_its_own_weight() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let shapes = frame_shapes(&ctx, &mut app);
 
@@ -501,7 +530,7 @@ fn the_heading_is_painted_once_in_its_own_weight() {
 
 #[test]
 fn the_page_names_the_heading_the_line_and_the_four_tiles() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
 
     let texts = frame_texts(&ctx, &mut app);
@@ -530,7 +559,7 @@ fn the_page_names_the_heading_the_line_and_the_four_tiles() {
 
 #[test]
 fn the_row_of_shortcuts_names_the_keys_of_this_computer() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     let texts = frame_texts(&ctx, &mut app);
 
@@ -553,7 +582,7 @@ fn the_row_of_shortcuts_names_the_keys_of_this_computer() {
 
 #[test]
 fn the_page_goes_away_as_soon_as_the_board_holds_a_panel() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     let ctx = Context::default();
     assert!(!frame_texts(&ctx, &mut app).is_empty(), "the page shows");
 
@@ -568,7 +597,7 @@ fn the_page_goes_away_as_soon_as_the_board_holds_a_panel() {
 
 #[test]
 fn the_first_tile_starts_a_panel_of_the_first_agent_that_this_computer_has() {
-    let (temp, mut app) = test_app();
+    let (temp, mut app) = tiles_app();
     let folder = programs_folder(&temp);
     // The program of the second agent preset is a file of this computer, and the
     // program of the first is not.
@@ -591,7 +620,7 @@ fn the_first_tile_starts_a_panel_of_the_first_agent_that_this_computer_has() {
 /// why.
 #[test]
 fn the_first_tile_keeps_the_first_preset_and_says_so_when_no_agent_program_is_here() {
-    let (temp, mut app) = test_app();
+    let (temp, mut app) = tiles_app();
     let folder = programs_folder(&temp);
     app.presets = first_start_presets(&folder);
     let mut ctx = Context::default();
@@ -682,7 +711,7 @@ fn asked_preset(ctx: &Context, app: &mut crate::app::HorizonApp) -> String {
 
 #[test]
 fn a_tile_of_a_goal_starts_set_up_with_that_goal() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     app.setup.integrations = false;
     let mut ctx = Context::default();
     ctx.enable_accesskit();
@@ -697,7 +726,7 @@ fn a_tile_of_a_goal_starts_set_up_with_that_goal() {
 /// starts it.
 #[test]
 fn the_keyboard_starts_a_tile_that_it_reached() {
-    let (_temp, mut app) = test_app();
+    let (_temp, mut app) = tiles_app();
     app.setup.integrations = false;
     let ctx = Context::default();
     let frame = |app: &mut crate::app::HorizonApp, events: Vec<egui::Event>| {
@@ -732,6 +761,12 @@ fn the_keyboard_starts_a_tile_that_it_reached() {
 /// Presses the tile of `tile` on the page, as a pointer does, and answers
 /// whether the page drew a press.
 fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: WelcomeTile) -> bool {
+    press_named(ctx, app, &tile.spoken())
+}
+
+/// Presses the control of the page whose accessible name is `label`, as a pointer
+/// does, and answers whether the page drew such a control.
+pub(super) fn press_named(ctx: &mut Context, app: &mut crate::app::HorizonApp, label: &str) -> bool {
     let frame = |app: &mut crate::app::HorizonApp, events: Vec<egui::Event>| {
         let mut input = crate::app::test_support::raw_input([1200.0, 900.0], None);
         input.events = events;
@@ -743,7 +778,7 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
         let output = frame(app, Vec::new());
         if let Some(update) = output.platform_output.accesskit_update {
             position = update.nodes.iter().find_map(|(_, node)| {
-                (node.label().or_else(|| node.value()) == Some(tile.spoken().as_str()))
+                (node.label().or_else(|| node.value()) == Some(label))
                     .then(|| node.bounds())
                     .flatten()
             });
@@ -771,6 +806,7 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
 }
 
 mod block;
+mod desk;
 mod drawings;
 mod rows;
 mod scroll;

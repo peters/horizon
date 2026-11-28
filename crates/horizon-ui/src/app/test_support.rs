@@ -19,6 +19,14 @@ pub(super) fn test_app() -> (TempDir, HorizonApp) {
     (temp, app)
 }
 
+/// [`test_app`] with no orchestrator dock, for a test that measures a window
+/// which keeps nothing at its right edge. The dock is on by default.
+pub(super) fn test_app_without_dock() -> (TempDir, HorizonApp) {
+    let (temp, mut app) = test_app();
+    app.orchestrator_dock = super::orchestrator_dock::OrchestratorDock::new(false);
+    (temp, app)
+}
+
 pub(super) fn test_app_with_startup(startup: StartupDecision) -> (TempDir, Context, HorizonApp) {
     test_app_with_config_and_startup(&Config::default(), startup)
 }

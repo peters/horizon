@@ -35,6 +35,9 @@ pub(super) fn started(runtime: RuntimeState) -> (tempfile::TempDir, Context, Hor
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(runtime),
     });
+    // These tests measure the canvas of a window that keeps no dock at its right
+    // edge.
+    app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
     // No live agent process is needed to exercise the caller's identity.
     app.board.panels[0].kind = PanelKind::Claude;
     app.sidebar_visible = false;
