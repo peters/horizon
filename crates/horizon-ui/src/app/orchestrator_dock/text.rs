@@ -28,6 +28,31 @@ pub(super) fn mono_line(ui: &Ui, text: &str, size: f32, color: Color32, max_widt
     layout(ui, job, Weight::Regular)
 }
 
+/// The metrics of one row or paragraph of text: its size, its weight, its colour
+/// and its line height as a factor of the size.
+#[derive(Clone, Copy)]
+pub(super) struct Metrics {
+    pub(super) size: f32,
+    pub(super) weight: Weight,
+    pub(super) color: Color32,
+    pub(super) line_height: f32,
+}
+
+/// `text` wrapped at `max_width` in at most `rows` rows.
+pub(super) fn rows(ui: &Ui, text: &str, metrics: Metrics, max_width: f32, rows: usize) -> Arc<Galley> {
+    let Metrics {
+        size,
+        weight,
+        color,
+        line_height,
+    } = metrics;
+    let mut job = wrapped_rows_job(text, &FontId::proportional(size), color, max_width, rows);
+    for section in &mut job.sections {
+        section.format.line_height = Some(size * line_height);
+    }
+    layout(ui, job, weight)
+}
+
 /// `text` wrapped at `max_width` in `size * line_height_factor` rows.
 pub(super) fn paragraph(
     ui: &Ui,

@@ -43,7 +43,9 @@ mod tests;
 mod worker;
 
 pub use codec::{ClaudeCodec, LineCodec, LineShape};
-pub use conversation::{Conversation, ConversationSnapshot, Entry, LimitNote, Link, ToolState};
+pub use conversation::{
+    Conversation, ConversationSnapshot, Entry, LimitNote, Link, ProposalItem, ProposalState, ToolState,
+};
 pub use event::{BridgeEvent, DropReason};
 pub use program::{
     BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, FRONT_DESK_MODEL, FRONT_DESK_MODEL_ENV, FRONT_DESK_PROMPT,

@@ -366,6 +366,7 @@ impl Lines {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_bridge::conversation::{ProposalItem, ProposalState};
     use std::os::unix::fs::PermissionsExt;
 
     /// Every kind of entry, with a tool call that ended, one that failed and the
@@ -374,6 +375,7 @@ mod tests {
         vec![
             Entry::Person {
                 text: "alpha".to_owned(),
+                via_front_desk: false,
             },
             Entry::Agent {
                 message_id: "msg-1".to_owned(),
@@ -400,7 +402,85 @@ mod tests {
                 panel: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".to_owned(),
                 title: "Plan".to_owned(),
             },
+            Entry::Person {
+                text: "start the second one".to_owned(),
+                via_front_desk: true,
+            },
+            Entry::Proposal {
+                id: "3f7c1d9e-1a2b-4c3d-8e4f-5a6b7c8d9e0f".to_owned(),
+                items: vec![
+                    ProposalItem {
+                        title: "Fix login redirect".to_owned(),
+                        task: "Fix issue 1987. Done means the test passes.".to_owned(),
+                        folder: Some("/home/person/work".to_owned()),
+                    },
+                    ProposalItem {
+                        title: "Faster cold start".to_owned(),
+                        task: "question: make the cold start faster.".to_owned(),
+                        folder: None,
+                    },
+                ],
+                state: ProposalState::Declined,
+            },
+            Entry::WorkItem {
+                work_item: "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d".to_owned(),
+                name: "Fix login redirect".to_owned(),
+            },
         ]
+    }
+
+    #[test]
+    fn the_entries_of_the_front_desk_survive_the_file() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let path = path(folder.path());
+        let rows = vec![
+            Entry::Proposal {
+                id: "3f7c1d9e-1a2b-4c3d-8e4f-5a6b7c8d9e0f".to_owned(),
+                items: vec![ProposalItem {
+                    title: "Faster cold start".to_owned(),
+                    task: "make it faster".to_owned(),
+                    folder: None,
+                }],
+                state: ProposalState::Open,
+            },
+            Entry::WorkItem {
+                work_item: "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d".to_owned(),
+                name: "Faster cold start".to_owned(),
+            },
+            Entry::Person {
+                text: "alpha".to_owned(),
+                via_front_desk: true,
+            },
+        ];
+        append(&path, &rows).expect("the entries are written");
+        let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
+        assert_eq!(loaded, rows, "the proposal, its rows and the caption survive a restart");
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn a_person_entry_of_an_older_file_loads_without_the_mark_of_the_front_desk() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let path = path(folder.path());
+        std::fs::create_dir_all(path.parent().expect("a folder")).expect("the folder of the test");
+        // A line of the format that an earlier build wrote holds no mark.
+        std::fs::write(
+            &path,
+            "{\"version\":1,\"entry\":{\"kind\":\"person\",\"text\":\"alpha\"}}\n",
+        )
+        .expect("the file of the test");
+
+        let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entry is read");
+
+        assert_eq!(
+            loaded,
+            vec![Entry::Person {
+                text: "alpha".to_owned(),
+                via_front_desk: false
+            }],
+            "an old message of the person is no message of the front desk"
+        );
+        assert_eq!(dropped, 0, "the line of the older build parses");
     }
 
     /// The file of the conversation of one workspace in a folder of a test.

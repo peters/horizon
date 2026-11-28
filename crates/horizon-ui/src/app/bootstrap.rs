@@ -169,7 +169,7 @@ impl HorizonApp {
             panel_render_caches: PanelRenderCaches::default(),
             device_claim: super::device_requests::claim::DeviceClaimState::default(),
             block_claim: super::block_requests::BlockClaimState::default(),
-            block_clicks: super::block_clicks::BlockClickState::default(),
+            block_clicks: super::block_clicks::BlockClickState::default(), front_desk_messages: super::block_requests::work_items::WorkItemMessages::default(),
             settings_request: super::settings_request::SettingRequestState::default(),
             agent_opens: super::AgentOpens::default(),
             machine_list: empty_machine_list(session_store.home()),

@@ -71,10 +71,12 @@ The host maps an actor to a caller before it applies a request
   `caller_unavailable`. A read of a card of that owner follows the same rule, and
   the answer names the caller and no workspace.
 - A machine session actor is the caller `Session`, as before.
-- The actor of the front desk, `horizon:front-desk`, is refused with
-  `caller_unavailable` for every operation, and `owner_workspace` answers `None`
-  for it. It owns no workspace, so it creates no card, reads no card and opens no
-  panel. See [`front-desk.md`](front-desk.md#the-actor).
+- The actor of the front desk, `horizon:front-desk`, is the caller `FrontDesk`,
+  and only while the dock runs the program of the front desk. It reaches the three
+  operations of the work items, and every other operation of the tool answers
+  `caller_unavailable` for it. `owner_workspace` answers `None` for it, because it
+  owns no workspace: it creates no card, reads no card and opens no panel. See
+  [`front-desk.md`](front-desk.md#the-actor).
 
 A caller of `Orchestrator` has no panel, so:
 
@@ -217,6 +219,7 @@ answers a question from wherever the person looks
 | `secret_names` | works | the answer is the names of the stored secrets and no value |
 | `server_status`, `browser_host_status` | works | a read of the entry that the settings hold |
 | `server_link_request`, `browser_host_request` | `caller_unavailable` | the card of a setting request belongs to a panel of the workspace, and its answer reaches that panel |
+| `work_items`, `work_item_propose`, `work_item_message` | `caller_unavailable` | the three operations of the front desk, which belongs to no workspace |
 | the browser page tools, `browser_*` | unchanged, no panel | the actor of an orchestrator is in no workspace stamp, so `browser_list` names no panel, `browser_create` answers `workspace_unavailable`, and every other page operation answers the refusal of a caller outside the workspace of the panel |
 | `device_panel` | unchanged, `caller_unavailable` | a Device request resolves its actor to an agent panel of the board |
 

@@ -89,7 +89,7 @@ impl Sidebar {
 fn wait_for_bridge(app: &mut HorizonApp, local_id: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !app.orchestrator_dock.running(local_id) {
-        app.poll_orchestrator_dock();
+        app.poll_orchestrator_dock(&egui::Context::default());
         assert!(
             std::time::Instant::now() < deadline,
             "the press started the program of that conversation"

@@ -106,6 +106,48 @@ impl Orchestrator {
         }
     }
 
+    /// The state of this workspace as one machine-readable word, which the read
+    /// of the work items answers: `idle` for a workspace that says no word,
+    /// `needs_you`, `failed`, `working` or `done` for the state that its row
+    /// shows.
+    #[must_use]
+    pub const fn state(self) -> &'static str {
+        match self {
+            Self::Quiet => "idle",
+            Self::NeedsYou => "needs_you",
+            Self::Failed => "failed",
+            Self::Working => "working",
+            Self::Done => "done",
+        }
+    }
+
+    /// The state of this workspace in the words of the row of a work item:
+    /// `working`, `needs you`, `failed` or `done`, lower case, or `None` for a
+    /// workspace that says no word. A program reads [`Self::state`] instead.
+    #[must_use]
+    pub const fn row_word(self) -> Option<&'static str> {
+        match self {
+            Self::Quiet => None,
+            Self::NeedsYou => Some("needs you"),
+            Self::Failed => Some("failed"),
+            Self::Working => Some("working"),
+            Self::Done => Some("done"),
+        }
+    }
+
+    /// The words that Horizon writes in the conversation of the front desk when a
+    /// work item goes into this state, or `None` for a state that it does not
+    /// name.
+    #[must_use]
+    pub const fn notice_word(self) -> Option<&'static str> {
+        match self {
+            Self::NeedsYou => Some("needs you"),
+            Self::Done => Some("finished"),
+            Self::Failed => Some("failed"),
+            Self::Quiet | Self::Working => None,
+        }
+    }
+
     /// The state that the row carries, from the heaviest state of its panels: a
     /// question and a failed turn take the mark of a panel that needs the
     /// person, a finished turn the mark of a finished panel, and a working turn
@@ -251,6 +293,32 @@ mod tests {
         assert_eq!(Orchestrator::Working.word(), Some("Working"));
         assert_eq!(Orchestrator::Failed.word(), Some("Failed"));
         assert_eq!(Orchestrator::NeedsYou.word(), Some("Needs you"));
+    }
+
+    #[test]
+    fn the_state_of_a_work_item_keeps_its_machine_word_and_gets_one_word_of_a_row() {
+        assert_eq!(
+            [
+                Orchestrator::Quiet.state(),
+                Orchestrator::NeedsYou.state(),
+                Orchestrator::Failed.state(),
+                Orchestrator::Working.state(),
+                Orchestrator::Done.state(),
+            ],
+            ["idle", "needs_you", "failed", "working", "done"],
+            "the answer of the work items keeps the machine words"
+        );
+        assert_eq!(
+            [
+                Orchestrator::Quiet.row_word(),
+                Orchestrator::NeedsYou.row_word(),
+                Orchestrator::Failed.row_word(),
+                Orchestrator::Working.row_word(),
+                Orchestrator::Done.row_word(),
+            ],
+            [None, Some("needs you"), Some("failed"), Some("working"), Some("done")],
+            "the row of a work item says no word for a workspace that says none, and lower case otherwise"
+        );
     }
 
     #[test]

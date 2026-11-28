@@ -326,7 +326,13 @@ fn the_front_desk_names_no_tool_and_writes_about_a_hundred_and_twenty_words() {
     );
     assert!(prompt.contains("front desk of Horizon"));
     assert!(prompt.contains("work item"));
-    assert!(prompt.contains("no tool"));
+    assert!(prompt.contains("no built-in tool"));
+    for operation in ["work_item_propose", "work_items", "work_item_message"] {
+        assert!(
+            prompt.contains(operation),
+            "the system text names the operation {operation} of the block_panel tool"
+        );
+    }
 }
 
 #[test]

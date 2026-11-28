@@ -21,7 +21,16 @@ workspace, which [has no panel](#when-you-are-the-orchestrator-of-a-workspace).
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`, `presets`,
 `machine_set`, `machine_delete`, `machines`, `secret_names`, `machine_key`,
 `machine_keys`, `delete_machine_key`, `server_status`, `browser_host_status`,
-`server_link_request` and `browser_host_request`.
+`server_link_request`, `browser_host_request`, `work_items`,
+`work_item_propose` and `work_item_message`.
+
+The three work item operations belong to the front desk, the conversation of the
+dock that belongs to no workspace: `work_items` reads the state of the work
+items, `work_item_propose` offers work items that start only at a press of the
+person, and `work_item_message` passes one message of the person to one work
+item. Every other caller gets `caller_unavailable` for them, and the front desk
+gets `caller_unavailable` for every other operation of this tool. The skill
+`horizon-front-desk` holds the rules of that caller.
 
 ## When you are the orchestrator of a workspace
 

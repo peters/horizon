@@ -36,7 +36,8 @@ gradient bar of an agent text, and the chevron of the three chips.
   the folder of that session, so each of those tasks needs the state folder of
   the fixture and two starts of the candidate. Every other task uses a start
   that saves nothing, and such a start writes no conversation. Tasks OD-27 to
-  OD-30 test the front desk, which belongs to no workspace.
+  OD-35 test the front desk, which belongs to no workspace, its work items and its
+  proposals.
 
 ## 3. Safety
 
@@ -821,7 +822,7 @@ The window of the candidate keeps the size of the fixture.
 
 ### 6.28 OD-27 — The start shows the front desk
 
-Tasks OD-27 to OD-30 test the front desk, the conversation of the dock that
+Tasks OD-27 to OD-35 test the front desk, the conversation of the dock that
 belongs to no workspace. Use the start of the fixture of section 5 with the
 stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`.
 
@@ -920,6 +921,89 @@ stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`.
    workspace again.
 
    Result: Each of the two actions does what OD-27 and OD-29 describe.
+
+### 6.32 OD-31 — The front desk proposes work items
+
+Prepare the fixture with the stand-in as the program of every conversation:
+
+```sh
+HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py
+```
+
+1. Write `two tasks` in the field of the front desk and press Enter.
+
+   Result: One box stands in the conversation of the front desk with the caption
+   `The front desk wants to start`, the items `Fix login redirect` with the task
+   `Fix issue 1987. Done means the test passes.` and `Faster cold start` with the
+   task `question: make the cold start faster.`, and the two controls `Start 2
+   work items` and `Not now`. No row of the workspace list is new.
+
+2. Take a picture of the window and name it `fd-proposal`.
+
+   Result: The picture shows the box with its items and its two controls, the
+   answer `Two work items are ready to start.` above it, and no new workspace in
+   the sidebar.
+
+3. Wait 10 seconds and count the rows of the workspace list.
+
+   Result: The count does not change. Nothing starts before the press.
+
+### 6.33 OD-32 — The person starts the work items
+
+1. Repeat step 1 of OD-31, then press `Start 2 work items`.
+
+   Result: Two new rows stand in the workspace list, named `Fix login redirect`
+   and `Faster cold start`. The group `Needs you` stands at the top of the sidebar
+   with `1` and the question of `Faster cold start` with its two answers. The
+   conversation of the front desk reads the notice `You started 2 work items`, one
+   reference row for each new work item with its state word at the right end, the
+   answer `Both are started. I tell you when one needs you.` and the notice
+   `Faster cold start needs you`. The box of the proposal reads `Started` and
+   draws no control. The dock still shows the front desk.
+
+2. Take a picture of the window and name it `fd-started`.
+
+   Result: The picture shows the two new rows of the workspace list, the group
+   `Needs you` with its question, and the four entries of the front desk.
+
+3. Press the reference row of `Faster cold start`.
+
+   Result: The dock shows the workspace `Faster cold start`, and that workspace is
+   the active one.
+
+4. Repeat step 1 with the theme `light`, and take a picture of the window and name
+   it `fd-started-light`.
+
+   Result: The picture shows the same parts in the light palette, with no colour
+   of the box or of the controls that the dark theme alone gives.
+
+### 6.34 OD-33 — The person leaves the proposal
+
+1. Repeat step 1 of OD-31 and press `Not now`.
+
+   Result: The box reads `Not started` and draws no control. The conversation
+   reads the notice `Not started` and the answer `The person did not start the
+   work items of proposal <id>.`, and the workspace list keeps its rows.
+
+2. Take a picture of the window and name it `fd-declined`.
+
+   Result: The picture shows the box with `Not started` and the conversation with
+   the two entries, and no new workspace in the sidebar.
+
+### 6.35 OD-34 — The front desk reads the work items and passes a message
+
+1. Start the work items as in OD-32, then write `what waits` in the field of the
+   front desk and press Enter.
+
+   Result: The front desk answers `2 work items, 1 need you.`
+
+2. Write `tell the login work that the branch is pushed` in the field of the front
+   desk, and write `started the work items` in the field of the workspace `Fix
+   login redirect`.
+
+   Result: The second message is a turn of that workspace. The program of the
+   front desk adds no message of the person to a work item here: this step tests
+   only the read, because the stand-in passes no message of its own.
 
 ## 7. Pass criteria
 
@@ -1027,6 +1111,15 @@ stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`.
   workspaces.
 - The close of Horizon and a switch of the saved session stop the program of the
   front desk.
+- A proposal of the front desk draws the caption, the title, the task and the
+  folder of each item, and the two controls while nobody decided it. A press on
+  `Start 2 work items` makes one workspace for each item, sends the task of each
+  item as the first message of its orchestrator, and names the press in the
+  conversation of the front desk. A press on `Not now` starts nothing. A proposal
+  that a restart loaded as open reads `Not started` and takes no press.
+- A message that the front desk passes to a work item carries the caption `via the
+  front desk` above its bubble, and the conversation of the front desk reads one
+  notice for each change of state of a work item that it started.
 
 ## 8. Cleanup
 

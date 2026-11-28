@@ -30,6 +30,15 @@ use super::{MAX_ENTRIES, MAX_SUMMARY_CHARS, MAX_TEXT_BYTES};
 /// dock keeps.
 pub const MAX_CARD_TITLE_CHARS: usize = 80;
 
+/// The most characters of the title of one item of a proposal.
+pub const MAX_PROPOSAL_TITLE_CHARS: usize = 60;
+/// The most characters of the task of one item of a proposal.
+pub const MAX_PROPOSAL_TASK_CHARS: usize = 4_000;
+/// The most items that one proposal holds.
+pub const MAX_PROPOSAL_ITEMS: usize = 6;
+/// The most characters of the name of a work item that its reference row keeps.
+pub const MAX_WORK_ITEM_NAME_CHARS: usize = 80;
+
 /// The link of one bridge, as the person sees it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Link {
@@ -51,6 +60,34 @@ pub enum ToolState {
     Failed,
 }
 
+/// The state of one proposal of the front desk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalState {
+    /// The person did not decide yet.
+    Open,
+    /// The person started the work items of the proposal.
+    Started,
+    /// The person did not start the work items of the proposal.
+    Declined,
+    /// A newer proposal took the place of this one while it was open.
+    Replaced,
+}
+
+/// One item of a proposal: the work item that the person may start.
+///
+/// The title, the task and the folder are text of a program. Horizon holds them
+/// in the conversation only, and it makes a workspace from them when the person
+/// presses the control that starts the proposal.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalItem {
+    pub title: String,
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
 /// One entry of a conversation.
 ///
 /// The stored form of an entry is one JSON object with a `kind` field, which
@@ -58,8 +95,15 @@ pub enum ToolState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Entry {
-    /// A message of the person.
-    Person { text: String },
+    /// A message of the person. `via_front_desk` is true for the message that the
+    /// front desk passed to the orchestrator of a work item, and the dock draws
+    /// the caption of the front desk above that bubble. An entry of an older
+    /// file holds no such field and loads with `false`.
+    Person {
+        text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        via_front_desk: bool,
+    },
     /// The whole text of one message of the agent so far.
     Agent { message_id: String, text: String },
     /// One tool call of the agent.
@@ -80,6 +124,19 @@ pub enum Entry {
     /// brings the card into view, so the person reads which card the program
     /// speaks about. A card that is gone reads as a closed row.
     Card { panel: String, title: String },
+    /// A proposal of the front desk: the work items that its program read in the
+    /// words of the person, which start only when the person presses the control
+    /// of the row. `id` is the id that Horizon made for the proposal.
+    Proposal {
+        id: String,
+        items: Vec<ProposalItem>,
+        state: ProposalState,
+    },
+    /// A reference to one work item that the person started from a proposal: the
+    /// local id of its workspace and its name. The dock draws one row that shows
+    /// that workspace, so the person reads which work item the front desk speaks
+    /// about. A work item that left the board reads as a row without a press.
+    WorkItem { work_item: String, name: String },
 }
 
 /// The limit of the account that the program reported.
@@ -192,11 +249,19 @@ impl Conversation {
 
     /// Appends one message of the person and marks the conversation busy.
     pub fn person_said(&mut self, text: &str) {
+        self.person_said_via(text, false);
+    }
+
+    /// Appends one message of the person and marks the conversation busy.
+    /// `via_front_desk` marks the message that the front desk passed to this
+    /// conversation: the dock draws the caption of the front desk above it.
+    pub fn person_said_via(&mut self, text: &str, via_front_desk: bool) {
         let snapshot = Arc::make_mut(&mut self.snapshot);
         snapshot.version += 1;
         snapshot.busy = true;
         snapshot.entries.push(Entry::Person {
             text: cut_bytes(text, MAX_TEXT_BYTES).to_owned(),
+            via_front_desk,
         });
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
     }
@@ -226,6 +291,16 @@ impl Conversation {
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
     }
 
+    /// Marks the conversation busy for a turn that Horizon started with one line of
+    /// its own, such as the line that names a proposal that the person started. The
+    /// turn holds no text of the person, so it adds no entry: the notice of such a
+    /// turn, when there is one, is the words of its caller.
+    pub fn turn_started(&mut self) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.busy = true;
+    }
+
     /// Adds the reference row of the card `panel`, or moves the row that the
     /// card already has to its heading now. One card keeps one row, so a second
     /// create or an update of the same card changes that row and adds none.
@@ -247,6 +322,81 @@ impl Conversation {
             None => snapshot.entries.push(Entry::Card {
                 panel: panel.to_owned(),
                 title,
+            }),
+        }
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Appends one proposal of the front desk, and marks every older proposal
+    /// that is still open as replaced. One conversation holds at most one open
+    /// proposal, because the press of the person decides one of them. The title
+    /// and the task of an item are text of a program, so they are cut here.
+    pub fn proposal(&mut self, id: &str, items: &[ProposalItem]) {
+        let items: Vec<ProposalItem> = items
+            .iter()
+            .take(MAX_PROPOSAL_ITEMS)
+            .map(|item| ProposalItem {
+                title: tidy(&item.title, MAX_PROPOSAL_TITLE_CHARS),
+                task: tidy(&item.task, MAX_PROPOSAL_TASK_CHARS),
+                folder: item.folder.clone(),
+            })
+            .collect();
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        for entry in &mut snapshot.entries {
+            if let Entry::Proposal { state, .. } = entry
+                && *state == ProposalState::Open
+            {
+                *state = ProposalState::Replaced;
+            }
+        }
+        snapshot.entries.push(Entry::Proposal {
+            id: id.to_owned(),
+            items,
+            state: ProposalState::Open,
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Moves the proposal `id` to `state`. A proposal that this conversation does
+    /// not hold changes nothing.
+    pub fn proposal_state(&mut self, id: &str, state: ProposalState) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        let Some(entry) = snapshot.entries.iter_mut().find_map(|entry| match entry {
+            Entry::Proposal {
+                id: shown,
+                state: shown_state,
+                ..
+            } if shown == id => Some(shown_state),
+            _ => None,
+        }) else {
+            return;
+        };
+        *entry = state;
+        snapshot.version += 1;
+    }
+
+    /// Adds the reference row of the work item `work_item`, or moves the row that
+    /// it already has to its name now. One work item keeps one row, as a card
+    /// does. The name is text that Horizon makes from the title of a proposal, so
+    /// it is cut here.
+    pub fn work_item_row(&mut self, work_item: &str, name: &str) {
+        let name = tidy(name, MAX_WORK_ITEM_NAME_CHARS);
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        let found = snapshot
+            .entries
+            .iter()
+            .position(|entry| matches!(entry, Entry::WorkItem { work_item: shown, .. } if shown == work_item));
+        match found {
+            Some(index) => {
+                if let Entry::WorkItem { name: shown, .. } = &mut snapshot.entries[index] {
+                    *shown = name;
+                }
+            }
+            None => snapshot.entries.push(Entry::WorkItem {
+                work_item: work_item.to_owned(),
+                name,
             }),
         }
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);

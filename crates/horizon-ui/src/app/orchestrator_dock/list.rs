@@ -5,7 +5,10 @@
 //! bottom while the person has not scrolled up (`ScrollArea::stick_to_bottom`).
 //! One entry takes one row: a message of the person at the right, a text of the
 //! agent at the left, one tool call, or a notice of Horizon centred over two
-//! lines.
+//! lines. A reference row of a card and a reference row of a work item take a row
+//! that the person presses to bring that panel or that workspace into view, and
+//! the proposal of the front desk takes the row of the two controls that start it
+//! or leave it.
 //!
 //! Every text of the program is untrusted, so this module draws it as plain text
 //! only: no markdown, no link and no path becomes active. One frame lays out at
@@ -18,19 +21,104 @@ use egui::{
     pos2, vec2,
 };
 use egui::{Color32, CursorIcon};
-use horizon_core::agent_bridge::{Entry, ToolState};
+use horizon_core::agent_bridge::{Entry, ProposalState, ToolState};
 
+use crate::app::sidebar::rows::paint_workspace_tile;
 use crate::loading_spinner;
 use crate::theme;
 use crate::typeface::Weight;
+use horizon_core::Board;
 
+use super::OrchestratorDock;
+use super::proposal;
 use super::text;
+
+/// What a press on one row of the list asks the frame to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Press {
+    /// Bring the card of this reference row into view.
+    Card(String),
+    /// Show the workspace of this work item, and make it the active one.
+    WorkItem(String),
+    /// Start the work items of this proposal, or leave them.
+    Proposal { id: String, choice: proposal::Choice },
+}
+
+/// The facts that the reference rows of the list read of the board and of the
+/// dock, gathered once for the frame that draws them.
+#[derive(Default)]
+pub(super) struct Refs {
+    /// The reference row of each work item of the conversation.
+    work_items: Vec<WorkItemRow>,
+    /// The proposals that the conversation loaded from its file: the program that
+    /// proposed them is gone, so they take no press.
+    loaded: Vec<String>,
+}
+
+/// One reference row of a work item: its name, the state word of its workspace
+/// while the board holds it, and the mark of that workspace.
+#[derive(Clone, Debug)]
+pub(super) struct WorkItemRow {
+    work_item: String,
+    name: String,
+    /// Whether the board holds the workspace of this work item.
+    held: bool,
+    /// The state word of the work item, or `None` when the board holds no
+    /// workspace of it, or when that workspace says no word.
+    word: Option<&'static str>,
+    accent: Color32,
+}
+
+impl Refs {
+    /// The facts of the reference rows of the conversation that the dock holds of
+    /// `local_id` on `board`.
+    pub(super) fn build(board: &Board, dock: &OrchestratorDock, local_id: &str) -> Self {
+        let mut refs = Self::default();
+        let entries = dock.entries_of(local_id);
+        let loaded = dock.loaded_entries(local_id);
+        for (index, entry) in entries.entries.iter().enumerate() {
+            match entry {
+                Entry::WorkItem { work_item, name } => {
+                    let workspace = board.workspace_id_by_local_id(work_item.as_str());
+                    let accent = workspace
+                        .and_then(|workspace| board.workspace(workspace))
+                        .map_or_else(theme::FG_DIM, |workspace| theme::workspace_accent(workspace.color_idx));
+                    refs.work_items.push(WorkItemRow {
+                        work_item: work_item.clone(),
+                        name: name.clone(),
+                        held: workspace.is_some(),
+                        word: workspace.and_then(|_| dock.work_item_word(work_item.as_str())),
+                        accent,
+                    });
+                }
+                Entry::Proposal { id, state, .. } if *state == ProposalState::Open && index < loaded => {
+                    refs.loaded.push(id.clone());
+                }
+                _ => {}
+            }
+        }
+        refs
+    }
+
+    /// The reference row of `work_item`, when the conversation holds one.
+    fn work_item(&self, work_item: &str) -> Option<&WorkItemRow> {
+        self.work_items.iter().find(|row| row.work_item == work_item)
+    }
+
+    /// Whether the conversation loaded the proposal `id` from its file.
+    fn loaded_open(&self, id: &str) -> bool {
+        self.loaded.iter().any(|held| held == id)
+    }
+}
 
 /// The padding of the list at each side, above the first entry and under the
 /// last one.
-const LIST_PADDING: f32 = 16.0;
+pub(super) const LIST_PADDING: f32 = 16.0;
 /// The air between two entries.
-const ENTRY_GAP: f32 = 16.0;
+pub(super) const ENTRY_GAP: f32 = 16.0;
+/// The air between two reference rows that follow each other: the rows of one
+/// group belong together.
+pub(super) const REF_GAP: f32 = 6.0;
 /// The air between two tool rows that follow each other.
 const TOOL_GAP: f32 = 4.0;
 /// The entries that one frame lays out.
@@ -39,7 +127,7 @@ const MAX_DRAWN_ENTRIES: usize = 200;
 /// The share of the list width that a bubble of the person takes at most.
 const PERSON_SHARE: f32 = 0.86;
 const BUBBLE_RADIUS: u8 = 12;
-const BUBBLE_PADDING_X: f32 = 12.0;
+pub(super) const BUBBLE_PADDING_X: f32 = 12.0;
 const BUBBLE_PADDING_Y: f32 = 9.0;
 
 /// The share of the list width that a text of the agent takes at most.
@@ -66,18 +154,18 @@ const AGENT_BAR_END_ACCENT: usize = 6;
 
 /// The air between a reference row of a card and the left edge of the list: the
 /// indent of a tool row.
-const CARD_INDENT: f32 = TOOL_INDENT;
+pub(super) const CARD_INDENT: f32 = TOOL_INDENT;
 /// The share of the list width that a reference row of a card takes at most.
 const CARD_SHARE: f32 = 0.96;
 /// The height of one reference row.
-const CARD_HEIGHT: f32 = 34.0;
-const CARD_RADIUS: u8 = 10;
+pub(super) const CARD_HEIGHT: f32 = 34.0;
+pub(super) const CARD_RADIUS: u8 = 10;
 /// The alpha of the fill of a row whose card stands on the canvas.
 const CARD_FILL_ALPHA: u8 = 18;
 /// The alpha of its outline.
 const CARD_OUTLINE_ALPHA: u8 = 115;
 /// The padding of a row at its left and at its right.
-const CARD_PADDING_X: f32 = 10.0;
+pub(super) const CARD_PADDING_X: f32 = 10.0;
 /// The size of the glyph of a card: a small card at the left of the row.
 const CARD_GLYPH: [f32; 2] = [22.0, 16.0];
 const CARD_GLYPH_RADIUS: u8 = 4;
@@ -87,13 +175,23 @@ const CARD_GLYPH_LINE_DROP: f32 = 3.0;
 /// The air between that line and the two sides of the glyph.
 const CARD_GLYPH_LINE_INSET: f32 = 4.0;
 /// The air between the glyph and the heading of the card.
-const CARD_GAP_AFTER_GLYPH: f32 = 10.0;
+pub(super) const CARD_GAP_AFTER_GLYPH: f32 = 10.0;
 const CARD_TITLE_SIZE: f32 = 12.5;
 const CARD_STATE_SIZE: f32 = 11.0;
 /// The right end of a row whose card stands on the canvas.
 const CARD_STATE: &str = "on the canvas";
 /// The right end of a row whose card left the board.
 const CARD_STATE_CLOSED: &str = "closed";
+
+/// The side of the mark of the workspace of a work item.
+const WORK_ITEM_TILE: f32 = 20.0;
+/// The size of the state word at the right end of a row of a work item.
+const WORK_ITEM_STATE_SIZE: f32 = 11.0;
+/// The caption above a message of the person that the front desk passed.
+const VIA_FRONT_DESK: &str = "via the front desk";
+const VIA_SIZE: f32 = 10.5;
+/// The air between the caption of a passed message and its bubble.
+const VIA_GAP: f32 = 2.0;
 
 const NOTICE_FONT_SIZE: f32 = 10.5;
 const NOTICE_GAP: f32 = 8.0;
@@ -109,19 +207,20 @@ const WORKING_SIZE: f32 = 12.0;
 /// composer, with the row of `working` under them while a turn waits for the
 /// first text of the agent. `local_id` names the workspace of the conversation:
 /// the place of the list belongs to that workspace, so the scroll of one
-/// conversation never shows in another. `card_present` says whether the board
-/// still holds a card of a reference row.
+/// conversation never shows in another. `refs` holds the state of each work item
+/// and the proposals that came from a file, and `card_present` says whether the
+/// board still holds a card of a reference row.
 ///
-/// It answers the card whose reference row the person pressed, so the frame
-/// brings that card into view.
+/// It answers the row that the person pressed, so the frame acts on it.
 pub(super) fn render(
     ui: &mut Ui,
     body: Rect,
     local_id: &str,
     entries: &[Entry],
     working: bool,
+    refs: &Refs,
     card_present: &dyn Fn(&str) -> bool,
-) -> Option<String> {
+) -> Option<Press> {
     let width = (body.width() - 2.0 * LIST_PADDING).max(0.0);
     if width <= 0.0 || body.height() <= 0.0 {
         return None;
@@ -147,10 +246,8 @@ pub(super) fn render(
             let mut previous: Option<&Entry> = None;
             for entry in &entries[skipped..] {
                 ui.add_space(gap(previous, entry));
-                if entry_row(ui, entry, width, card_present)
-                    && let Entry::Card { panel, .. } = entry
-                {
-                    picked = Some(panel.clone());
+                if let Some(press) = entry_row(ui, entry, width, refs, card_present) {
+                    picked = Some(press);
                 }
                 previous = Some(entry);
             }
@@ -175,13 +272,19 @@ pub(super) fn waits_for_text(entries: &[Entry], busy: bool) -> bool {
 }
 
 /// The air above `entry`, which is wider between two entries than between two
-/// tool rows that follow each other.
+/// tool rows or two reference rows that follow each other.
 fn gap(previous: Option<&Entry>, entry: &Entry) -> f32 {
     match previous {
         None => 0.0,
         Some(Entry::Tool { .. }) if matches!(entry, Entry::Tool { .. }) => TOOL_GAP,
+        Some(previous) if is_reference(previous) && is_reference(entry) => REF_GAP,
         Some(_) => ENTRY_GAP,
     }
+}
+
+/// Whether `entry` takes the row of a reference to a card or to a work item.
+fn is_reference(entry: &Entry) -> bool {
+    matches!(entry, Entry::Card { .. } | Entry::WorkItem { .. })
 }
 
 /// The text of the notice of the entries that one frame does not draw.
@@ -189,17 +292,23 @@ fn skipped_notice(skipped: usize) -> String {
     format!("{skipped} earlier entries are not drawn")
 }
 
-/// Draws one entry of the list in one row of `width` points, and answers whether
-/// the person pressed it.
-fn entry_row(ui: &mut Ui, entry: &Entry, width: f32, card_present: &dyn Fn(&str) -> bool) -> bool {
+/// Draws one entry of the list in one row of `width` points, and answers the row
+/// that the person pressed.
+fn entry_row(
+    ui: &mut Ui,
+    entry: &Entry,
+    width: f32,
+    refs: &Refs,
+    card_present: &dyn Fn(&str) -> bool,
+) -> Option<Press> {
     match entry {
-        Entry::Person { text } => {
-            person_row(ui, text, width);
-            false
+        Entry::Person { text, via_front_desk } => {
+            person_row(ui, text, *via_front_desk, width);
+            None
         }
         Entry::Agent { text, .. } => {
             agent_row(ui, text, width);
-            false
+            None
         }
         Entry::Tool {
             name,
@@ -209,14 +318,119 @@ fn entry_row(ui: &mut Ui, entry: &Entry, width: f32, card_present: &dyn Fn(&str)
             ..
         } => {
             tool_row(ui, name, summary, result.as_deref(), *state, width);
-            false
+            None
         }
         Entry::Notice { text } => {
             notice_row(ui, text, width);
-            false
+            None
         }
-        Entry::Card { panel, title } => card_row(ui, panel, title, width, card_present(panel)),
+        Entry::Card { panel, title } => {
+            card_row(ui, panel, title, width, card_present(panel)).then(|| Press::Card(panel.clone()))
+        }
+        Entry::WorkItem { work_item, .. } => {
+            if let Some(row) = refs.work_item(work_item) {
+                work_item_row(ui, row, width).then(|| Press::WorkItem(work_item.clone()))
+            } else {
+                // A row of a work item that this frame gathered no fact of still
+                // takes its height, so the list does not move under the person.
+                missing_work_item_row(ui, width);
+                None
+            }
+        }
+        Entry::Proposal { id, items, state } => proposal::render(ui, id, items, *state, width, refs.loaded_open(id))
+            .map(|choice| Press::Proposal { id: id.clone(), choice }),
     }
+}
+
+/// One reference row of a work item that the person started from a proposal: the
+/// mark of its workspace, its name and the state word of that work item. A work
+/// item that the board no longer holds reads dim and takes no press, as the row of
+/// a card that is gone does.
+fn work_item_row(ui: &mut Ui, item: &WorkItemRow, width: f32) -> bool {
+    let WorkItemRow {
+        work_item,
+        name,
+        held,
+        word,
+        accent,
+    } = item;
+    let row_width = (width * CARD_SHARE).min(width - CARD_INDENT).max(1.0);
+    let (row, _) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
+    let rect = Rect::from_min_size(pos2(row.min.x + CARD_INDENT, row.min.y), vec2(row_width, row.height()));
+    let present = *held;
+    let sense = if present { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(
+        rect,
+        ui.make_persistent_id(("orchestrator_dock_work_item", work_item)),
+        sense,
+    );
+    let hovered = present && response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let word_galley = word.map(|word| {
+        text::line(
+            ui,
+            word,
+            WORK_ITEM_STATE_SIZE,
+            Weight::Regular,
+            theme::FG_DIM(),
+            row_width,
+        )
+    });
+    let tile_left = rect.min.x + CARD_PADDING_X;
+    let name_left = tile_left + WORK_ITEM_TILE + CARD_GAP_AFTER_GLYPH;
+    let word_width = word_galley
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().x + CARD_GAP_AFTER_GLYPH);
+    let name_width = (rect.max.x - CARD_PADDING_X - word_width - name_left).max(1.0);
+    let name_color = if present { theme::FG() } else { theme::FG_DIM() };
+    let name_galley = text::line(ui, name, CARD_TITLE_SIZE, Weight::Medium, name_color, name_width);
+    let (fill, outline) = if present {
+        let outline = if hovered {
+            theme::ACCENT()
+        } else {
+            theme::alpha(theme::ACCENT(), CARD_OUTLINE_ALPHA)
+        };
+        (theme::alpha(theme::ACCENT(), CARD_FILL_ALPHA), outline)
+    } else {
+        (Color32::TRANSPARENT, theme::BORDER_SUBTLE())
+    };
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        CARD_RADIUS,
+        fill,
+        Stroke::new(1.0_f32, outline),
+        StrokeKind::Inside,
+    );
+    let tile = Rect::from_min_size(
+        pos2(tile_left, rect.center().y - WORK_ITEM_TILE / 2.0),
+        vec2(WORK_ITEM_TILE, WORK_ITEM_TILE),
+    );
+    paint_workspace_tile(ui, tile, name, *accent, present);
+    painter.galley(
+        pos2(name_left, rect.center().y - name_galley.size().y / 2.0),
+        name_galley,
+        name_color,
+    );
+    if let Some(word_galley) = word_galley {
+        painter.galley(
+            pos2(
+                rect.max.x - CARD_PADDING_X - word_galley.size().x,
+                rect.center().y - word_galley.size().y / 2.0,
+            ),
+            word_galley,
+            theme::FG_DIM(),
+        );
+    }
+    present && response.clicked()
+}
+
+/// The empty row of a work item that the facts of this frame do not hold, so the
+/// list keeps its height. It draws nothing and takes no press.
+fn missing_work_item_row(ui: &mut Ui, width: f32) {
+    let _ = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
 }
 
 /// One reference row of a card that the program drew: the glyph of a card, its
@@ -292,8 +506,9 @@ fn card_row(ui: &mut Ui, panel: &str, title: &str, width: f32, present: bool) ->
     present && response.clicked()
 }
 
-/// One message of the person: a bubble at the right of the list.
-fn person_row(ui: &mut Ui, text: &str, width: f32) {
+/// One message of the person: a bubble at the right of the list, with the caption
+/// of the front desk above it when the front desk passed the message.
+fn person_row(ui: &mut Ui, text: &str, via_front_desk: bool, width: f32) {
     let text_width = (width * PERSON_SHARE - 2.0 * BUBBLE_PADDING_X).max(1.0);
     let galley = text::paragraph(
         ui,
@@ -308,8 +523,15 @@ fn person_row(ui: &mut Ui, text: &str, width: f32) {
         galley.size().x + 2.0 * BUBBLE_PADDING_X,
         galley.size().y + 2.0 * BUBBLE_PADDING_Y,
     );
-    let (row, _) = ui.allocate_exact_size(vec2(width, bubble.y), Sense::hover());
-    let rect = Rect::from_min_size(pos2(row.max.x - bubble.x, row.min.y), bubble);
+    let caption =
+        via_front_desk.then(|| text::line(ui, VIA_FRONT_DESK, VIA_SIZE, Weight::Regular, theme::FG_DIM(), width));
+    let caption_height = caption.as_ref().map_or(0.0, |caption| caption.size().y + VIA_GAP);
+    let (row, _) = ui.allocate_exact_size(vec2(width, bubble.y + caption_height), Sense::hover());
+    let rect = Rect::from_min_size(pos2(row.max.x - bubble.x, row.min.y + caption_height), bubble);
+    if let Some(caption) = caption {
+        ui.painter()
+            .galley(pos2(rect.max.x - caption.size().x, row.min.y), caption, theme::FG_DIM());
+    }
     let painter = ui.painter();
     painter.rect(
         rect,
@@ -486,7 +708,10 @@ mod tests {
     use super::{MAX_DRAWN_ENTRIES, skipped_notice, waits_for_text};
 
     fn person(text: &str) -> Entry {
-        Entry::Person { text: text.to_owned() }
+        Entry::Person {
+            text: text.to_owned(),
+            via_front_desk: false,
+        }
     }
 
     fn agent(text: &str) -> Entry {

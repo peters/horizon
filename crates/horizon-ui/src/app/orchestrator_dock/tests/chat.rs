@@ -282,7 +282,8 @@ fn enter_sends_the_draft_and_shift_enter_makes_a_new_line() {
     assert_eq!(
         entries_of(window.app(), "chat"),
         vec![Entry::Person {
-            text: "hello there".to_owned()
+            text: "hello there".to_owned(),
+            via_front_desk: false
         }],
         "the message of the person, without the new line that it carried"
     );

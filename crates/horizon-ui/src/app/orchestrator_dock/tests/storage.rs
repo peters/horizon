@@ -285,7 +285,7 @@ fn entries_of(app: &HorizonApp) -> Vec<Entry> {
 fn answered(entries: &[Entry]) -> bool {
     let person = entries
         .iter()
-        .any(|entry| matches!(entry, Entry::Person { text } if text == "alpha"));
+        .any(|entry| matches!(entry, Entry::Person { text, .. } if text == "alpha"));
     let agent = entries.iter().any(|entry| matches!(entry, Entry::Agent { .. }));
     person && agent
 }

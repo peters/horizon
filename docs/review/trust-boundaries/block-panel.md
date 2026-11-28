@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/app/sidebar/inbox.rs,crates/horizon-ui/src/app/sidebar/inbox/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-control/src/manifest/block_proposal.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/app/sidebar/inbox.rs,crates/horizon-ui/src/app/sidebar/inbox/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -569,6 +569,48 @@ The program that the orchestrator dock runs speaks for one workspace. Its actor 
   saved document at its revision. Its owner is the persisted actor of the agent
   panel, so an agent panel that is not restored cannot change the card; a person
   can still close it in the UI.
+
+## The front desk proposes work items, and one press makes them
+
+The front desk is the conversation of the dock that belongs to no workspace. Its
+actor reaches three operations of `block_panel`: `work_items`,
+`work_item_propose` and `work_item_message`. Every other operation answers
+`caller_unavailable` for it, and the three answer `caller_unavailable` for every
+other caller.
+
+**What is untrusted.** The title, the task and the folder of one item of a
+proposal are text of a program. The title becomes the name of a workspace, the
+task becomes the first message of the orchestrator of that workspace, and the
+folder becomes the folder that the orchestrator runs in.
+
+**What the change guarantees.**
+
+- The host checks the items before the conversation holds them: one to six items,
+  a title of 1 to 60 characters on one line, a task of 1 to 4 000 characters, and
+  an absolute folder of at most 1 024 bytes without a control character. A request
+  outside the bounds is refused whole as `invalid_request`, and it names the item
+  and the field.
+- The person reads the title, the first lines of the task and the folder of each
+  item on the row of the proposal before pressing anything. A press of the person
+  is the only path that makes a workspace.
+- The folder is used only after that press, and only as the folder of the new
+  workspace: the worker of the dock checks `is_dir` once, and a folder that is not
+  a directory of this computer becomes the folder of no workspace. No frame reads
+  a directory.
+- The text of the items enters the conversation of the front desk through
+  `Conversation::proposal`, which cuts the title and the task again, and the dock
+  draws every text as plain text, with each control character replaced.
+- `work_items` answers text of other programs, cut to 160 and 200 characters, and
+  no file, no path and no process. It holds no value of a secret.
+- `work_item_message` passes one message of the person to one work item with the
+  caption `via the front desk`, at most one message for each work item in ten
+  seconds, and nothing at all while that conversation runs a turn.
+
+**What it does not guarantee.** That the front desk repeats the person
+faithfully. One program reads the words of the person and writes the items, and
+it can read the text of another work item and pass a message to it. The caption
+says that the front desk passed the message; it does not say that the message is
+true.
 
 ## An agent reads names, and no value
 

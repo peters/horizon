@@ -613,8 +613,11 @@ when it names one of those kinds.
   dock shows: the back control and the tile of a workspace, and no mark for the
   front desk.
   `list.rs` draws the entries of the conversation: the bubble of the person, the
-  text of the agent, one row of a tool and one notice, and it bounds what one
-  frame lays out. `composer.rs` draws the field of the draft of each conversation,
+  text of the agent, one row of a tool, one notice, the reference row of a card
+  and of a work item, and it bounds what one frame lays out. `proposal.rs` draws
+  the row of a proposal of the front desk with its two controls, holds the check of
+  the folders of a proposal that the worker runs after the press, and states the
+  state line of a proposal that nobody decides. `composer.rs` draws the field of the draft of each conversation,
   the send or stop control and, for a workspace alone, the three chips, and it
   takes the plain Enter while the field holds the keys. `empty.rs` draws the
   empty state and its example rows of the two forms. `front_desk.rs` holds the one
@@ -661,6 +664,9 @@ when it names one of those kinds.
   answer. The checks that settle a caller and the workspace of its cards are
   `block_requests/caller.rs`: `request_caller` maps an actor to `CardCaller`, and
   `owner_workspace` answers the workspace of the cards of one owner.
+  `block_requests/work_items.rs` holds the three operations of the front desk: the
+  read of the work items, the proposal that starts nothing, and the message that
+  one work item reads with the caption of the front desk.
 
 - `app::orchestrator_dock`, `app::block_requests` and `app::block_clicks` share
   one rule with the card path: the orchestrator of a workspace is a card caller
@@ -672,6 +678,14 @@ when it names one of those kinds.
   operations that need the panel of a caller are refused there with the one
   refusal of a caller without a panel, so a new operation of `block_panel` states
   in one match arm whether an orchestrator reaches it.
+
+- The front desk is the third caller of `block_panel`, and it is no card caller:
+  `request_caller` answers `CardCaller::FrontDesk` only while the dock runs the
+  program of the front desk, `block_requests.rs` sends that caller to
+  `answer_front_desk` before the card dispatch, and that one function answers the
+  three operations of the work items and refuses every other operation. A new
+  operation of `block_panel` therefore reaches the front desk only when a person
+  adds it to that function.
 
 ## File Size Policy
 

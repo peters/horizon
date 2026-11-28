@@ -27,7 +27,7 @@ use std::sync::Arc;
 use horizon_core::OrchestratorConversationState;
 use horizon_core::agent_bridge::{
     Bridge, BridgeEvent, BridgeIdentity, ClaudeCodec, Conversation, ConversationSnapshot, Entry, ProgramSpec,
-    SessionChoice,
+    ProposalItem, ProposalState, SessionChoice,
 };
 
 use super::storage::Storage;
@@ -118,6 +118,12 @@ pub(super) struct Session {
     /// Whether the bridge of this conversation resumed a stored session and no
     /// turn of it ended well yet.
     resume_watch: bool,
+    /// The lines of Horizon that wait for the end of the turn that runs, such as
+    /// the line that names the proposal that the person started.
+    system_waiting: Vec<String>,
+    /// The entries of the front of the conversation that the file brought back on
+    /// this run, so a row of an earlier run reads as a row of an earlier run.
+    loaded_entries: usize,
     /// The stored file of this conversation, and the jobs that change it.
     storage: Storage,
 }
@@ -134,6 +140,8 @@ impl Session {
             generation: 0,
             limit_noticed: false,
             resume_watch: false,
+            system_waiting: Vec::new(),
+            loaded_entries: 0,
             storage: Storage::default(),
         }
     }
@@ -180,7 +188,15 @@ impl Session {
     /// Applies the entries that the worker read from the file: they stand above
     /// the entries that this run already holds.
     pub(super) fn loaded(&mut self, entries: Vec<Entry>) {
+        self.loaded_entries = self.loaded_entries.saturating_add(entries.len());
         self.storage.loaded(&mut self.conversation, entries);
+    }
+
+    /// The entries of the front of the conversation that the file brought back on
+    /// this run. An entry at an index below this count is an entry of an earlier
+    /// run, so a proposal that it holds has no program behind it now.
+    pub(super) fn loaded_entries(&self) -> usize {
+        self.loaded_entries
     }
 
     /// Whether a load of the stored conversation of this workspace waits on the
@@ -203,6 +219,31 @@ impl Session {
     /// Whether the start of a bridge waits on the worker of the dock.
     pub(super) fn is_starting(&self) -> bool {
         self.phase == Phase::Starting
+    }
+
+    /// The turn of this conversation, as the sidebar reads it: whether a turn runs
+    /// and how many turns failed.
+    pub(super) fn turn_snapshot(&self) -> horizon_core::workspace_list::Turn {
+        let snapshot = self.snapshot();
+        horizon_core::workspace_list::Turn {
+            busy: snapshot.busy,
+            failed: snapshot
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, Entry::Notice { text } if text == super::TURN_FAILED_LINE))
+                .count(),
+        }
+    }
+
+    /// Ends the turn of this conversation, for a test that reads the state of a
+    /// conversation without a program behind it.
+    #[cfg(test)]
+    pub(super) fn end_turn_for_test(&mut self) {
+        self.conversation.apply(BridgeEvent::TurnEnded {
+            failed: false,
+            duration_ms: None,
+            cost_usd: None,
+        });
     }
 
     /// The state of this conversation, which the chip of the header names.
@@ -230,8 +271,10 @@ impl Session {
 
     /// Adds one message of the person, and sends it to the bridge of this
     /// conversation when one runs. The answer names what the frame does next.
-    pub(super) fn say(&mut self, text: &str) -> Said {
-        self.conversation.person_said(text);
+    /// `via_front_desk` marks a message that the front desk passed: the dock draws
+    /// the caption of the front desk above that bubble.
+    pub(super) fn say_via(&mut self, text: &str, via_front_desk: bool) -> Said {
+        self.conversation.person_said_via(text, via_front_desk);
         let Some(bridge) = self.bridge.take() else {
             self.waiting.push(text.to_owned());
             return Said::Start;
@@ -271,6 +314,105 @@ impl Session {
     /// which the dock draws under the text of the program.
     pub(super) fn card_row(&mut self, panel: &str, title: &str) {
         self.conversation.card_drawn(panel, title);
+    }
+
+    /// Adds the proposal `id` to this conversation, and replaces the proposal that
+    /// was still open.
+    pub(super) fn proposal(&mut self, id: &str, items: &[ProposalItem]) {
+        self.conversation.proposal(id, items);
+    }
+
+    /// Moves the proposal `id` to `state`, and answers whether this conversation
+    /// held it.
+    pub(super) fn proposal_state(&mut self, id: &str, state: ProposalState) -> bool {
+        if !self
+            .snapshot()
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Proposal { id: shown, .. } if shown == id))
+        {
+            return false;
+        }
+        self.conversation.proposal_state(id, state);
+        true
+    }
+
+    /// The items of the proposal `id`, while it is open.
+    pub(super) fn open_proposal(&self, id: &str) -> Option<Vec<ProposalItem>> {
+        self.snapshot().entries.iter().find_map(|entry| match entry {
+            Entry::Proposal {
+                id: shown,
+                items,
+                state: ProposalState::Open,
+            } if shown == id => Some(items.clone()),
+            _ => None,
+        })
+    }
+
+    /// Adds the reference row of the work item `work_item` to this conversation.
+    pub(super) fn work_item_row(&mut self, work_item: &str, name: &str) {
+        self.conversation.work_item_row(work_item, name);
+    }
+
+    /// The last text of the program of this conversation, cut to `max` characters
+    /// and without a control character, or `None` when it said nothing yet.
+    pub(super) fn last_text(&self, max: usize) -> Option<String> {
+        let snapshot = self.snapshot();
+        let text = snapshot.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Agent { text, .. } => Some(text.as_str()),
+            _ => None,
+        })?;
+        let cut: String = text
+            .chars()
+            .map(|character| if character.is_control() { ' ' } else { character })
+            .take(max)
+            .collect();
+        (!cut.trim().is_empty()).then_some(cut)
+    }
+
+    /// Sends one line of Horizon to the program of this conversation as a turn of
+    /// its own, and answers whether it went out now. A conversation that runs a turn
+    /// keeps the line until that turn ends, so the words of Horizon never cut into
+    /// the answer of the program; a conversation without a bridge holds it too.
+    pub(super) fn system_message(&mut self, line: &str) -> bool {
+        if self.busy() || !self.has_bridge() {
+            self.system_waiting.push(line.to_owned());
+            return false;
+        }
+        self.send_system_now(line)
+    }
+
+    /// Sends the line of Horizon that waits, when no turn of this conversation
+    /// runs. It answers whether a line went out.
+    pub(super) fn flush_system(&mut self) -> bool {
+        if self.system_waiting.is_empty() || self.busy() || !self.has_bridge() {
+            return false;
+        }
+        let line = self.system_waiting.remove(0);
+        if self.send_system_now(&line) {
+            return true;
+        }
+        self.system_waiting.insert(0, line);
+        false
+    }
+
+    /// Sends one line of Horizon into the bridge that runs, and marks the
+    /// conversation busy for it. The line is no message of the person, so it adds
+    /// no [`Entry::Person`] and no notice: the words of Horizon that name such a
+    /// turn are the words of its caller.
+    fn send_system_now(&mut self, line: &str) -> bool {
+        let Some(bridge) = self.bridge.take() else {
+            return false;
+        };
+        if bridge.send(line.to_owned()).is_err() {
+            // The program took no line, so its end arrives with the events of this
+            // bridge: no state of this conversation claims a turn that did not start.
+            self.bridge = Some(bridge);
+            return false;
+        }
+        self.bridge = Some(bridge);
+        self.conversation.turn_started();
+        true
     }
 
     /// Takes the request of one start, and makes every start in flight stale.
@@ -608,7 +750,7 @@ while IFS= read -r line; do :; done
     #[test]
     fn a_program_that_cannot_start_names_the_error_of_the_system_and_asks_again_later() {
         let mut session = Session::new();
-        session.say("alpha");
+        session.say_via("alpha", false);
         let start = session.begin_start();
         let error = failed_start(&start);
         assert!(session.adopt(start.generation, Some(Err(error))).is_none());
@@ -621,7 +763,7 @@ while IFS= read -r line; do :; done
         assert!(!snapshot.busy, "the turn of that message ended with the failure");
         assert_eq!(session.phase(), Phase::Ended);
         // The next message asks for one more start, and no message waits twice.
-        assert!(matches!(session.say("bravo"), Said::Start));
+        assert!(matches!(session.say_via("bravo", false), Said::Start));
         let again = session.begin_start();
         assert_eq!(again.generation, start.generation + 1);
     }
@@ -632,7 +774,7 @@ while IFS= read -r line; do :; done
         // earlier run.
         let mut session = Session::new();
         session.resume_id = Some("00000000-0000-4000-8000-000000000001".to_owned());
-        session.say("alpha");
+        session.say_via("alpha", false);
         let start = session.begin_start();
         assert_eq!(
             start.session,
@@ -666,7 +808,7 @@ while IFS= read -r line; do :; done
         let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
             .expect("the stand-in program of the test");
         let mut session = Session::new();
-        session.say("alpha");
+        session.say_via("alpha", false);
         let start = session.begin_start();
         let bridge = Bridge::start(
             program_spec(&program, folder.path(), start.session.clone(), WORKSPACE),
@@ -677,7 +819,9 @@ while IFS= read -r line; do :; done
         assert!(session.adopt(start.generation, Some(Ok(bridge))).is_none());
 
         // A text above the bound of one message takes no bridge.
-        let Said::StartAfter(bridge) = session.say(&"x".repeat(horizon_core::agent_bridge::MAX_TEXT_BYTES + 1)) else {
+        let Said::StartAfter(bridge) =
+            session.say_via(&"x".repeat(horizon_core::agent_bridge::MAX_TEXT_BYTES + 1), false)
+        else {
             panic!("a message that the program does not take hands its bridge back");
         };
         assert!(!session.has_bridge(), "that bridge leaves the conversation");
@@ -690,7 +834,7 @@ while IFS= read -r line; do :; done
         // The bridge that took no message is stopped by its caller, never dropped.
         bridge.stop();
         assert!(
-            matches!(session.say("bravo"), Said::Start),
+            matches!(session.say_via("bravo", false), Said::Start),
             "the next message waits for a new bridge"
         );
     }
@@ -701,7 +845,7 @@ while IFS= read -r line; do :; done
         let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
             .expect("the stand-in program of the test");
         let mut session = Session::new();
-        session.say("alpha");
+        session.say_via("alpha", false);
         let first = session.begin_start();
         let bridge = Bridge::start(
             program_spec(&program, folder.path(), first.session.clone(), WORKSPACE),
@@ -714,7 +858,7 @@ while IFS= read -r line; do :; done
 
         // A second start answers while a bridge runs: it serves nobody, and the
         // bridge that runs keeps the conversation.
-        session.say("bravo");
+        session.say_via("bravo", false);
         let second = session.begin_start();
         let extra = Bridge::start(
             program_spec(&program, folder.path(), second.session.clone(), WORKSPACE),
@@ -739,7 +883,7 @@ while IFS= read -r line; do :; done
     #[test]
     fn a_stopped_conversation_keeps_the_session_that_the_program_named() {
         let mut session = Session::new();
-        session.say("alpha");
+        session.say_via("alpha", false);
         let _start = session.begin_start();
         session.resume_id = Some("00000000-0000-4000-8000-000000000001".to_owned());
         assert!(session.stop().is_none(), "no bridge of this conversation is up yet");

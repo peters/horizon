@@ -9,6 +9,14 @@ pub(super) struct EmbeddedFile {
     pub(super) content: &'static str,
 }
 
+pub(super) const FRONT_DESK_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-front-desk/SKILL.md"
+    )),
+}];
+
 pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
     EmbeddedFile {
         relative_path: ".claude-plugin/plugin.json",
@@ -29,6 +37,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-device/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-front-desk/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-front-desk/SKILL.md"
         )),
     },
     EmbeddedFile {

@@ -266,6 +266,8 @@ fn entry_counts(report: &Report) -> BTreeMap<&'static str, usize> {
             Entry::Tool { .. } => "Tool",
             Entry::Notice { .. } => "Notice",
             Entry::Card { .. } => "Card",
+            Entry::Proposal { .. } => "Proposal",
+            Entry::WorkItem { .. } => "WorkItem",
         };
         *counts.entry(kind).or_default() += 1;
     }

@@ -11,6 +11,12 @@ optional long answer, the state of the limit of the plan, and the result of the
 turn with its cost. A turn whose text holds `slow` waits two seconds before its
 answer, so a run shows the working state of the dock.
 
+A program whose actor is the front desk (`HORIZON_BROWSER_ACTOR` is
+`horizon:front-desk`) answers as the front desk instead: `two tasks` proposes two
+work items through the three operations of the front desk, a turn that holds
+`started the work items` answers the line that Horizon sends after a press, and
+`what waits` reads the work items and counts the ones that need the person.
+
 The words `tool`, `fail`, `long`, `slow`, `card`, `sleepy` and `question` choose
 what a turn answers: a tool call that succeeds, a tool call that fails with a
 result of two lines, a long answer, a wait before the answer, a card, or a card
@@ -86,6 +92,23 @@ PICKED_PREFIX = 'You picked '
 CLICK_TIMEOUT_MILLIS = 300_000
 CARD_TIMEOUT_SECONDS = 30.0
 CARD_WAIT_TIMEOUT_SECONDS = CLICK_TIMEOUT_MILLIS / 1000.0 + 60.0
+# The actor of the front desk of the dock: a program of that actor answers as the
+# front desk and not as the orchestrator of a workspace. It is the value that
+# `HORIZON_BROWSER_ACTOR` holds in a program of the front desk.
+FRONT_DESK_ACTOR = 'horizon:front-desk'
+ACTOR_ENV = 'HORIZON_BROWSER_ACTOR'
+# The two work items that a `two tasks` turn of the front desk proposes: the title
+# becomes the name of a workspace, and the task becomes the first message of its
+# orchestrator. The second task holds the word `question`, so the orchestrator that
+# reads it draws a card that asks the person.
+PROPOSAL_ITEMS = (
+    {'title': 'Fix login redirect', 'task': 'Fix issue 1987. Done means the test passes.'},
+    {'title': 'Faster cold start', 'task': 'question: make the cold start faster.'},
+)
+# The answer of the turn that proposes those work items.
+PROPOSED_TEXT = 'Two work items are ready to start.'
+# The answer of the turn that Horizon sends after the person starts them.
+STARTED_TEXT = 'Both are started. I tell you when one needs you.'
 # The first words of the one line that Horizon sends to an orchestrator when the
 # person presses a button of its card and no `next_click` waits. It is a part of
 # `WAKE_LINE` of `crates/horizon-core/src/block_panel/wake.rs`, and a test of this
@@ -402,10 +425,80 @@ def watch_question(session, number, client, panel_id):
     thread.start()
 
 
+def is_front_desk():
+    """Whether this program is the front desk of the dock and not the orchestrator
+    of a workspace."""
+    return os.environ.get(ACTOR_ENV, '').strip() == FRONT_DESK_ACTOR
+
+
+def work_item_tool(command, operation, timeout):
+    """One call of the block_panel tool of this Horizon, and its answer."""
+    client = StdioMcpClient(command)
+    try:
+        client.initialize()
+        return client.call_tool('block_panel', operation, timeout)
+    finally:
+        client.close()
+
+
+def front_desk_turn(session, number, words):
+    """One turn of the front desk: the work items that the person may start, the
+    line that names their press, or the state of the work items.
+
+    The tool of the front desk is `block_panel`: `work_item_propose` offers work
+    items that start only at a press of the person, `work_items` reads their state,
+    and the line of a press answers without a tool.
+    """
+    if 'started the work items' in words:
+        text(session, f'msg-{number}-started', STARTED_TEXT)
+        return
+    command = mcp_command()
+    if 'two tasks' in words:
+        if not command:
+            text(session, f'msg-{number}-propose',
+                 f'The stand-in proposes no work item: {EXECUTABLE_ENV} names no program of Horizon.')
+            return
+        try:
+            answer_of_propose = work_item_tool(
+                command,
+                {'operation': 'work_item_propose', 'items': [dict(item) for item in PROPOSAL_ITEMS]},
+                CARD_TIMEOUT_SECONDS)
+        except Fatal as refusal:
+            text(session, f'msg-{number}-propose', f'The stand-in proposed no work item: {one_line(str(refusal))}')
+            return
+        proposal = answer_of_propose.get('proposal')
+        if not isinstance(proposal, str) or not proposal:
+            text(session, f'msg-{number}-propose',
+                 f'The host answered the proposal without an id: {one_line(json.dumps(answer_of_propose))}')
+            return
+        text(session, f'msg-{number}-propose', PROPOSED_TEXT)
+        return
+    if 'what waits' in words:
+        if not command:
+            text(session, f'msg-{number}-waits',
+                 f'The stand-in reads no work item: {EXECUTABLE_ENV} names no program of Horizon.')
+            return
+        try:
+            answer_of_read = work_item_tool(command, {'operation': 'work_items'}, CARD_TIMEOUT_SECONDS)
+        except Fatal as refusal:
+            text(session, f'msg-{number}-waits', f'The stand-in read no work item: {one_line(str(refusal))}')
+            return
+        items = answer_of_read.get('items') if isinstance(answer_of_read.get('items'), list) else []
+        need_you = sum(1 for item in items if isinstance(item, dict) and item.get('state') == 'needs_you')
+        text(session, f'msg-{number}-waits', f'{len(items)} work items, {need_you} need you.')
+        return
+    text(session, f'msg-{number}', f'You said: {words}')
+
+
 def answer(session, number, words):
     """One turn: the init line, the answer, what the words ask for, and the result."""
     init(session)
     started = time.monotonic()
+    if is_front_desk():
+        front_desk_turn(session, number, words)
+        limit(session)
+        result(session, f'You said: {words}', int((time.monotonic() - started) * 1000) + DURATION_MS)
+        return
     if TURN_WORDS['slow'] in words:
         time.sleep(SLOW_SECONDS)
     message_id = f'msg-{number}'

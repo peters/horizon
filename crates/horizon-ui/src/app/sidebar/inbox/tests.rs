@@ -59,6 +59,9 @@ fn card_panel(app: &mut HorizonApp, workspace: WorkspaceId, document: BlockDocum
 /// [`card_panel`], with the time of the last update of its document.
 fn card_panel_at(app: &mut HorizonApp, workspace: WorkspaceId, document: BlockDocument, at: i64) -> PanelId {
     let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
+    // A question is the question of a card whose owner is here: these tests hold a
+    // program of the dock without starting one.
+    app.orchestrator_dock.mark_running_for_test(&local_id);
     let state = horizon_core::BlockPanelState {
         title: "Cold start".to_owned(),
         owner_actor: actor::of_workspace(&local_id),
@@ -224,6 +227,43 @@ fn only_a_callout_that_nobody_answered_of_an_open_card_is_a_question() {
     // A closed card asks nothing.
     app.board.close_panel(asked);
     assert!(questions_of(&app).is_empty());
+}
+
+#[test]
+fn a_card_whose_owner_is_gone_is_no_question() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("Lane");
+    let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
+
+    // The card asks a question while no program of the dock runs for its workspace:
+    // nobody reads the answer, so the group shows no question and its buttons stay
+    // out of the reach of the person.
+    let state = horizon_core::BlockPanelState {
+        owner_actor: actor::of_workspace(&local_id),
+        ..horizon_core::BlockPanelState::new(asking_card("Run the plan?", &[("go", "Go")]))
+    };
+    app.board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Block,
+                block: Some(state),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("card");
+    assert!(
+        !app.orchestrator_dock.running(&local_id),
+        "no program of the dock runs for this workspace"
+    );
+    assert!(
+        questions_of(&app).is_empty(),
+        "the answer of a card whose owner is gone reaches no program"
+    );
+
+    // The program of that workspace runs again, and the same card is a question.
+    app.orchestrator_dock.mark_running_for_test(&local_id);
+    assert_eq!(questions_of(&app).len(), 1, "the owner is here, so the question counts");
 }
 
 #[test]

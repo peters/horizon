@@ -135,11 +135,6 @@ impl HorizonApp {
         let sidebar_width = SIDEBAR_WIDTH;
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
         self.refresh_sidebar_rows(std::time::Instant::now());
-        // A question and the end of a turn arrive while nothing else draws a frame,
-        // so this asks for the frame that reads them at the moment the read is due.
-        if let Some(wait) = self.sidebar_list.read_due_in(std::time::Instant::now()) {
-            ctx.request_repaint_after(wait);
-        }
         self.refresh_machine_rows();
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();

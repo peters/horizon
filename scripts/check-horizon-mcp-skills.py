@@ -66,6 +66,7 @@ REQUIRED_SKILLS = {
     'horizon-block',
     'horizon-browser',
     'horizon-device',
+    'horizon-front-desk',
     'horizon-machines',
     'horizon-mobile',
     'horizon-plan',

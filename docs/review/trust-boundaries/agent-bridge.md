@@ -225,6 +225,42 @@ therefore reads it as untrusted text.
   workspace that closes, on its worker, and the folder of a session goes whole
   when the person deletes that saved session.
 
+## The front desk passes text of one program to another
+
+The conversation of the front desk holds the proposals that its program writes,
+and its program reads the state of the work items of this Horizon. That state is
+text of other programs, so one program can influence another through the front
+desk.
+
+- **The proposal is one entry of the conversation.** `Entry::Proposal` holds the
+  id that Horizon made, the items and the state `open`, `started`, `declined` or
+  `replaced`. The title and the task are cut when the entry enters the
+  conversation, and the dock draws them as plain text.
+- **Nothing starts at the entry.** A workspace starts only at a press of the
+  person on the control of the row, on the frame that reads the answer of a check
+  that ran on the worker of the dock.
+- **The read is a read of the frame.** `work_items` answers the state that the
+  frame already holds: the names of the workspaces, the state word of their rows,
+  the text of the first question of their cards and the last text of their
+  orchestrators. It reads no stored file and starts no process.
+- **A passed message says who passed it.** `Entry::Person` holds the field
+  `via_front_desk`, and the dock draws the caption `via the front desk` above
+  that bubble. The field has a serde default, so a file of an earlier run loads
+  with `false`.
+- **The bound of the message and the interval.** A message is 1 byte to the bound
+  of one message of the person, and one work item reads at most one message of the
+  front desk in ten seconds. A conversation that runs a turn answers `busy`, and
+  it reads no message of the front desk while it answers.
+- **The notices of the work items are the words of Horizon.** Horizon writes
+  `<name> needs you`, `<name> finished` and `<name> failed` for each change of
+  state of a work item that the front desk started, with the name cut to 40
+  characters. No part of that line comes from the program.
+
+What this does not guarantee: that the front desk repeats the person faithfully,
+and that a work item acts on a message that the front desk passed. The caption is
+the only mark of the path that the message took, and a program that reads its
+conversation can read it.
+
 ## What the bridge does not guarantee
 
 - **What the program did.** The bridge cannot prove that a tool ran, that a text

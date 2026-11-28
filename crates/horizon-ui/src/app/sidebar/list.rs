@@ -89,13 +89,38 @@ impl ListCache {
     pub(in crate::app) fn count_inbox_change(&mut self) {
         self.inbox_epoch = self.inbox_epoch.wrapping_add(1);
     }
+}
 
-    /// How long it takes until the rows and the questions are due again, while
-    /// the cache holds a read: the frame that reads them comes at that moment, so
-    /// a question and a turn end show without a move of the pointer.
-    pub(in crate::app) fn read_due_in(&self, now: Instant) -> Option<Duration> {
-        let at = self.refreshed?;
-        Some(REFRESH.saturating_sub(now.saturating_duration_since(at)))
+impl HorizonApp {
+    /// The state of the orchestrator of a workspace, in the order of weight of one
+    /// word: the question of a card, the failed turn, the working turn and the end
+    /// of a turn that the person did not see. The read of the work items of the
+    /// front desk uses the same rule as the row of the sidebar, so the two cannot
+    /// disagree.
+    pub(in crate::app) fn workspace_orchestrator(&self, workspace: WorkspaceId) -> Orchestrator {
+        let asked = self
+            .sidebar_list
+            .questions
+            .iter()
+            .filter(|question| question.workspace == workspace)
+            .count();
+        self.workspace_orchestrator_with(workspace, asked)
+    }
+
+    /// The same state, from a count of the questions that a reader of the same
+    /// moment holds, so a read that builds its own questions and its own state
+    /// cannot disagree with itself.
+    pub(in crate::app) fn workspace_orchestrator_with(&self, workspace: WorkspaceId, asked: usize) -> Orchestrator {
+        let local_id = self
+            .board
+            .workspace(workspace)
+            .map_or("", |workspace| workspace.local_id.as_str());
+        let watch = self.sidebar_list.turns.get(local_id);
+        Orchestrator::of(
+            asked,
+            watch.map_or_else(Turn::default, TurnWatch::turn),
+            watch.and_then(TurnWatch::unseen),
+        )
     }
 }
 
@@ -343,6 +368,8 @@ mod tests {
         ledger.state = horizon_core::agent_work::TurnState::Blocked;
         ledger.updated_at_millis = horizon_core::current_unix_millis() - 1;
         app.apply_attention_values(vec![(panel, local, Some(ledger))], &egui::Context::default());
+        let workspace_local = app.board.workspace(workspace).expect("workspace").local_id.clone();
+        app.orchestrator_dock.mark_running_for_test(&workspace_local);
         crate::app::sidebar::inbox::asking_card(&mut app, workspace, "Run the plan?", &[("go", "Go")]);
 
         app.refresh_sidebar_rows(std::time::Instant::now());
@@ -418,6 +445,41 @@ mod tests {
         }
         app.refresh_sidebar_rows(soon);
         assert_eq!(app.sidebar_list.refreshed, Some(soon));
+    }
+
+    #[test]
+    fn the_end_of_a_turn_changes_the_word_of_the_row_on_the_next_frame_with_no_timer() {
+        // A dock that shows the conversation clears the word `Done`, so this window
+        // keeps no dock.
+        let (_temp, mut app) = crate::app::test_support::test_app_without_dock();
+        let workspace = app.board.create_workspace("a");
+        let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
+        // The program of the dock is not there, so this test holds its turn: the
+        // pass of the dock reads the turn of a conversation and asks the sidebar for
+        // the rows again, and no frame of the sidebar asks for a clock.
+        app.board.focus_workspace(workspace);
+        let start = std::time::Instant::now();
+        app.orchestrator_dock.begin_turn_for_test(&local_id);
+        app.poll_orchestrator_dock(&egui::Context::default());
+        app.refresh_sidebar_rows(start);
+        assert_eq!(app.sidebar_row(workspace).line, "Working");
+
+        // The turn ends, and the pass of the dock tells the sidebar on the frame
+        // that reads it.
+        app.orchestrator_dock.end_turn_for_test(&local_id);
+        app.poll_orchestrator_dock(&egui::Context::default());
+        assert_ne!(
+            app.sidebar_list.read_epoch, app.sidebar_list.inbox_epoch,
+            "the end of the turn is news for the rows"
+        );
+        let soon = start + std::time::Duration::from_millis(100);
+        app.refresh_sidebar_rows(soon);
+        assert_eq!(
+            app.sidebar_list.refreshed,
+            Some(soon),
+            "the next frame reads the rows, inside the second of the clock"
+        );
+        assert_eq!(app.sidebar_row(workspace).line, "Done", "the turn ended well");
     }
 
     #[test]

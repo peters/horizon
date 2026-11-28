@@ -32,7 +32,7 @@ use crate::command_registry::CommandId;
 
 /// The window of these tasks: wide enough that the widest dock stands beside the
 /// canvas.
-const WIDE: [f32; 2] = [2000.0, 1000.0];
+pub(super) const WIDE: [f32; 2] = [2000.0, 1000.0];
 /// The workspace of these tasks.
 const WORKSPACE: &str = "chat";
 /// The session that every stand-in names.
@@ -673,7 +673,7 @@ fn the_front_desk_conversation_survives_a_restart() {
     assert!(
         restored
             .iter()
-            .any(|entry| matches!(entry, Entry::Person { text } if text == "alpha")),
+            .any(|entry| matches!(entry, Entry::Person { text, .. } if text == "alpha")),
         "the message of the earlier run came back: {restored:?}"
     );
 }

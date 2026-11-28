@@ -19,14 +19,15 @@ mod work_extension;
 mod work_hooks;
 use skill_files::{
     BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-    MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, PLAN_SKILL_FILES, SERVER_MOVE_SKILL_FILES, SERVER_SKILL_FILES,
-    SETUP_SKILL_FILES, SPEECH_SKILL_FILES, WORKTREE_SKILL_FILES,
+    FRONT_DESK_SKILL_FILES, MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, PLAN_SKILL_FILES, SERVER_MOVE_SKILL_FILES,
+    SERVER_SKILL_FILES, SETUP_SKILL_FILES, SPEECH_SKILL_FILES, WORKTREE_SKILL_FILES,
 };
 use user_skills::{
-    HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL,
-    HORIZON_PLAN_SKILL, HORIZON_SERVER_MOVE_SKILL, HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL, HORIZON_SPEECH_SKILL,
-    HORIZON_WORKTREE_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck,
-    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_FRONT_DESK_SKILL, HORIZON_MACHINES_SKILL,
+    HORIZON_MOBILE_SKILL, HORIZON_PLAN_SKILL, HORIZON_SERVER_MOVE_SKILL, HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL,
+    HORIZON_SPEECH_SKILL, HORIZON_WORKTREE_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL,
+    SkillOwnershipCheck, SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots,
+    remove_horizon_skill_dir,
 };
 
 fn validate_block_skill(dir: &Path) -> io::Result<()> {
@@ -94,6 +95,24 @@ fn install_server_skill(dir: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
     let staging = tempfile::Builder::new().prefix(".horizon-server-").tempdir_in(parent)?;
     sync_plugin_files(staging.path(), SERVER_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
+
+fn validate_front_desk_skill(dir: &Path) -> io::Result<()> {
+    owned_skills::validate_files(dir, FRONT_DESK_SKILL_FILES)
+}
+
+fn install_front_desk_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".horizon-front-desk-")
+        .tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), FRONT_DESK_SKILL_FILES)?;
     std::fs::rename(staging.path(), dir)
 }
 
@@ -345,6 +364,16 @@ impl AgentPluginHostLease {
         );
     }
 
+    fn bind_grok_front_desk_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        self.bind_grok_skill(
+            grok_root,
+            browser_bound,
+            HORIZON_FRONT_DESK_SKILL,
+            validate_front_desk_skill,
+            install_front_desk_skill,
+        );
+    }
+
     fn bind_grok_plan_skill(&mut self, grok_root: &Path, browser_bound: bool) {
         self.bind_grok_skill(
             grok_root,
@@ -517,6 +546,7 @@ fn install_agent_plugins_for(
                 lease.bind_grok_block_skill(root, true);
                 lease.bind_grok_machines_skill(root, true);
                 lease.bind_grok_mobile_skill(root, true);
+                lease.bind_grok_front_desk_skill(root, true);
                 lease.bind_grok_plan_skill(root, true);
                 lease.bind_grok_server_skill(root, true);
                 lease.bind_grok_server_move_skill(root, true);
@@ -530,6 +560,7 @@ fn install_agent_plugins_for(
                 lease.bind_grok_block_skill(root, false);
                 lease.bind_grok_machines_skill(root, false);
                 lease.bind_grok_mobile_skill(root, false);
+                lease.bind_grok_front_desk_skill(root, false);
                 lease.bind_grok_plan_skill(root, false);
                 lease.bind_grok_server_skill(root, false);
                 lease.bind_grok_server_move_skill(root, false);
@@ -761,9 +792,10 @@ fn sync_leased_skill(
 
 /// Every skill that a provider root of the person receives, other than the
 /// browser skill, which each root serves in its own way.
-const PROVIDER_SKILLS: [(&str, &[EmbeddedFile]); 10] = [
+const PROVIDER_SKILLS: [(&str, &[EmbeddedFile]); 11] = [
     (HORIZON_DEVICE_SKILL, DEVICE_SKILL_FILES),
     (HORIZON_BLOCK_SKILL, BLOCK_SKILL_FILES),
+    (HORIZON_FRONT_DESK_SKILL, FRONT_DESK_SKILL_FILES),
     (HORIZON_MACHINES_SKILL, MACHINES_SKILL_FILES),
     (HORIZON_MOBILE_SKILL, MOBILE_SKILL_FILES),
     (HORIZON_PLAN_SKILL, PLAN_SKILL_FILES),
@@ -774,7 +806,7 @@ const PROVIDER_SKILLS: [(&str, &[EmbeddedFile]); 10] = [
     (HORIZON_WORKTREE_SKILL, WORKTREE_SKILL_FILES),
 ];
 
-/// Writes the ten skills of a provider root of the person, and only a folder
+/// Writes the eleven skills of a provider root of the person, and only a folder
 /// that this host leases.
 fn sync_provider_skills(lease: Option<&AgentPluginHostLease>, root: &Path) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
@@ -784,7 +816,7 @@ fn sync_provider_skills(lease: Option<&AgentPluginHostLease>, root: &Path) -> st
     Ok(updated_files)
 }
 
-/// Writes the ten skills of the integrations folder of this Horizon home.
+/// Writes the eleven skills of the integrations folder of this Horizon home.
 fn sync_integrations_skills(dir: &Path) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
     for (skill, files) in PROVIDER_SKILLS {

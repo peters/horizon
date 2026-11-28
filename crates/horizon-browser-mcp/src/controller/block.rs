@@ -5,6 +5,7 @@ use horizon_browser_control::manifest::block::{self, Operation, Outcome};
 use horizon_browser_control::manifest::block_keys;
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_preset;
+use horizon_browser_control::manifest::block_proposal;
 use horizon_browser_control::manifest::block_terminal;
 
 use super::BrowserController;
@@ -95,8 +96,17 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::MachineKeys
         | Operation::DeleteMachineKey { .. }
         | Operation::ServerLinkRequest { .. }
-        | Operation::BrowserHostRequest { .. } => {
+        | Operation::BrowserHostRequest { .. }
+        | Operation::WorkItems
+        | Operation::WorkItemMessage { .. } => {
             return None;
+        }
+        Operation::WorkItemPropose { items } => {
+            // The items of a proposal are text of a program that becomes a
+            // workspace, so their bounds are checked before the queue holds them.
+            return block_proposal::check_items(items)
+                .err()
+                .map(|refusal| Outcome::failed(refusal.code, &refusal.message));
         }
     };
     parse_sent_document(document)
@@ -188,6 +198,9 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         | Operation::Machines
         | Operation::ServerLinkRequest { .. }
         | Operation::BrowserHostRequest { .. }
+        | Operation::WorkItems
+        | Operation::WorkItemPropose { .. }
+        | Operation::WorkItemMessage { .. }
         | Operation::MachineKeys => {
             return None;
         }

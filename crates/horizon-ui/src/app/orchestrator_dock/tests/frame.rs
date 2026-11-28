@@ -153,6 +153,27 @@ pub(super) fn texts(output: &egui::FullOutput) -> Vec<Drawn> {
     out
 }
 
+/// The rectangles that `output` painted inside `body` with the corner `radius`,
+/// from the top of the list to its bottom edge.
+pub(super) fn rounded_rects(output: &egui::FullOutput, body: Rect, radius: u8) -> Vec<Rect> {
+    fn walk(shape: &egui::Shape, body: Rect, radius: u8, out: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if rect.corner_radius == egui::CornerRadius::same(radius) && body.contains_rect(rect.rect) =>
+            {
+                out.push(rect.rect);
+            }
+            egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, body, radius, out)),
+            _ => (),
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, body, radius, &mut out);
+    }
+    out
+}
+
 /// One wheel event of 200 points, as the mouse of a person reports it.
 fn wheel(delta: egui::Vec2) -> Event {
     Event::MouseWheel {
@@ -721,7 +742,7 @@ fn the_control_shows_what_a_press_will_do() {
         .app()
         .orchestrator_dock
         .session_mut("dock-work")
-        .say("a turn that runs");
+        .say_via("a turn that runs", false);
     let output = window.frame(Vec::new());
     let parts = parts_of(&window);
     let shapes = control_shapes(&output, parts.send);

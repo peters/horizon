@@ -32,16 +32,19 @@ def request(text):
         {'type': 'text', 'text': text}]}}) + '\n'
 
 
-def run(turns, horizon_program=None):
+def run(turns, horizon_program=None, actor=None):
     """Every line of the program after it read one line for each text of `turns`.
 
     The environment names no Horizon program, so a turn that holds `card` draws
     no card and starts no MCP server: these tests start no Horizon host. A test
     that needs the card path names a program that does not exist and reads the
-    refusal, so no MCP server starts either.
+    refusal, so no MCP server starts either. `actor` is the value of the variable
+    that names the agent, which decides whether the program is the front desk.
     """
     environment = {name: value for name, value in os.environ.items()
-                   if name != orchestrator_standin.EXECUTABLE_ENV}
+                   if name not in (orchestrator_standin.EXECUTABLE_ENV, orchestrator_standin.ACTOR_ENV)}
+    if actor:
+        environment[orchestrator_standin.ACTOR_ENV] = actor
     if horizon_program:
         environment[orchestrator_standin.EXECUTABLE_ENV] = horizon_program
     environment['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -207,6 +210,37 @@ class OrchestratorStandinTests(unittest.TestCase):
         records = run(['one', 'two'])
         self.assertEqual([record.get('type') for record in records].count('result'), 2)
         self.assertEqual(texts_of(records), ['You said: one', 'You said: two'])
+
+    def test_the_front_desk_proposes_two_work_items_and_names_the_press(self):
+        front_desk = orchestrator_standin.FRONT_DESK_ACTOR
+        self.assertEqual(front_desk, 'horizon:front-desk')
+        items = orchestrator_standin.PROPOSAL_ITEMS
+        self.assertEqual([item['title'] for item in items], ['Fix login redirect', 'Faster cold start'])
+        self.assertEqual([item['task'] for item in items],
+                         ['Fix issue 1987. Done means the test passes.',
+                          'question: make the cold start faster.'])
+        self.assertEqual(orchestrator_standin.PROPOSED_TEXT, 'Two work items are ready to start.')
+
+        # Without a program of Horizon the turn proposes nothing, and the turn of
+        # the press answers with no tool at all.
+        records = run(['please do two tasks now'], actor=front_desk)
+        texts = texts_of(records)
+        self.assertEqual(len(texts), 1, 'the notice alone, and no answer that claims the items')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, texts[0])
+        records = run(['The person started the work items of proposal p-1.'], actor=front_desk)
+        self.assertEqual(texts_of(records), ['Both are started. I tell you when one needs you.'])
+        records = run(['what waits'], actor=front_desk)
+        texts = texts_of(records)
+        self.assertEqual(len(texts), 1, 'the notice alone')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, texts[0])
+
+    def test_the_orchestrator_of_a_workspace_is_no_front_desk(self):
+        # The same words, read by the orchestrator of a workspace, take the ordinary
+        # path: the answer repeats them and proposes nothing.
+        records = run(['please do two tasks now'], actor='horizon:orchestrator/8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e')
+        self.assertEqual(texts_of(records), ['You said: please do two tasks now'])
+        records = run(['what waits'], actor='horizon:orchestrator/8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e')
+        self.assertEqual(texts_of(records), ['You said: what waits'])
 
     def test_the_fixture_names_the_copy_of_the_program_in_its_state_folder(self):
         with tempfile.TemporaryDirectory() as folder:

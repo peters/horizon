@@ -98,6 +98,11 @@ impl HorizonApp {
             if card.owner_actor.is_none() || card.document.finished || card.folded() {
                 continue;
             }
+            // An owner that is gone reads no answer: the program of the card left,
+            // so its buttons are dead and the question is no question of the person.
+            if !self.card_owner_present(panel) {
+                continue;
+            }
             let Some(workspace) = self.board.workspace(panel.workspace_id) else {
                 continue;
             };
@@ -253,7 +258,7 @@ fn render_more(ui: &mut egui::Ui, rest: usize) {
 /// A card of `workspace` that asks `text` with the answers `answers`, for the
 /// tests of the sidebar: an open card whose orchestrator owns it.
 #[cfg(test)]
-pub(super) fn asking_card(
+pub(in crate::app) fn asking_card(
     app: &mut HorizonApp,
     workspace: WorkspaceId,
     text: &str,

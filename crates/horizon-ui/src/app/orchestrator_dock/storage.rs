@@ -152,7 +152,11 @@ fn settled_end(entries: &[Entry], busy: bool, from: usize) -> usize {
 /// notice, a tool call that ended, and a text of the agent whose turn ended.
 fn settled(entry: &Entry, busy: bool) -> bool {
     match entry {
-        Entry::Person { .. } | Entry::Notice { .. } | Entry::Card { .. } => true,
+        Entry::Person { .. }
+        | Entry::Notice { .. }
+        | Entry::Card { .. }
+        | Entry::Proposal { .. }
+        | Entry::WorkItem { .. } => true,
         Entry::Tool { state, .. } => *state != ToolState::Running,
         Entry::Agent { .. } => !busy,
     }

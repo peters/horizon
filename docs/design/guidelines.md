@@ -1527,6 +1527,46 @@ hides it, whatever the setting says. No other value of the variable is a switch.
   row whose card is no longer on the board has no fill, an outline of
   `BORDER_SUBTLE`, its heading in `FG_DIM` and `closed` at its right end, and a
   press on it does nothing.
+- An entry of a work item that the front desk started is one reference row of the
+  form and the size of a card row, with the mark of its workspace in place of the
+  glyph of a card: a tile of 20 by 20 points, painted by the one helper of a
+  workspace tile, so a person reads one mark for one workspace. 10 points right of
+  the tile is the name of the work item at 12.5 Medium `FG`, on one line with an
+  ellipsis. At the right end, 10 points inside the row, reads the state word of
+  that work item in lower case, `idle`, `working`, `needs_you`, `failed` or
+  `done`, at 11 Regular `FG_DIM`. A pointer over the row outlines it in `ACCENT`
+  and shows the pointing hand, and a press shows that workspace in the dock and
+  makes it the active one. A row whose workspace is gone has no fill, an outline
+  of `BORDER_SUBTLE`, its name and its tile in `FG_DIM`, no state word, and a
+  press on it does nothing.
+- An entry of a proposal of the front desk is one box and the controls of the
+  person, indented 13 points like a tool row, at the full width of the list minus
+  those 13 points. The box has radius 12, 12 points of padding, a fill of
+  `alpha(ACCENT, 18)` and a 1 px outline of `alpha(ACCENT, 115)`.
+  - The caption `The front desk wants to start` at 11 Regular `FG_DIM` stands at
+    the top padding.
+  - 8 points under it starts the first item, and each next item follows 8 points
+    after the one before it. An item holds the title at 12.5 Semibold `FG` on one
+    line with an ellipsis, under it the first line of the task at 11.5 Regular
+    `FG_SOFT` in at most 2 lines, and, when the item names a folder, one more line
+    with the folder at 10.5 JetBrains Mono `FG_DIM`, cut with an ellipsis at its
+    left so the end of the path shows.
+  - 10 points under the last item stand the two controls while the person did not
+    decide. Each is 28 points high at radius 8 with 12 points of horizontal
+    padding and a label at 12 Semibold; 8 points of air stand between them. The
+    first control reads `Start 1 work item` or `Start <N> work items`, and it has
+    an `ACCENT` fill with its label in `BG`. The second reads `Not now`, and it
+    has a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and its label in
+    `FG`. A pointer over a control turns its outline to `FG_DIM` for the second
+    control and deepens the fill of the first, and it shows the pointing hand.
+  - A proposal that the person decided draws no control: 10 points under its last
+    item stands one line at 11.5 Regular `FG_DIM`, which reads `Started`,
+    `Not started` or `Replaced by a newer proposal`. A proposal that a restart
+    loaded as open reads `Not started` and takes no press, because the program
+    that proposed it is gone.
+- A message of the person that the front desk passed carries the caption
+  `via the front desk` above its bubble: 10.5 Regular `FG_DIM`, right aligned with
+  the right edge of the bubble, 2 points above it.
 - While a turn is busy and no text of the agent came for it, one row stands at
   the left: the spinner of the interface and `working` at 12 `FG_DIM` after it.
   Only a frame that draws this row asks for the frame of the next step.

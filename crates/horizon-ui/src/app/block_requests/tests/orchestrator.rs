@@ -537,7 +537,7 @@ fn present_with(app: &mut HorizonApp, ctx: &Context, folder: &Path, index: usize
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !app.orchestrator_dock.running(&local_id) {
         assert!(std::time::Instant::now() < deadline, "the program of the dock starts");
-        app.poll_orchestrator_dock();
+        app.poll_orchestrator_dock(&egui::Context::default());
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     local_id
@@ -554,7 +554,7 @@ fn wait_until_ended(app: &mut HorizonApp, local_id: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while app.orchestrator_dock.running(local_id) {
         assert!(std::time::Instant::now() < deadline, "the program of the dock ends");
-        app.poll_orchestrator_dock();
+        app.poll_orchestrator_dock(&egui::Context::default());
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }

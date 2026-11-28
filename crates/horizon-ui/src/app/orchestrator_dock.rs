@@ -39,12 +39,14 @@ mod header;
 mod layout;
 mod list;
 mod programs;
+pub(in crate::app) mod proposal;
 mod session;
 mod storage;
 #[cfg(test)]
 mod tests;
 mod text;
 mod window;
+mod work_items;
 mod worker;
 
 use std::collections::HashMap;
@@ -136,6 +138,21 @@ pub(in crate::app) struct OrchestratorDock {
     /// The rectangles of the marks of the header in the last frame of a test.
     #[cfg(test)]
     last_header: Option<header::Parts>,
+    /// The proposal of the front desk whose folders the worker of the dock checks,
+    /// and the check that the frame reads.
+    proposal_start: Option<proposal::Starting>,
+    /// The state of each work item that the front desk started, as the last pass of
+    /// the dock read it. A change of it is one notice in the conversation of the
+    /// front desk.
+    work_item_states: std::collections::HashMap<String, horizon_core::workspace_list::Orchestrator>,
+    /// The turns and the bridges of each conversation as the last pass read them,
+    /// so the start and the end of a turn tell the sidebar to read its rows again.
+    turn_watch: Vec<(String, bool, bool, usize)>,
+    /// The conversations that a test says run, without a program behind them, so a
+    /// test of a card, a question or a work item reads the presence of an owner
+    /// without starting a program.
+    #[cfg(test)]
+    test_running: std::collections::HashSet<String>,
 }
 
 impl Default for OrchestratorDock {
@@ -191,6 +208,11 @@ impl OrchestratorDock {
             last_frame: None,
             #[cfg(test)]
             last_header: None,
+            proposal_start: None,
+            work_item_states: std::collections::HashMap::new(),
+            turn_watch: Vec::new(),
+            #[cfg(test)]
+            test_running: std::collections::HashSet::new(),
         }
     }
 
@@ -572,7 +594,18 @@ impl OrchestratorDock {
     /// names now, which is the presence of that orchestrator: a card of it reports
     /// that its owner is here while this answers `true`.
     pub(in crate::app) fn running(&self, local_id: &str) -> bool {
+        #[cfg(test)]
+        if self.test_running.contains(local_id) {
+            return true;
+        }
         self.sessions.get(local_id).is_some_and(Session::has_bridge)
+    }
+
+    /// Says that the conversation of `local_id` runs for the tests of this run, so
+    /// a test reads the presence of the owner of a card without a program.
+    #[cfg(test)]
+    pub(in crate::app) fn mark_running_for_test(&mut self, local_id: &str) {
+        self.test_running.insert(local_id.to_owned());
     }
 
     /// The turns of the conversation of `local_id`, which the row of its workspace
@@ -623,6 +656,88 @@ impl OrchestratorDock {
         }
     }
 
+    /// Adds the proposal `id` to the conversation of the front desk, with the items
+    /// that its program read.
+    pub(in crate::app) fn propose(&mut self, id: &str, items: &[horizon_core::agent_bridge::ProposalItem]) {
+        self.session_mut(FRONT_DESK).proposal(id, items);
+    }
+
+    /// Moves the proposal `id` of the front desk to `state`, and answers whether
+    /// that conversation held it.
+    pub(in crate::app) fn proposal_state(
+        &mut self,
+        id: &str,
+        state: horizon_core::agent_bridge::ProposalState,
+    ) -> bool {
+        self.sessions
+            .get_mut(FRONT_DESK)
+            .is_some_and(|session| session.proposal_state(id, state))
+    }
+
+    /// The items of the proposal `id`, while it is open.
+    pub(in crate::app) fn open_proposal(&self, id: &str) -> Option<Vec<horizon_core::agent_bridge::ProposalItem>> {
+        self.sessions.get(FRONT_DESK)?.open_proposal(id)
+    }
+
+    /// Adds one reference row of the work item `work_item`, with its name, to the
+    /// conversation of the front desk.
+    pub(in crate::app) fn work_item_row(&mut self, work_item: &str, name: &str) {
+        self.session_mut(FRONT_DESK).work_item_row(work_item, name);
+    }
+
+    /// The entries of the conversation of `local_id` of this frame.
+    pub(in crate::app) fn entries_of(
+        &self,
+        local_id: &str,
+    ) -> std::sync::Arc<horizon_core::agent_bridge::ConversationSnapshot> {
+        self.sessions.get(local_id).map_or_else(
+            || horizon_core::agent_bridge::Conversation::new().snapshot(),
+            Session::snapshot,
+        )
+    }
+
+    /// The entries of the front of the conversation of `local_id` that its file
+    /// brought back on this run.
+    pub(in crate::app) fn loaded_entries(&self, local_id: &str) -> usize {
+        self.sessions.get(local_id).map_or(0, Session::loaded_entries)
+    }
+
+    /// Makes the conversation of `local_id` run a turn and ends it again, for a
+    /// test that reads the turn of a conversation without a program behind it.
+    #[cfg(test)]
+    pub(in crate::app) fn begin_turn_for_test(&mut self, local_id: &str) {
+        self.session_mut(local_id).say_via("a turn of the test", false);
+    }
+
+    /// Ends the turn of the conversation of `local_id`, as a program that answered
+    /// does.
+    #[cfg(test)]
+    pub(in crate::app) fn end_turn_for_test(&mut self, local_id: &str) {
+        if let Some(session) = self.sessions.get_mut(local_id) {
+            session.end_turn_for_test();
+        }
+    }
+
+    /// Loads `entries` as the stored conversation of `local_id`, as the worker does
+    /// on the first frame of a start.
+    #[cfg(test)]
+    pub(in crate::app) fn load_for_test(&mut self, local_id: &str, entries: Vec<horizon_core::agent_bridge::Entry>) {
+        self.session_mut(local_id).loaded(entries);
+    }
+
+    /// Says that no thread of the dock takes a job, so a test reads what a path that
+    /// needs the worker does.
+    #[cfg(test)]
+    pub(in crate::app) fn hold_worker(&mut self) {
+        self.worker.hold_no_worker();
+    }
+
+    /// Lets a thread of the dock take the jobs again.
+    #[cfg(test)]
+    pub(in crate::app) fn take_jobs_again(&mut self) {
+        self.worker.take_jobs_again();
+    }
+
     /// The entries of the conversation of `local_id`, which a test of another
     /// module reads.
     #[cfg(test)]
@@ -654,7 +769,7 @@ impl OrchestratorDock {
                 .entries
                 .iter()
                 .filter_map(|entry| match entry {
-                    horizon_core::agent_bridge::Entry::Person { text } => Some(text.clone()),
+                    horizon_core::agent_bridge::Entry::Person { text, .. } => Some(text.clone()),
                     _ => None,
                 })
                 .collect()

@@ -80,9 +80,11 @@ identity of a workspace does.
 
 The host maps an actor to a caller before it applies a card request
 (`app/block_requests/caller.rs`). The front desk owns no workspace, so it creates
-no card, reads no card and opens no panel. Every request of that actor is refused
-with `caller_unavailable`. This part adds no `CardCaller` variant for the front
-desk, so the refusal grants nothing.
+no card, reads no card and opens no panel. Its caller is `CardCaller::FrontDesk`,
+and it reaches the three operations of
+[the work items](#the-three-operations-of-the-front-desk) and nothing else. Every
+other request of that actor answers `caller_unavailable`, and the front desk is
+refused while the dock runs no program for it.
 
 ## The program
 
@@ -118,18 +120,99 @@ itself.
 
 A built-in tool would let the program read a file, run a command, or change this
 computer, with the rights of the person and without a work item. The person does
-not see such work in the card of a task. The front desk therefore holds no tool,
-and its answer is a text only.
+not see such work in the card of a task. The front desk therefore holds no
+built-in tool, and its answer is a text only.
 
-The identity of the front desk still holds the plugin directory of Claude Code
-when that directory is there, because the next part of this work adds the tool
-that makes the work items. A plugin that is not there leaves the program with no
-tool at all.
+The identity of the front desk holds the plugin directory of Claude Code when that
+directory is there, so the program has the Horizon MCP server and the skill
+`horizon-front-desk`. The three operations below are the whole right of that
+server for this actor. A plugin that is not there leaves the program with no tool
+at all.
+
+## The three operations of the front desk
+
+The actor of the front desk reaches three operations of the `block_panel` tool,
+and no other. The host accepts them only while the dock runs the program of the
+front desk, as it accepts the operations of an orchestrator only while the dock
+runs the program of that workspace. Every other caller gets `caller_unavailable`,
+and the front desk gets the same refusal for every other operation.
+
+| Operation | What it does |
+| --------- | ------------ |
+| `work_items` | Reads the work items of this Horizon |
+| `work_item_propose` | Offers one proposal of work items to the person |
+| `work_item_message` | Passes one message of the person to one work item |
+
+A work item is a workspace with its orchestrator conversation. `work_items`
+answers at most 50 work items, in the order of the sidebar: the local id of the
+workspace, its name, the state word of its row (`working`, `needs_you`, `failed`,
+`done` or `idle`), the text of its first question cut to 160 characters, the last
+text of its orchestrator cut to 200 characters, the cost of its ended turns and
+the machine that it runs on. It reads the state that a frame already holds, so it
+reads no file and no process.
+
+`work_item_message` sends the text to the orchestrator of that work item through
+the one send of the dock, and the bubble of that message carries the caption
+`via the front desk`. An id that no workspace holds answers `not_found`, a
+conversation that runs a turn answers `busy`, and a second message to the same
+work item within ten seconds answers `too_soon`. None of them sends anything.
+
+## The proposal and its press
+
+`work_item_propose` takes one to six items. Each item holds a title of 1 to 60
+characters on one line, a task of 1 to 4 000 characters and, when the person
+named a folder, an absolute path. A request outside those bounds is refused whole
+with `invalid_request`, and it changes nothing.
+
+Nothing starts at the request. The items become one entry `Proposal` of the
+conversation of the front desk, with an id that Horizon makes and the state
+`open`, and the dock draws them as one row with the two controls `Start <N> work
+items` and `Not now`. An older proposal that is still `open` becomes `replaced`,
+so the person decides one proposal at a time. The answer is the id of the
+proposal and the words `The person decides. You get one message when they do.`
+
+A press on `Start <N> work items`:
+
+1. The worker of the dock checks the folder of each item with `is_dir`. No frame
+   reads a directory.
+2. On the frame that reads that answer, Horizon makes one workspace for each
+   item, named by its title, and the board keeps that workspace while it is empty.
+   The folder of an item becomes the folder of its workspace only when the check
+   found a directory; when it did not, the workspace starts with no folder and
+   the conversation names it: `<title>: the folder was not found, so it starts
+   with none`.
+3. The task of each item goes to the orchestrator of its workspace as the first
+   message of the person there.
+4. The conversation of the front desk gets the notice `You started <N> work
+   items` and one reference row for each new work item.
+5. The program of the front desk gets the line `The person started the work items
+   of proposal <id>.` as one turn. A conversation that runs a turn keeps that
+   line until the turn ends.
+6. The active workspace and the conversation that the dock shows do not change.
+
+A press on `Not now` moves the proposal to `declined`, writes the notice `Not
+started`, and sends the line `The person did not start the work items of proposal
+<id>.`
+
+Horizon writes one notice in the conversation of the front desk for each change
+of state of a work item that the front desk started: `<name> needs you`, `<name>
+finished` and `<name> failed`. The notice is the words of Horizon, and no turn of
+a program writes it.
+
+## What the front desk can never do
+
+- It creates no card, no panel and no terminal, and it reads no card: every other
+  operation of the tool is refused for its actor.
+- It starts no work item. Only the press of the person starts one.
+- It does no work of a task: it has no built-in tool, and its answer is a text.
+- It answers no question of a work item. The question of a work item is the
+  person's to answer, and a message that the front desk passes carries the caption
+  that says who passed it.
+- It reads no file and runs no command, and it reads no value of a secret: the
+  three operations above are the whole right of its actor.
 
 ## What the front desk cannot do in this part
 
-- It starts no work item, no panel and no card. The words of the person stay in
-  the conversation.
 - The sidebar button `+ Rent a machine` is disabled while the front desk shows.
   Its hover text is `Open a work item first`, because a machine belongs to one
   work item.

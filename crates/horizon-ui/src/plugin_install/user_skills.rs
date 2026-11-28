@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub(super) const HORIZON_BLOCK_SKILL: &str = "horizon-block";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
+pub(super) const HORIZON_FRONT_DESK_SKILL: &str = "horizon-front-desk";
 pub(super) const HORIZON_MACHINES_SKILL: &str = "horizon-machines";
 pub(super) const HORIZON_MOBILE_SKILL: &str = "horizon-mobile";
 pub(super) const HORIZON_PLAN_SKILL: &str = "horizon-plan";

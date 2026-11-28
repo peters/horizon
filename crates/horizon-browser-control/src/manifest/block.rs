@@ -70,6 +70,35 @@ pub const MIN_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 1_000;
 /// agent's question cannot hold a card open for an hour.
 pub const SETTING_REQUEST_TIMEOUT_MILLIS: u64 = 300_000;
 
+/// Most items that one proposal of the front desk may hold. The person reads
+/// every item of a proposal at one press, so the list stays short.
+pub const MAX_PROPOSAL_ITEMS: usize = 6;
+/// Most characters of the title of one item of a proposal. The title is one line
+/// and becomes the name of a workspace.
+pub const MAX_PROPOSAL_TITLE_CHARS: usize = 60;
+/// Most characters of the task of one item of a proposal. The task becomes the
+/// first message of the orchestrator of the new work item.
+pub const MAX_PROPOSAL_TASK_CHARS: usize = 4_000;
+/// Most bytes of the folder of one item of a proposal, as an absolute path of
+/// this computer.
+pub const MAX_PROPOSAL_FOLDER_BYTES: usize = 1_024;
+/// Most bytes of one message that the front desk passes to a work item. It is
+/// the bound of one message of the person
+/// (`horizon_core::agent_bridge::MAX_TEXT_BYTES`), which the dock cuts to as it
+/// takes a message.
+pub const MAX_WORK_ITEM_MESSAGE_BYTES: usize = 256 * 1024;
+/// How long the front desk waits before it passes a second message to the same
+/// work item, in milliseconds.
+pub const WORK_ITEM_MESSAGE_INTERVAL_MILLIS: u64 = 10_000;
+/// Most work items that `work_items` answers.
+pub const MAX_WORK_ITEMS: usize = 50;
+/// Most characters of the question of a work item in the answer of
+/// `work_items`.
+pub const MAX_WORK_ITEM_QUESTION_CHARS: usize = 160;
+/// Most characters of the last text of a work item in the answer of
+/// `work_items`.
+pub const MAX_WORK_ITEM_LAST_CHARS: usize = 200;
+
 /// Card commands. The document belongs to the agent; the panel id, revision
 /// and ownership belong to the host.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -317,6 +346,82 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<String>,
     },
+    /// The work items of this Horizon, in the order of the sidebar: one entry for
+    /// each workspace, with the state that the word of its row shows. It is a
+    /// read of the state that a frame already holds: no file and no process.
+    WorkItems,
+    /// Offer work items to the person. NOTHING is created: the words of the
+    /// program become one proposal in the conversation of the front desk, and
+    /// Horizon creates a workspace for each item only when the person presses the
+    /// control that starts the proposal. An older proposal that is still open
+    /// becomes `replaced`. The answer holds the id of the proposal and no
+    /// workspace.
+    WorkItemPropose {
+        /// One to six items, each with a title of 1 to 60 characters on one line,
+        /// a task of 1 to 4 000 characters, and an optional absolute folder.
+        items: Vec<ProposedItem>,
+    },
+    /// Pass one message of the person to the orchestrator of one work item, with
+    /// the caption `via the front desk` on that message. A work item that is not
+    /// on the board is `not_found`, a conversation that runs a turn is `busy`, and
+    /// a second message to the same work item within ten seconds is `too_soon`;
+    /// none of them sends anything.
+    WorkItemMessage {
+        /// The local id of the workspace of the work item, as `work_items` reports
+        /// it.
+        work_item: String,
+        /// The message of the person, 1 byte to the bound of one message.
+        text: String,
+    },
+}
+
+/// One item of one `work_item_propose` request.
+///
+/// Every field is text of a program. Horizon shows the title, the phrase of the
+/// task and the folder in the conversation of the front desk before the person
+/// presses anything, and it uses the folder only as the folder of the workspace
+/// that the press creates.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("type" = "object"))]
+pub struct ProposedItem {
+    /// The name of the work item, one line of 1 to 60 characters.
+    pub title: String,
+    /// What the work item must do, 1 to 4 000 characters, in the words of the
+    /// person and with what done means.
+    pub task: String,
+    /// The absolute folder in which the orchestrator of the work item runs. It is
+    /// used only after the person's press, and only when it is a directory of
+    /// this computer then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
+/// One work item as `work_items` reports it.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[schemars(extend("type" = "object"))]
+pub struct WorkItemSummary {
+    /// The local id of the workspace of the work item, which `work_item_message`
+    /// takes.
+    pub work_item: String,
+    pub name: String,
+    /// `working`, `needs_you`, `failed`, `done` or `idle`, as the word of the row
+    /// of the workspace shows it.
+    pub state: String,
+    /// The text of the first question that a card of the work item asks the
+    /// person, cut to 160 characters, or nothing when no card asks one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// The last text of the orchestrator of the work item, cut to 200 characters,
+    /// or nothing when it said nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<String>,
+    /// The cost of the ended turns of the orchestrator of the work item.
+    pub cost_usd: f64,
+    /// The machine that the work item runs on, or nothing when it runs on this
+    /// computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// What the person answered to a card that Horizon drew about a setting of this
@@ -684,6 +789,27 @@ pub enum Outcome {
     BrowserHost {
         answer: Answer,
     },
+    /// The work items of this Horizon, in the order of the sidebar. An entry is
+    /// the local id of a workspace, its name, the state of its orchestrator, the
+    /// question of its first card, the last text of its orchestrator, the cost of
+    /// its ended turns and the machine it runs on.
+    WorkItems {
+        items: Vec<WorkItemSummary>,
+    },
+    /// One proposal that the conversation of the front desk now holds, with the
+    /// words that Horizon says about it. Nothing was created: the person starts
+    /// the work items of the proposal with a press, or not at all.
+    Proposed {
+        proposal: String,
+        /// The words of Horizon that the program reads: the person decides, and
+        /// one message follows when they do.
+        text: String,
+    },
+    /// One message that Horizon passed from the front desk to the orchestrator of
+    /// one work item.
+    WorkItemMessage {
+        work_item: String,
+    },
     Failed {
         code: String,
         message: String,
@@ -1020,6 +1146,95 @@ mod tests {
     }
 
     #[test]
+    fn the_three_work_item_operations_read_as_the_operation_that_a_caller_sends() {
+        let propose = serde_json::json!({
+            "operation": "work_item_propose",
+            "items": [
+                {"title": "Fix login", "task": "Fix issue 1987", "folder": "/home/person/work"},
+                {"title": "Cold start", "task": "Make it faster"}
+            ]
+        });
+        let Operation::WorkItemPropose { items } = serde_json::from_value::<BlockPanelInput>(propose)
+            .expect("the proposal operation")
+            .into_operation()
+        else {
+            panic!("the proposal operation");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].folder.as_deref(), Some("/home/person/work"));
+        assert_eq!(items[1].folder, None, "a folder is optional");
+        super::super::block_proposal::check_items(&items).expect("the items of this proposal pass");
+
+        let message = serde_json::json!({
+            "operation": "work_item_message",
+            "work_item": "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e",
+            "text": "start with the redirect"
+        });
+        let Operation::WorkItemMessage { work_item, text } = serde_json::from_value::<BlockPanelInput>(message)
+            .expect("the message operation")
+            .into_operation()
+        else {
+            panic!("the message operation");
+        };
+        assert_eq!(work_item, "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e");
+        assert_eq!(text, "start with the redirect");
+
+        let read = serde_json::from_value::<BlockPanelInput>(serde_json::json!({"operation": "work_items"}))
+            .expect("the read operation")
+            .into_operation();
+        assert_eq!(read, Operation::WorkItems);
+        assert!(
+            !read.is_card(),
+            "the work items of the front desk are no card operation"
+        );
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({"operation": "work_items"})).is_ok(),
+            "the read of the work items takes no field"
+        );
+        let schema = serde_json::to_string(&schemars::schema_for!(BlockPanelInput)).expect("schema");
+        for operation in ["work_items", "work_item_propose", "work_item_message", "ProposedItem"] {
+            assert!(schema.contains(operation), "the schema describes {operation}: {schema}");
+        }
+    }
+
+    #[test]
+    fn the_answers_of_the_work_item_operations_name_their_fields() {
+        let items = serde_json::to_value(Outcome::WorkItems {
+            items: vec![WorkItemSummary {
+                work_item: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+                name: "Fix login".into(),
+                state: "needs_you".into(),
+                question: Some("Which file?".into()),
+                last: None,
+                cost_usd: 0.25,
+                machine: None,
+            }],
+        })
+        .expect("serialize");
+        assert_eq!(items["status"], serde_json::json!("work_items"));
+        assert_eq!(items["items"][0]["state"], serde_json::json!("needs_you"));
+        assert_eq!(items["items"][0]["question"], serde_json::json!("Which file?"));
+        assert!(
+            items["items"][0].get("last").is_none(),
+            "a work item that said nothing answers no last text"
+        );
+
+        let proposed = serde_json::to_value(Outcome::Proposed {
+            proposal: "3f7c1d9e".into(),
+            text: "The person decides. You get one message when they do.".into(),
+        })
+        .expect("serialize");
+        assert_eq!(proposed["status"], serde_json::json!("proposed"));
+        assert_eq!(proposed["proposal"], serde_json::json!("3f7c1d9e"));
+
+        let sent = serde_json::to_value(Outcome::WorkItemMessage {
+            work_item: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+        })
+        .expect("serialize");
+        assert_eq!(sent["status"], serde_json::json!("work_item_message"));
+    }
+
+    #[test]
     fn a_closed_card_names_whether_its_owner_closed_it_and_which_panel_did() {
         let owned = serde_json::to_value(Outcome::Closed {
             panel_id: "card".into(),
@@ -1190,6 +1405,9 @@ mod tests {
                 Operation::SecretNames => "secret_names",
                 Operation::Machines => "machines",
                 Operation::MachineKey { .. } => "machine_key",
+                Operation::WorkItems => "work_items",
+                Operation::WorkItemPropose { .. } => "work_item_propose",
+                Operation::WorkItemMessage { .. } => "work_item_message",
                 Operation::MachineKeys => "machine_keys",
                 Operation::DeleteMachineKey { .. } => "delete_machine_key",
                 Operation::ServerLinkRequest { .. } => "server_link_request",

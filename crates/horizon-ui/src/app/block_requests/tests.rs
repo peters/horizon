@@ -857,6 +857,7 @@ mod columns;
 mod documents;
 mod fold;
 mod foot;
+mod front_desk;
 mod heights;
 mod machine;
 mod orchestrator;

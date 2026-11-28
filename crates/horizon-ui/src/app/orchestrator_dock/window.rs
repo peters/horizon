@@ -20,9 +20,25 @@ use crate::app::util::viewport_local_rect;
 use crate::app::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 use crate::theme;
 
+use horizon_core::agent_bridge::ProposalState;
+
 use super::layout::{dock_fits, dock_rect, dock_width};
+use super::proposal::{self, Choice};
 use super::session::{Said, Session, TOO_LONG_NOTICE};
 use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list};
+
+/// The most characters of the name of a work item in a notice of the front desk.
+const WORK_ITEM_NOTICE_NAME_CHARS: usize = 40;
+
+/// The notice of a press that started no work item, because no worker read the
+/// folder of an item of the proposal.
+const PROPOSAL_CHECK_FAILED: &str = "The work items did not start.";
+
+/// The notice of an item whose folder was not a directory of this computer when
+/// the person started the proposal.
+fn folder_missing_notice(title: &str) -> String {
+    format!("{title}: {}", proposal::FOLDER_MISSING)
+}
 
 /// The wake of the bridge of a conversation: the next frame of this window.
 fn repaint_wake(ctx: &egui::Context) -> Arc<dyn Fn() + Send + Sync> {
@@ -98,8 +114,11 @@ impl HorizonApp {
         };
         let mut asked = composer::Asked::Nothing;
         let mut picked = None;
-        let mut pressed_card: Option<String> = None;
+        let mut pressed: Option<list::Press> = None;
         let mut back = false;
+        // The reference rows of this frame read the state of the workspaces that the
+        // front desk started, and the proposals that came from a file.
+        let refs = list::Refs::build(board, dock, &local_id);
         egui::Panel::right(DOCK_PANEL_ID)
             .exact_size(rect.width())
             .frame(
@@ -134,12 +153,13 @@ impl HorizonApp {
                 asked = composer::render(ui, &composer, draft, true, busy, composer_form);
                 match snapshot {
                     Some(snapshot) if !snapshot.entries.is_empty() => {
-                        pressed_card = list::render(
+                        pressed = list::render(
                             ui,
                             parts.body,
                             &local_id,
                             &snapshot.entries,
                             list::waits_for_text(&snapshot.entries, snapshot.busy),
+                            &refs,
                             &|panel| board.panel_id_by_local_id(panel).is_some(),
                         );
                     }
@@ -157,13 +177,18 @@ impl HorizonApp {
             ui.ctx()
                 .memory_mut(|memory| memory.request_focus(egui::Id::unique(composer::FIELD_ID)));
         }
-        // A press on the reference row of a card brings that card into view, as the
-        // row of the sidebar does. The row of a card that left the board takes no
-        // press, so no press names a panel that is gone.
-        if let Some(panel) = pressed_card
-            && let Some(id) = self.board.panel_id_by_local_id(&panel)
-        {
-            self.reveal_selected_panel(ui.ctx(), id);
+        match pressed {
+            // A press on the reference row of a card brings that card into view, as
+            // the row of the sidebar does. The row of a card that left the board
+            // takes no press, so no press names a panel that is gone.
+            Some(list::Press::Card(panel)) => {
+                if let Some(id) = self.board.panel_id_by_local_id(&panel) {
+                    self.reveal_selected_panel(ui.ctx(), id);
+                }
+            }
+            Some(list::Press::WorkItem(work_item)) => self.show_work_item(&work_item),
+            Some(list::Press::Proposal { id, choice }) => self.press_proposal(ui.ctx(), &id, choice),
+            None => {}
         }
         match asked {
             composer::Asked::Send => self.send_orchestrator_message(ui.ctx(), &local_id),
@@ -183,11 +208,28 @@ impl HorizonApp {
     /// session in the board, and it queues one write for each conversation whose
     /// entries the file does not hold yet. Each of those jobs runs on the worker
     /// of the dock, and its outcome applies on a later frame.
-    pub(in crate::app) fn poll_orchestrator_dock(&mut self) {
+    pub(in crate::app) fn poll_orchestrator_dock(&mut self, ctx: &egui::Context) {
         for session in self.orchestrator_dock.sessions.values_mut() {
             session.poll();
         }
         self.orchestrator_dock.poll_worker();
+        // A line of Horizon that waited for the end of a turn goes out on this pass,
+        // so the program reads it as the first line of its next turn.
+        self.orchestrator_dock.flush_system_messages();
+        // The check of the folders of a proposal runs on the worker, and the work
+        // items of a proposal start on the frame that reads its answer.
+        self.apply_proposal_start(ctx);
+        // The start and the end of a turn and the start and the stop of a bridge are
+        // the news of the rows of the sidebar, and of the notices of the front desk.
+        // This pass reads them, so the sidebar needs no frame of its own: the wake of
+        // a bridge already draws this one.
+        if self.orchestrator_dock.note_turn_changes() {
+            self.sidebar_list.count_inbox_change();
+        }
+        self.note_work_item_states();
+        let board = &self.board;
+        self.front_desk_messages
+            .retain(|work_item| board.workspace_id_by_local_id(work_item).is_some());
         // The dock shows the front desk until a workspace row or a change of the
         // active workspace shows that workspace.
         self.orchestrator_dock
@@ -205,6 +247,157 @@ impl HorizonApp {
             self.mark_runtime_dirty();
         }
         self.orchestrator_dock.queue_conversation_appends();
+    }
+
+    /// Shows the workspace of the work item `work_item`, and makes it the active
+    /// one, as a press on its row of the sidebar does. A work item that the board no
+    /// longer holds shows nothing.
+    fn show_work_item(&mut self, work_item: &str) {
+        let Some(workspace) = self.board.workspace_id_by_local_id(work_item) else {
+            return;
+        };
+        self.board.focus_workspace(workspace);
+        self.orchestrator_dock.front_desk_mut().show_workspace();
+    }
+
+    /// Applies the press of the person on the row of a proposal. A start checks the
+    /// folders on the worker of the dock first; a decline decides at once.
+    pub(in crate::app) fn press_proposal(&mut self, ctx: &egui::Context, id: &str, choice: Choice) {
+        match choice {
+            Choice::Start => {
+                let Some(items) = self.orchestrator_dock.open_proposal(id) else {
+                    return;
+                };
+                if !self.orchestrator_dock.begin_proposal_start(id, &items) {
+                    // No worker took the check, so no folder was read and no work
+                    // item starts. The proposal stays open and the person reads
+                    // that the press started nothing.
+                    self.orchestrator_dock.session_notice(FRONT_DESK, PROPOSAL_CHECK_FAILED);
+                }
+            }
+            Choice::Decline => self.decline_proposal(id),
+        }
+        ctx.request_repaint();
+    }
+
+    /// Applies the answer of the check of the folders of a proposal: one workspace
+    /// for each item, its folder when the check found it, and the task of the item
+    /// as the first message of the orchestrator of that workspace.
+    ///
+    /// The active workspace and the conversation that the dock shows do not change,
+    /// so a press on the row of a proposal leaves the person where they were.
+    fn apply_proposal_start(&mut self, ctx: &egui::Context) {
+        let Some((id, found)) = self.orchestrator_dock.take_proposal_check() else {
+            return;
+        };
+        let Some(items) = self.orchestrator_dock.open_proposal(&id) else {
+            return;
+        };
+        let front_desk_shown = self.orchestrator_dock.front_desk().shows(&self.board);
+        let mut started: Vec<(String, String)> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let workspace = self.board.create_workspace(&item.title);
+            let Some(local_id) = self
+                .board
+                .workspace(workspace)
+                .map(|workspace| workspace.local_id.clone())
+            else {
+                continue;
+            };
+            match (&item.folder, found.get(index).copied().unwrap_or(false)) {
+                (Some(folder), true) => {
+                    self.board
+                        .set_workspace_directory(workspace, Some(std::path::Path::new(folder)));
+                }
+                (Some(_), false) => {
+                    // The folder of a proposal is text of a program, and it is a
+                    // directory only when the worker found one. The work item starts
+                    // in the folder of this Horizon, and the person reads why.
+                    self.orchestrator_dock
+                        .session_notice(FRONT_DESK, &folder_missing_notice(&item.title));
+                }
+                (None, _) => {}
+            }
+            started.push((local_id, item.task.clone()));
+        }
+        for (local_id, task) in &started {
+            if self.say_to_orchestrator(ctx, local_id, task) {
+                continue;
+            }
+            tracing::warn!(%local_id, "the task of a work item of a proposal did not reach its orchestrator");
+        }
+        if started.is_empty() {
+            return;
+        }
+        if !self.orchestrator_dock.proposal_state(&id, ProposalState::Started) {
+            return;
+        }
+        self.orchestrator_dock
+            .session_notice(FRONT_DESK, &proposal::started_notice(started.len()));
+        let names: Vec<(String, String)> = started
+            .iter()
+            .map(|(local_id, task)| {
+                let name = self
+                    .board
+                    .workspace_id_by_local_id(local_id)
+                    .and_then(|workspace| self.board.workspace(workspace))
+                    .map_or_else(String::new, |workspace| workspace.name.clone());
+                let _ = task;
+                (local_id.clone(), name)
+            })
+            .collect();
+        for (local_id, name) in names {
+            self.orchestrator_dock.work_item_row(&local_id, &name);
+        }
+        self.orchestrator_dock
+            .front_desk_system_message(&proposal::bridge_line(&id, Choice::Start));
+        // The conversation that the dock shows stays the front desk, and the active
+        // workspace stays the one of the frame before the press.
+        self.orchestrator_dock
+            .front_desk_mut()
+            .follow_active_workspace(&self.board);
+        if front_desk_shown {
+            self.orchestrator_dock.front_desk_mut().show();
+        }
+        self.mark_runtime_dirty();
+    }
+
+    /// Applies a press on `Not now`: the proposal is not started, the person reads
+    /// it, and the program of the front desk reads the same line.
+    fn decline_proposal(&mut self, id: &str) {
+        if !self.orchestrator_dock.proposal_state(id, ProposalState::Declined) {
+            return;
+        }
+        self.orchestrator_dock
+            .session_notice(FRONT_DESK, proposal::NOT_STARTED_NOTICE);
+        self.orchestrator_dock
+            .front_desk_system_message(&proposal::bridge_line(id, Choice::Decline));
+        self.mark_runtime_dirty();
+    }
+
+    /// Writes one notice in the conversation of the front desk for each work item
+    /// that goes into a state that the person waits for. Horizon writes the notice:
+    /// it is no turn of a program.
+    fn note_work_item_states(&mut self) {
+        let work_items = self.orchestrator_dock.work_items();
+        let board = &self.board;
+        self.orchestrator_dock
+            .retain_work_items(|work_item| board.workspace_id_by_local_id(work_item).is_some());
+        for (work_item, name) in work_items {
+            let Some(workspace) = board.workspace_id_by_local_id(&work_item) else {
+                continue;
+            };
+            let state = self.workspace_orchestrator(workspace);
+            if self.orchestrator_dock.observe_work_item(&work_item, state).is_none() {
+                continue;
+            }
+            let Some(word) = state.notice_word() else {
+                continue;
+            };
+            let name: String = name.chars().take(WORK_ITEM_NOTICE_NAME_CHARS).collect();
+            self.orchestrator_dock
+                .session_notice(FRONT_DESK, &format!("{name} {word}"));
+        }
     }
 
     /// Forgets every conversation whose workspace the board no longer holds: its
@@ -240,6 +433,19 @@ impl HorizonApp {
     /// above [`MAX_TEXT_BYTES`] bytes sends nothing and keeps the field of the
     /// person.
     pub(in crate::app) fn say_to_orchestrator(&mut self, ctx: &egui::Context, local_id: &str, text: &str) -> bool {
+        self.say_to_orchestrator_marked(ctx, local_id, text, false)
+    }
+
+    /// The same send, with the mark of the front desk on the message: the front desk
+    /// passes a message of the person to the orchestrator of a work item, and the
+    /// bubble of that message carries the caption `via the front desk`.
+    pub(in crate::app) fn say_to_orchestrator_marked(
+        &mut self,
+        ctx: &egui::Context,
+        local_id: &str,
+        text: &str,
+        via_front_desk: bool,
+    ) -> bool {
         if !super::OrchestratorDock::is_conversation(&self.board, local_id) || self.orchestrator_dock.busy(local_id) {
             return false;
         }
@@ -250,7 +456,10 @@ impl HorizonApp {
             return false;
         }
         let directory = program_directory(&self.board, local_id);
-        let said = self.orchestrator_dock.session_mut(local_id).say(text);
+        let said = self
+            .orchestrator_dock
+            .session_mut(local_id)
+            .say_via(text, via_front_desk);
         let (needs_bridge, stopped) = match said {
             Said::Taken => (false, None),
             Said::Start => (true, None),

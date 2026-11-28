@@ -26,6 +26,7 @@ use horizon_core::browser::manifest::{
 use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 mod caller;
+pub(in crate::app) mod work_items;
 
 pub(in crate::app) use self::caller::CardCaller;
 pub(super) use self::caller::caller_unavailable;
@@ -185,6 +186,11 @@ impl HorizonApp {
             Ok(caller) => caller,
             Err(refusal) => return Some(refusal),
         };
+        // The front desk owns no workspace and no card, so it reaches the three
+        // operations of the work items and nothing else of this tool.
+        if matches!(caller, CardCaller::FrontDesk) {
+            return Some(self.answer_front_desk(&request.operation, ctx));
+        }
         match &request.operation {
             Operation::Create { title, document } => {
                 Some(self.create_card(title.as_deref(), document, caller, &request.actor, ctx))
@@ -221,7 +227,9 @@ impl HorizonApp {
                     root,
                     ctx,
                 ),
-                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } => Some(caller_unavailable()),
+                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } | CardCaller::FrontDesk => {
+                    Some(caller_unavailable())
+                }
             },
             Operation::OpenPanel {
                 preset,
@@ -251,8 +259,16 @@ impl HorizonApp {
             Operation::Presets => Some(self.answer_presets()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => match caller {
                 CardCaller::Panel(actor) => self.answer_setting_request(&request.operation, actor, request, root, ctx),
-                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } => Some(caller_unavailable()),
+                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } | CardCaller::FrontDesk => {
+                    Some(caller_unavailable())
+                }
             },
+            // The three operations of the work items are the ones that the front
+            // desk reaches, and its own path above answers them. Every other caller
+            // gets the refusal of a caller that cannot ask for what it asks.
+            Operation::WorkItems | Operation::WorkItemPropose { .. } | Operation::WorkItemMessage { .. } => {
+                Some(caller_unavailable())
+            }
         }
     }
 
@@ -438,6 +454,8 @@ impl HorizonApp {
             // card of a machine lands in the workspace of that machine.
             CardCaller::Orchestrator { workspace } => workspace,
             CardCaller::Session { machine } => self.machine_workspace(machine, ctx),
+            // The front desk creates no card, and its own path answers before this.
+            CardCaller::FrontDesk => return caller_unavailable(),
         };
         let card_count = self
             .workspace_cards(workspace)

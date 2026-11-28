@@ -2,14 +2,15 @@
 //! stands on the canvas, the row of a card that left the board, and the press
 //! that brings a card into view.
 
-use egui::{Event, Modifiers, PointerButton, Pos2};
+use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::Operation;
 use horizon_core::agent_bridge::{Entry, actor};
 use horizon_core::browser::manifest::block::{Outcome, Request};
 
 use super::chat::{WIDE, stand_in};
-use super::frame::{Drawn, Window, texts};
+use super::frame::{Drawn, Window, rounded_rects, texts};
+use crate::app::orchestrator_dock::list;
 use crate::app::test_support::editor_workspace_state;
 
 /// The local id of the workspace of this test: the form that `new_local_id`
@@ -226,4 +227,30 @@ fn the_row_of_a_card_that_left_the_board_reads_closed_and_takes_no_press() {
     assert_eq!(window.app().board.focused, None, "a closed row takes no press");
     assert_eq!(rows(&mut window), vec![(panel, "Plan".to_owned())], "the row stays");
     assert!(window.app().board.panel(id).is_none(), "no card came back");
+}
+
+#[test]
+fn the_reference_rows_of_two_cards_stand_six_points_apart() {
+    let (mut window, _folder) = window();
+    start(&mut window);
+    let _ = draw_card(&mut window);
+    let _ = draw_card(&mut window);
+    let _ = window.frame(Vec::new());
+    let output = window.frame(Vec::new());
+    let body = window
+        .app()
+        .orchestrator_dock
+        .last_frame()
+        .expect("the frame of the dock")
+        .body;
+    let rows: Vec<Rect> = rounded_rects(&output, body, list::CARD_RADIUS)
+        .into_iter()
+        .filter(|rect| (rect.height() - list::CARD_HEIGHT).abs() < 0.5)
+        .collect();
+    assert_eq!(rows.len(), 2, "the list draws one row for each card: {rows:?}");
+    assert_eq!(
+        rows[1].min.y - rows[0].max.y,
+        list::REF_GAP,
+        "two reference rows that follow each other stand 6 points apart: {rows:?}"
+    );
 }

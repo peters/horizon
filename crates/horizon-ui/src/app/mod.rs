@@ -334,6 +334,9 @@ pub struct HorizonApp {
     /// The `next_click` waits this host holds open, and the last wake line to
     /// each agent panel. It lives here for the same reason as `block_claim`.
     pub(in crate::app) block_clicks: block_clicks::BlockClickState,
+    /// The work items that the front desk passed a message to, and when it did.
+    /// It lives here for the same reason as `block_claim`.
+    pub(in crate::app) front_desk_messages: block_requests::work_items::WorkItemMessages,
     /// The card of Horizon that asks the person about a setting of this
     /// computer, and the request that waits for the answer.
     pub(in crate::app) settings_request: settings_request::SettingRequestState,
@@ -616,7 +619,7 @@ impl HorizonApp {
         // restart. A switch of the palette keeps the choice of this run.
         self.orchestrator_dock
             .follow_setting(self.template_config.features.orchestrator_dock);
-        self.poll_orchestrator_dock();
+        self.poll_orchestrator_dock(ctx);
         self.apply_settings_io(ctx);
         self.poll_machine_load();
         self.poll_server_sync();

@@ -8,6 +8,7 @@ mod frame;
 mod front_desk;
 mod geometry;
 mod lifecycle;
+mod proposal;
 mod rows;
 mod storage;
 mod switch;

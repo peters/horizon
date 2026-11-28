@@ -59,7 +59,7 @@ fn start_dock(app: &mut HorizonApp, ctx: &Context, folder: &Path) -> String {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !app.orchestrator_dock.running(&local_id) || app.orchestrator_dock.busy(&local_id) {
         assert!(Instant::now() < deadline, "the program of the dock starts and answers");
-        app.poll_orchestrator_dock();
+        app.poll_orchestrator_dock(&egui::Context::default());
         std::thread::sleep(Duration::from_millis(5));
     }
     local_id
@@ -131,7 +131,7 @@ fn a_press_on_a_card_of_an_orchestrator_wakes_its_conversation_once() {
     assert!(
         !entries
             .iter()
-            .any(|entry| matches!(entry, Entry::Person { text } if text == horizon_core::WAKE_LINE)),
+            .any(|entry| matches!(entry, Entry::Person { text, .. } if text == horizon_core::WAKE_LINE)),
         "the wake line is no message of the person"
     );
     assert_eq!(

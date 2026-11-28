@@ -7,8 +7,11 @@
 //! of one owner, and a card of another workspace is never readable through it.
 //!
 //! The front desk is one more actor of the dock, and it owns no workspace. It
-//! therefore creates no card, reads no card and opens no panel, and every request
-//! of that actor is refused with `caller_unavailable`.
+//! creates no card, reads no card and opens no panel, so every card operation is
+//! refused with `caller_unavailable`. The three operations of the work items are
+//! the ones that it reaches, and only while the dock runs the program of the front
+//! desk: the actor belongs to a program that Horizon started, as the actor of an
+//! orchestrator does.
 //!
 //! Nothing here changes the board or reads the disk: the checks read the
 //! manifest of the request, the board, the dock and the machine list that the
@@ -24,10 +27,11 @@ use horizon_core::node_cards;
 
 use super::super::HorizonApp;
 use super::super::browser_requests::{ActorPanel, actor_panel};
+use super::super::orchestrator_dock::FRONT_DESK;
 use super::request_expired;
 
-/// Who asked for a card: an agent panel, the orchestrator of a workspace, or a
-/// session of a machine of the list.
+/// Who asked for a card: an agent panel, the orchestrator of a workspace, a
+/// session of a machine of the list, or the front desk of the dock.
 #[derive(Clone, Copy)]
 pub(in crate::app) enum CardCaller<'a> {
     Panel(ActorPanel),
@@ -38,16 +42,19 @@ pub(in crate::app) enum CardCaller<'a> {
     Session {
         machine: &'a str,
     },
+    /// The program that the dock runs for the conversation that belongs to no
+    /// workspace. It reaches the three operations of the work items and no other.
+    FrontDesk,
 }
 
 impl CardCaller<'_> {
-    /// The agent panel of this caller, when a panel of this board asked. The two
+    /// The agent panel of this caller, when a panel of this board asked. The
     /// callers without a panel answer `None` here and are refused by every
     /// operation that needs the panel itself, such as `open_terminal`.
     pub(in crate::app) fn panel(self) -> Option<ActorPanel> {
         match self {
             Self::Panel(panel) => Some(panel),
-            Self::Orchestrator { .. } | Self::Session { .. } => None,
+            Self::Orchestrator { .. } | Self::Session { .. } | Self::FrontDesk => None,
         }
     }
 }
@@ -70,8 +77,15 @@ impl HorizonApp {
         }
         if actor::is_front_desk(&request.actor) {
             // The front desk belongs to no workspace, so it has no card of its own
-            // and no panel to open: this slice grants it nothing.
-            return Err(caller_unavailable());
+            // and no panel to open. It reaches the operations of the work items,
+            // and only while the dock runs its program: the identity belongs to a
+            // program that this Horizon started, as the identity of an
+            // orchestrator does.
+            return if self.orchestrator_dock.running(FRONT_DESK) {
+                Ok(CardCaller::FrontDesk)
+            } else {
+                Err(caller_unavailable())
+            };
         }
         if let Some(panel) = actor_panel(&self.board, &request.actor) {
             return Ok(CardCaller::Panel(panel));

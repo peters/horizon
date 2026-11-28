@@ -153,7 +153,8 @@ fn the_list_keeps_its_bound_and_one_notice_of_what_it_dropped() {
     assert_eq!(
         kept.last(),
         Some(&Entry::Person {
-            text: format!("message {}", MAX_ENTRIES + 2)
+            text: format!("message {}", MAX_ENTRIES + 2),
+            via_front_desk: false
         })
     );
     conversation.person_said("one more");
@@ -214,7 +215,8 @@ fn a_turn_makes_the_conversation_busy_and_its_end_clears_that() {
     assert_eq!(
         conversation.snapshot().entries.last(),
         Some(&Entry::Person {
-            text: "alpha".to_owned()
+            text: "alpha".to_owned(),
+            via_front_desk: false
         })
     );
     conversation.apply(BridgeEvent::TurnStarted);
@@ -414,6 +416,7 @@ fn a_restored_conversation_shows_its_entries_and_runs_no_turn() {
     let history = vec![
         Entry::Person {
             text: "alpha".to_owned(),
+            via_front_desk: false,
         },
         Entry::Agent {
             message_id: "msg-1".to_owned(),
@@ -441,14 +444,23 @@ fn a_stored_history_goes_above_the_messages_that_the_frame_already_showed() {
     let mut conversation = Conversation::new();
     conversation.person_said("new");
 
-    conversation.prepend(vec![Entry::Person { text: "old".to_owned() }]);
+    conversation.prepend(vec![Entry::Person {
+        text: "old".to_owned(),
+        via_front_desk: false,
+    }]);
 
     let snapshot = conversation.snapshot();
     assert_eq!(
         snapshot.entries,
         vec![
-            Entry::Person { text: "old".to_owned() },
-            Entry::Person { text: "new".to_owned() },
+            Entry::Person {
+                text: "old".to_owned(),
+                via_front_desk: false
+            },
+            Entry::Person {
+                text: "new".to_owned(),
+                via_front_desk: false
+            },
         ]
     );
     assert!(snapshot.busy, "the message that waited for its bridge still waits");
@@ -557,5 +569,131 @@ fn the_heading_of_a_reference_row_is_cut_and_keeps_no_control_character() {
         title.chars().count(),
         crate::agent_bridge::conversation::MAX_CARD_TITLE_CHARS,
         "the heading is cut to the bound of the row"
+    );
+}
+
+/// One item of a proposal of these tests.
+fn item(title: &str, task: &str) -> crate::agent_bridge::ProposalItem {
+    crate::agent_bridge::ProposalItem {
+        title: title.to_owned(),
+        task: task.to_owned(),
+        folder: None,
+    }
+}
+
+#[test]
+fn a_second_proposal_replaces_the_one_that_is_still_open() {
+    use crate::agent_bridge::ProposalState;
+
+    let mut conversation = Conversation::new();
+    conversation.proposal("first", &[item("Fix login", "Fix it")]);
+    conversation.proposal_state("first", ProposalState::Started);
+    conversation.proposal("second", &[item("Cold start", "Make it faster")]);
+    let states: Vec<(String, ProposalState)> = entries(&conversation)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Proposal { id, state, .. } => Some((id, state)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            ("first".to_owned(), ProposalState::Started),
+            ("second".to_owned(), ProposalState::Open)
+        ],
+        "a proposal that the person decided keeps its state"
+    );
+
+    // A third proposal replaces the second, which nobody decided.
+    conversation.proposal("third", &[item("Notes", "Write them")]);
+    let states: Vec<(String, ProposalState)> = entries(&conversation)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Proposal { id, state, .. } => Some((id, state)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(states[1], ("second".to_owned(), ProposalState::Replaced));
+    assert_eq!(states[2], ("third".to_owned(), ProposalState::Open));
+}
+
+#[test]
+fn the_items_and_the_title_of_a_proposal_are_cut_before_the_list_holds_them() {
+    use crate::agent_bridge::conversation::{MAX_PROPOSAL_ITEMS, MAX_PROPOSAL_TASK_CHARS, MAX_PROPOSAL_TITLE_CHARS};
+
+    let mut conversation = Conversation::new();
+    let long_title = format!("t{}\twith a tab", "i".repeat(MAX_PROPOSAL_TITLE_CHARS + 10));
+    let mut items: Vec<_> = (0..MAX_PROPOSAL_ITEMS + 2)
+        .map(|index| {
+            item(
+                &format!("item {index}\twith a tab"),
+                &"t".repeat(MAX_PROPOSAL_TASK_CHARS + 10),
+            )
+        })
+        .collect();
+    items[0] = item(&long_title, &"t".repeat(MAX_PROPOSAL_TASK_CHARS + 10));
+    conversation.proposal("p", &items);
+    let Some(Entry::Proposal { items, .. }) = conversation.snapshot().entries.last().cloned() else {
+        panic!("the proposal entry: {:?}", entries(&conversation));
+    };
+    assert_eq!(
+        items.len(),
+        MAX_PROPOSAL_ITEMS,
+        "one conversation holds the bound of items"
+    );
+    assert!(
+        !items[0].title.contains('\t'),
+        "a title is one line: {:?}",
+        items[0].title
+    );
+    assert_eq!(items[0].title.chars().count(), MAX_PROPOSAL_TITLE_CHARS);
+    assert_eq!(items[0].task.chars().count(), MAX_PROPOSAL_TASK_CHARS);
+}
+
+#[test]
+fn the_reference_row_of_a_work_item_keeps_one_row_for_each_work_item() {
+    let mut conversation = Conversation::new();
+    conversation.work_item_row("w-1", "Fix login");
+    conversation.work_item_row("w-2", "Cold start");
+    conversation.work_item_row("w-1", "Fix the login");
+    assert_eq!(
+        entries(&conversation),
+        vec![
+            Entry::WorkItem {
+                work_item: "w-1".to_owned(),
+                name: "Fix the login".to_owned()
+            },
+            Entry::WorkItem {
+                work_item: "w-2".to_owned(),
+                name: "Cold start".to_owned()
+            },
+        ],
+        "a second row of one work item moves the row that it has"
+    );
+}
+
+#[test]
+fn a_message_of_the_person_that_the_front_desk_passed_carries_its_mark() {
+    let mut conversation = Conversation::new();
+    conversation.person_said("alpha");
+    conversation.person_said_via("bravo", true);
+    assert_eq!(
+        entries(&conversation),
+        vec![
+            Entry::Person {
+                text: "alpha".to_owned(),
+                via_front_desk: false
+            },
+            Entry::Person {
+                text: "bravo".to_owned(),
+                via_front_desk: true
+            },
+        ]
+    );
+    let json = serde_json::to_string(&entries(&conversation)[0]).expect("the stored form");
+    assert!(
+        !json.contains("via_front_desk"),
+        "a message that the front desk did not pass writes no field: {json}"
     );
 }
