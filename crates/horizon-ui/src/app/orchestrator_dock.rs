@@ -32,7 +32,9 @@
 //! rectangle of a frame and the drafts are the state of this run, as
 //! `sidebar_visible` and `minimap_visible` are.
 
+mod bridges;
 mod composer;
+mod drafts;
 mod empty;
 mod front_desk;
 mod header;
@@ -44,6 +46,7 @@ mod programs;
 pub(in crate::app) mod proposal;
 mod session;
 mod storage;
+mod switches;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -56,17 +59,19 @@ mod workers_menu;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Rect;
 use horizon_core::Board;
-use horizon_core::agent_bridge::{Bridge, BridgeError, STOP_TIMEOUT};
 
 pub(in crate::app) use self::front_desk::FRONT_DESK;
 use self::front_desk::FrontDesk;
 use self::programs::Program;
-use self::session::{Session, Start};
+use self::session::Session;
+#[cfg(test)]
+use self::switches::dock_switch;
+#[cfg(test)]
+use self::switches::dock_switch_value;
 use self::workers::WorkerBook;
 pub(in crate::app) use self::workers::WorkerRecord;
 use super::HorizonApp;
@@ -166,12 +171,6 @@ pub(in crate::app) struct OrchestratorDock {
     test_running: std::collections::HashSet<String>,
 }
 
-impl Default for OrchestratorDock {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 /// The rectangles of the parts of the dock in one frame, which a test reads.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -185,117 +184,6 @@ pub(in crate::app) struct LastFrame {
 }
 
 impl OrchestratorDock {
-    /// The dock of a start whose settings hold `setting`: the dock follows that
-    /// setting, and the environment switch of the fixture wins over it.
-    pub(in crate::app) fn from_settings(setting: bool) -> Self {
-        let mut dock = Self::from_values(
-            setting,
-            dock_switch_value(std::env::var(DOCK_SWITCH).ok().as_deref()),
-            program_from_environment(std::env::var(PROGRAM_SWITCH).ok().as_deref()),
-        );
-        dock.follows_setting = true;
-        dock
-    }
-
-    /// The dock of a start that names its values: the setting and the environment
-    /// switch, which a test gives without the environment of the test process.
-    fn from_values(setting: bool, environment: Option<bool>, program: PathBuf) -> Self {
-        Self {
-            setting,
-            follows_setting: false,
-            environment,
-            run_switch: None,
-            rect: None,
-            program,
-            sessions: HashMap::new(),
-            drafts: HashMap::new(),
-            front_desk: FrontDesk::default(),
-            storage: None,
-            worker: worker::Worker::default(),
-            stops_pending: 0,
-            programs: Vec::new(),
-            close_wait: None,
-            #[cfg(test)]
-            last_frame: None,
-            #[cfg(test)]
-            last_header: None,
-            proposal_start: None,
-            workers: WorkerBook::default(),
-            work_item_states: std::collections::HashMap::new(),
-            turn_watch: Vec::new(),
-            #[cfg(test)]
-            test_running: std::collections::HashSet::new(),
-        }
-    }
-
-    pub(in crate::app) fn new(visible: bool) -> Self {
-        Self::from_values(visible, None, program_from_environment(None))
-    }
-
-    /// The dock of a test whose program is `program`: the seam of
-    /// [`PROGRAM_SWITCH`], which a test uses without the environment of the test
-    /// process.
-    #[cfg(test)]
-    pub(in crate::app) fn with_program(visible: bool, program: PathBuf) -> Self {
-        Self::from_values(visible, None, program)
-    }
-
-    /// Replaces the program of every conversation of this dock, which a test does
-    /// in place of a whole dock, so the startup decision of the app keeps its
-    /// stored folder.
-    #[cfg(test)]
-    pub(in crate::app) fn set_program(&mut self, program: PathBuf) {
-        self.program = program;
-    }
-
-    /// Whether the dock draws in this frame. A run that the palette did not turn
-    /// keeps the setting of Settings and the environment switch of the fixture,
-    /// so a person who changes the setting sees the dock without a restart. The
-    /// switch of the run wins over both, and then the switch of the fixture wins
-    /// over the setting: `1` shows the dock and `0` hides it.
-    pub(in crate::app) fn visible(&self) -> bool {
-        self.run_switch
-            .unwrap_or_else(|| self.environment.unwrap_or(self.setting))
-    }
-
-    pub(in crate::app) fn toggle(&mut self) {
-        self.run_switch = Some(!self.visible());
-    }
-
-    /// Reads the setting of Settings again. The switch of the palette keeps the
-    /// choice of this run, so the dock that a person turned over stays so until
-    /// the next start.
-    pub(in crate::app) fn follow_setting(&mut self, setting: bool) {
-        if self.follows_setting {
-            self.setting = setting;
-        }
-    }
-
-    /// The dock of a test whose switch follows the setting of Settings, as the
-    /// dock of a run does, without the environment of the test process.
-    #[cfg(test)]
-    pub(in crate::app) fn following(setting: bool) -> Self {
-        let mut dock = Self::from_values(setting, None, program_from_environment(None));
-        dock.follows_setting = true;
-        dock
-    }
-
-    /// The rectangle of the dock in this frame. A frame that draws no dock has
-    /// none, so the canvas keeps the whole window.
-    pub(in crate::app) fn frame_rect(&self) -> Option<Rect> {
-        self.rect
-    }
-
-    pub(in crate::app) fn set_frame_rect(&mut self, rect: Option<Rect>) {
-        self.rect = rect;
-    }
-
-    /// The draft of the workspace that `local_id` names, which is empty until the
-    /// person writes in it.
-    fn draft(&self, local_id: &str) -> &str {
-        self.drafts.get(local_id).map_or("", String::as_str)
-    }
-
     /// The front desk of this dock, which belongs to no workspace, and the choice
     /// of the conversation that a frame draws.
     pub(in crate::app) fn front_desk(&self) -> &FrontDesk {
@@ -311,255 +199,6 @@ impl OrchestratorDock {
     /// of that board, or the front desk.
     fn is_conversation(board: &Board, local_id: &str) -> bool {
         local_id == FRONT_DESK || board.workspace_id_by_local_id(local_id).is_some()
-    }
-
-    /// The draft of the workspace that `local_id` names, which a test writes as a
-    /// person who typed in the field would.
-    #[cfg(test)]
-    pub(in crate::app) fn draft_mut(&mut self, local_id: &str) -> &mut String {
-        self.drafts.entry(local_id.to_owned()).or_default()
-    }
-
-    /// The text of the draft of `local_id`, when it holds more than white space.
-    /// The field keeps the writing of the person: the send clears it, and a
-    /// message that goes out from another path leaves it alone.
-    fn draft_text(&self, local_id: &str) -> Option<String> {
-        let text = self.drafts.get(local_id)?.trim().to_owned();
-        (!text.is_empty()).then_some(text)
-    }
-
-    /// Empties the field of `local_id`, which a message that went out does.
-    fn clear_draft(&mut self, local_id: &str) {
-        self.drafts.remove(local_id);
-    }
-
-    /// The conversation of `local_id`, which a message of the person creates.
-    fn session_mut(&mut self, local_id: &str) -> &mut Session {
-        self.sessions.entry(local_id.to_owned()).or_insert_with(Session::new)
-    }
-
-    /// Takes the request of one start of the conversation of `local_id`.
-    fn begin_start(&mut self, local_id: &str) -> Option<Start> {
-        self.sessions.get_mut(local_id).map(Session::begin_start)
-    }
-
-    /// Whether the start of the conversation of `local_id` waits on the worker.
-    fn is_starting(&self, local_id: &str) -> bool {
-        self.sessions.get(local_id).is_some_and(Session::is_starting)
-    }
-
-    /// Keeps the bridge of a start that answers `generation`, and answers the
-    /// bridge that the caller stops instead.
-    fn adopt(
-        &mut self,
-        local_id: &str,
-        generation: u64,
-        outcome: Option<Result<Bridge, BridgeError>>,
-    ) -> Option<Bridge> {
-        match self.sessions.get_mut(local_id) {
-            Some(session) => session.adopt(generation, outcome),
-            // The conversation went with its workspace: the bridge of that
-            // start serves nobody.
-            None => outcome.and_then(Result::ok),
-        }
-    }
-
-    /// Stops the conversation of `local_id`, and answers the bridge that the
-    /// caller stops on the worker.
-    fn stop(&mut self, local_id: &str) -> Option<Bridge> {
-        self.sessions.get_mut(local_id)?.stop()
-    }
-
-    /// Stops every conversation of the dock, the front desk with them, and forgets
-    /// the record of the front desk: the board that they speak for goes, and so
-    /// does the session that the record belongs to.
-    pub(in crate::app) fn stop_and_clear(&mut self) {
-        self.stop_all_bridges();
-        self.sessions.clear();
-        self.drafts.clear();
-        self.front_desk.clear();
-    }
-
-    /// Takes the bridge of every conversation, for the end of Horizon.
-    fn stop_all(&mut self) -> Vec<Bridge> {
-        self.sessions.values_mut().filter_map(Session::shutdown).collect()
-    }
-
-    /// Takes the conversation of `local_id`, with its draft, for a workspace
-    /// that closes.
-    fn forget(&mut self, local_id: &str) -> Option<Session> {
-        self.drafts.remove(local_id);
-        self.sessions.remove(local_id)
-    }
-
-    /// Starts the bridge of the conversation of `local_id` on the worker of the
-    /// dock, and keeps the bridge of the answer to its start. A start opens a
-    /// process, so a frame never waits for it, and the specification of that
-    /// program is built on the worker as well: the identity of a workspace reads
-    /// the file system.
-    fn start_bridge(
-        &mut self,
-        program: PathBuf,
-        directory: PathBuf,
-        local_id: &str,
-        start: Start,
-        wake: Arc<dyn Fn() + Send + Sync>,
-    ) {
-        let generation = start.generation;
-        let session = start.session;
-        let started_id = local_id.to_owned();
-        let applied_id = local_id.to_owned();
-        let handed = self.worker.then(
-            move || {
-                // The folder of the front desk is made here and not on the frame:
-                // a frame reads no directory and makes none.
-                if started_id == FRONT_DESK {
-                    session::make_directory(&directory, FRONT_DESK);
-                }
-                let spec = session::program_spec(&program, &directory, session, &started_id);
-                Bridge::start(spec, session::codec(), wake)
-            },
-            move |dock, outcome| dock.apply_start(&applied_id, generation, outcome),
-        );
-        if !handed {
-            // No worker took the start, so no program of this conversation runs:
-            // the person reads the notice that names it, and the next message
-            // tries a start again.
-            self.apply_start(local_id, generation, None);
-        }
-    }
-
-    /// Keeps the bridge of the start that answers `generation`, and answers the
-    /// bridge that the caller stops instead.
-    fn apply_start(&mut self, local_id: &str, generation: u64, outcome: Option<Result<Bridge, BridgeError>>) {
-        if let Some(bridge) = self.adopt(local_id, generation, outcome) {
-            // The answer of a start that the person replaced, or of a second start
-            // of a live conversation, serves nobody: it is stopped here.
-            self.stop_bridge(bridge);
-        }
-    }
-
-    /// Stops `bridge` on the worker of the dock: a stop closes the input, waits
-    /// for the program and ends it, so a frame never runs it.
-    ///
-    /// The identity of the program is recorded here and not in the job of the
-    /// worker, because a job that never runs, from a worker that does not start or
-    /// from a queue that the exit left behind, must still leave the identity of a
-    /// program that the close of Horizon has to end. One stop reads the process
-    /// table once, and no repeated frame path does.
-    fn stop_bridge(&mut self, bridge: Bridge) {
-        let program = Program::record(bridge.pid());
-        let pid = program.pid();
-        self.programs.push(program);
-        self.stops_pending = self.stops_pending.saturating_add(1);
-        let handed = self
-            .worker
-            .then(move || bridge.stop(), move |dock, _stopped| dock.stop_finished(pid));
-        if !handed {
-            // No worker took the stop, so nothing closes the input of that
-            // program: it stays recorded, and the close of Horizon ends it.
-            self.stops_pending = self.stops_pending.saturating_sub(1);
-        }
-    }
-
-    /// Applies the end of the stop of `pid` on the worker: the program of that
-    /// stop ended there, so the close of Horizon has nothing to end for it.
-    fn stop_finished(&mut self, pid: u32) {
-        self.stops_pending = self.stops_pending.saturating_sub(1);
-        self.programs.retain(|program| program.pid() != pid);
-    }
-
-    /// Stops every bridge of the dock on the worker, which the exit calls once.
-    fn stop_all_bridges(&mut self) {
-        let bridges = self.stop_all();
-        for bridge in bridges {
-            self.stop_bridge(bridge);
-        }
-    }
-
-    /// The stops of the dock that the worker did not finish, which the pass of a
-    /// close shows beside the panels of the terminal.
-    pub(in crate::app) fn stops_pending(&self) -> usize {
-        self.stops_pending
-    }
-
-    /// Whether the pass of a close still waits for a stop of the dock. A stop
-    /// closes the input of its program, waits for it and ends it, so the wait is
-    /// on the worker and never on this thread. Its bound is one stop of a bridge
-    /// for each stop that it waits for; a bound that passes ends every program
-    /// that its stop did not reach, by the identity that the dock recorded.
-    pub(in crate::app) fn stops_hold_exit(&mut self) -> bool {
-        if self.stops_pending == 0 {
-            self.close_wait = None;
-            self.end_remaining_programs(Duration::ZERO);
-            return false;
-        }
-        let bound = self.stop_bound();
-        let (started, bound) = *self.close_wait.get_or_insert((Instant::now(), bound));
-        if started.elapsed() < bound {
-            return true;
-        }
-        tracing::warn!(
-            stops = self.stops_pending,
-            "the exit ends the programs that their stop did not reach"
-        );
-        self.close_wait = None;
-        self.end_remaining_programs(Duration::ZERO);
-        false
-    }
-
-    /// The bound of a wait for the stops of the dock: one stop of a bridge for
-    /// each stop that it waits for.
-    fn stop_bound(&self) -> Duration {
-        let stops = u32::try_from(self.stops_pending.max(1)).unwrap_or(u32::MAX);
-        STOP_TIMEOUT.saturating_mul(stops)
-    }
-
-    /// Ends every program whose stop did not end it, by the identity that the dock
-    /// recorded, so no program of a conversation outlives the exit of Horizon. A
-    /// frame passes no grace, and an exit that already holds its thread passes the
-    /// moment that the termination signal gets before the kill signal.
-    fn end_remaining_programs(&mut self, grace: Duration) {
-        for program in self.programs.drain(..) {
-            if !program.end(grace) {
-                tracing::error!(pid = program.pid(), "a program of a conversation outlives its end");
-            }
-        }
-    }
-
-    /// Applies, in order, the outcomes of the worker of the dock.
-    fn poll_worker(&mut self) {
-        for apply in self.worker.take_finished() {
-            apply(self);
-        }
-    }
-
-    /// Closes the worker of the dock for an exit that waits for it, so no start,
-    /// stop or write outlives the app. The wait is one stop of a bridge for each
-    /// stop that it waits for, and a program that its stop did not reach ends by
-    /// the identity that the dock recorded. The entries that the exit leaves open
-    /// go to their files first: a tool call that still runs reads as interrupted
-    /// on the next start.
-    pub(in crate::app) fn flush_worker(&mut self) {
-        self.flush_conversation_appends();
-        let bound = self.stop_bound();
-        self.worker.flush(bound);
-        self.stops_pending = 0;
-        self.close_wait = None;
-        self.end_remaining_programs(programs::END_GRACE);
-    }
-
-    /// Keeps the text of the example that the person clicked in the draft of
-    /// `local_id`, when that draft holds no text yet. The answer says whether the
-    /// draft took it: then the field takes the keyboard. The click sends nothing.
-    fn pick_example(&mut self, local_id: &str, text: &str) -> bool {
-        let draft = self.drafts.entry(local_id.to_owned()).or_default();
-        if !draft.trim().is_empty() {
-            return false;
-        }
-        draft.clear();
-        draft.push_str(text);
-        true
     }
 
     /// Keeps the rectangles of this frame for the tests of the layout.
@@ -798,31 +437,6 @@ pub(in crate::app) fn leftmost_panel(panels: [Option<Rect>; 2]) -> Option<Rect> 
         .reduce(|left, rect| if rect.min.x < left.min.x { rect } else { left })
 }
 
-/// Whether the switch of the dock is on: the variable holds `1` and nothing else.
-fn dock_switch(value: Option<&str>) -> bool {
-    value == Some("1")
-}
-
-/// Whether the switch of the dock is off: the variable holds `0` and nothing else.
-/// The fixture needs a window without the dock in a store that holds the default,
-/// which is on.
-fn dock_switch_off(value: Option<&str>) -> bool {
-    value == Some("0")
-}
-
-/// The value of the environment switch of the dock of a run: `Some(true)` for `1`,
-/// `Some(false)` for `0`, and `None` when the run names no switch, and then the
-/// setting `features.orchestrator_dock` decides.
-fn dock_switch_value(value: Option<&str>) -> Option<bool> {
-    if dock_switch(value) {
-        Some(true)
-    } else if dock_switch_off(value) {
-        Some(false)
-    } else {
-        None
-    }
-}
-
 impl HorizonApp {
     /// Sends `text` to the conversation that the dock shows, as the message of
     /// the person. It is the path of the button `+ Rent a machine`, which writes
@@ -839,14 +453,6 @@ impl HorizonApp {
         }
         self.say_to_orchestrator(ctx, &shown, text)
     }
-}
-
-/// The program of a start: the value of [`PROGRAM_SWITCH`] when it names one, and
-/// [`PROGRAM`] otherwise.
-fn program_from_environment(value: Option<&str>) -> PathBuf {
-    value
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| PathBuf::from(PROGRAM), PathBuf::from)
 }
 
 /// The switch of the dock of a run: the setting of Settings, the environment

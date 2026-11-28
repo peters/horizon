@@ -22,15 +22,22 @@
 //! back on the first frame of a start. [`Storage`] holds the bookkeeping of
 //! that file, so a frame writes one batch when its events settled an entry.
 
+mod events;
+mod lines;
+mod program;
+mod start;
+
 use std::sync::Arc;
 
 use horizon_core::OrchestratorConversationState;
 use horizon_core::agent_bridge::{
-    Bridge, BridgeEvent, BridgeIdentity, ClaudeCodec, Conversation, ConversationSnapshot, Entry, ProgramSpec,
-    ProposalItem, ProposalState, SessionChoice,
+    Bridge, BridgeEvent, Conversation, ConversationSnapshot, Entry, ProposalItem, ProposalState, SessionChoice,
 };
 
+use super::FRONT_DESK;
 use super::storage::Storage;
+
+pub(super) use self::program::{codec, make_directory, program_spec};
 
 /// The notice of a turn that the person stopped.
 pub(super) const STOPPED_NOTICE: &str = "Stopped by you";
@@ -294,25 +301,6 @@ impl Session {
         }
     }
 
-    /// Sends the one wake line of Horizon to the program of this conversation as
-    /// a turn of its own, so the program learns that a press waits, and names
-    /// that turn in the conversation. The turn is no message of the person, so
-    /// it adds no [`Entry::Person`]. It answers whether the line went out.
-    pub(super) fn wake(&mut self, line: &str) -> bool {
-        let Some(bridge) = self.bridge.take() else {
-            return false;
-        };
-        if bridge.send(line.to_owned()).is_err() {
-            // The program took no line, so its end arrives with the events of this
-            // bridge: no notice claims a wake that did not go out.
-            self.bridge = Some(bridge);
-            return false;
-        }
-        self.bridge = Some(bridge);
-        self.conversation.system_said(WAKE_NOTICE);
-        true
-    }
-
     /// Adds or moves the reference row of the card `panel` of this workspace,
     /// which the dock draws under the text of the program.
     pub(super) fn card_row(&mut self, panel: &str, title: &str) {
@@ -412,217 +400,6 @@ impl Session {
         (!cut.trim().is_empty()).then_some(cut)
     }
 
-    /// Whether this conversation can take a line of Horizon now: its program runs,
-    /// no turn of it runs, and no earlier line of Horizon waits.
-    pub(super) fn takes_a_system_line(&self) -> bool {
-        !self.busy() && self.has_bridge() && self.system_waiting.is_empty()
-    }
-
-    /// Sends one line of Horizon into the bridge of this conversation now, and
-    /// answers whether the program took it. The caller has asked
-    /// [`Self::takes_a_system_line`]. The line is no message of the person, so it
-    /// adds no [`Entry::Person`].
-    pub(super) fn send_system_line(&mut self, line: &str) -> bool {
-        self.send_system_now(line)
-    }
-
-    /// Sends one line of Horizon to the program of this conversation as a turn of
-    /// its own, and answers whether it went out now. A conversation that runs a turn
-    /// keeps the line until that turn ends, so the words of Horizon never cut into
-    /// the answer of the program; a conversation without a bridge holds it too.
-    pub(super) fn system_message(&mut self, line: &str) -> bool {
-        if self.busy() || !self.has_bridge() {
-            self.system_waiting.push(line.to_owned());
-            return false;
-        }
-        self.send_system_now(line)
-    }
-
-    /// Sends the line of Horizon that waits, when no turn of this conversation
-    /// runs. It answers whether a line went out.
-    pub(super) fn flush_system(&mut self) -> bool {
-        if self.system_waiting.is_empty() || self.busy() || !self.has_bridge() {
-            return false;
-        }
-        let line = self.system_waiting.remove(0);
-        if self.send_system_now(&line) {
-            return true;
-        }
-        self.system_waiting.insert(0, line);
-        false
-    }
-
-    /// Sends one line of Horizon into the bridge that runs, and marks the
-    /// conversation busy for it. The line is no message of the person, so it adds
-    /// no [`Entry::Person`] and no notice: the words of Horizon that name such a
-    /// turn are the words of its caller.
-    fn send_system_now(&mut self, line: &str) -> bool {
-        let Some(bridge) = self.bridge.take() else {
-            return false;
-        };
-        if bridge.send(line.to_owned()).is_err() {
-            // The program took no line, so its end arrives with the events of this
-            // bridge: no state of this conversation claims a turn that did not start.
-            self.bridge = Some(bridge);
-            return false;
-        }
-        self.bridge = Some(bridge);
-        self.conversation.turn_started();
-        true
-    }
-
-    /// Takes the request of one start, and makes every start in flight stale.
-    pub(super) fn begin_start(&mut self) -> Start {
-        self.generation = self.generation.saturating_add(1);
-        self.phase = Phase::Starting;
-        self.limit_noticed = false;
-        let session = match &self.resume_id {
-            Some(session_id) => SessionChoice::Resume(session_id.clone()),
-            None => SessionChoice::New(horizon_core::new_local_id()),
-        };
-        self.resume_watch = matches!(session, SessionChoice::Resume(_));
-        Start {
-            generation: self.generation,
-            session,
-        }
-    }
-
-    /// Keeps the bridge of a start that answers this generation and sends the
-    /// messages that waited for it. It answers the bridge of a stale answer,
-    /// which the caller stops, and `None` for a stale answer that failed.
-    pub(super) fn adopt(
-        &mut self,
-        generation: u64,
-        outcome: Option<Result<Bridge, horizon_core::agent_bridge::BridgeError>>,
-    ) -> Option<Bridge> {
-        if generation != self.generation {
-            // The person stopped this conversation, or its workspace closed,
-            // while the start ran: the bridge of that start is not ours, and the
-            // messages that wait belong to the start that replaced it.
-            return outcome.and_then(Result::ok);
-        }
-        match outcome {
-            Some(Ok(bridge)) => {
-                // A live bridge is never replaced by a second start of one
-                // workspace: the bridge that runs keeps the conversation, and the
-                // bridge of this start goes back to the caller for its stop.
-                if self.bridge.is_some() {
-                    return Some(bridge);
-                }
-                self.bridge = Some(bridge);
-                self.phase = Phase::Running;
-                self.send_waiting();
-                None
-            }
-            Some(Err(error)) => {
-                self.fail(&failure_detail(&error));
-                None
-            }
-            None => {
-                self.fail("the start did not answer");
-                None
-            }
-        }
-    }
-
-    /// Sends the messages that waited to the bridge of this conversation.
-    fn send_waiting(&mut self) {
-        for text in std::mem::take(&mut self.waiting) {
-            let Some(bridge) = self.bridge.as_ref() else {
-                return;
-            };
-            if bridge.send(text).is_err() {
-                // The program ended before this message reached it. Its events
-                // still hold the end of the program, and a poll of a later frame
-                // reads them and names why it ended, so the bridge stays until
-                // then.
-                return;
-            }
-        }
-    }
-
-    /// Ends this conversation with the notice of a program that did not start.
-    fn fail(&mut self, detail: &str) {
-        self.phase = Phase::Ended;
-        self.waiting.clear();
-        // The message of that start ends with it, so the field offers the send
-        // control again.
-        self.conversation.apply(BridgeEvent::TurnEnded {
-            failed: false,
-            duration_ms: None,
-            cost_usd: None,
-        });
-        self.conversation.notice(&format!("{START_FAILURE}: {detail}"));
-        if self.resume_watch {
-            // The stored session of this start did not continue either, so no
-            // later start resumes it: the next message starts a new session.
-            self.forget_resumed_session();
-        }
-    }
-
-    /// Reads every event of the bridge of this conversation. It never waits.
-    pub(super) fn poll(&mut self) {
-        let events = match &self.bridge {
-            Some(bridge) => bridge.poll(),
-            None => return,
-        };
-        if events.is_empty() {
-            return;
-        }
-        let mut ended = false;
-        let mut resume_failed = false;
-        let mut started = false;
-        for event in events {
-            match &event {
-                BridgeEvent::SessionStarted { .. } => started = true,
-                BridgeEvent::Limit {
-                    using_overage: true, ..
-                } if !self.limit_noticed => {
-                    self.limit_noticed = true;
-                    self.conversation.notice(LIMIT_NOTICE);
-                }
-                BridgeEvent::TurnEnded { failed, .. } => {
-                    if *failed {
-                        resume_failed |= self.resume_watch;
-                    } else {
-                        self.resume_watch = false;
-                    }
-                }
-                BridgeEvent::Ended { .. } => {
-                    ended = true;
-                    resume_failed |= self.resume_watch;
-                }
-                _ => {}
-            }
-            self.conversation.apply(event);
-        }
-        if started {
-            // The session id is text of the program, so the dock keeps the value
-            // that the conversation cut: one line of `MAX_SUMMARY_CHARS`
-            // characters, which the next start passes as one argument.
-            let session_id = self.conversation.snapshot().session_id.clone();
-            if session_id.as_deref().is_some_and(|id| !id.is_empty()) {
-                self.resume_id = session_id;
-            }
-        }
-        if resume_failed {
-            self.forget_resumed_session();
-        }
-        if ended {
-            self.bridge = None;
-            self.phase = Phase::Ended;
-        }
-    }
-
-    /// Forgets the stored session that the program did not continue, and says so
-    /// in one notice. The entries of the conversation stay, and the next message
-    /// starts a new session.
-    fn forget_resumed_session(&mut self) {
-        self.resume_watch = false;
-        self.resume_id = None;
-        self.conversation.notice(RESUME_FAILURE_NOTICE);
-    }
-
     /// Takes the bridge of this conversation for the end of Horizon. The entries
     /// stay as they are: nothing draws them again.
     pub(super) fn shutdown(&mut self) -> Option<Bridge> {
@@ -647,66 +424,6 @@ impl Session {
         self.conversation.notice(STOPPED_NOTICE);
         self.phase = Phase::Stopped;
         self.bridge.take()
-    }
-}
-
-/// The program of one conversation: Claude Code, or the program that the
-/// environment names in its place, with the same arguments and the identity of
-/// the conversation that `local_id` names.
-///
-/// The identity is the one of the active host: its actor, its host instance, its
-/// home and its executable, plus the plugin directory of Claude Code, so the
-/// program has the Horizon MCP server and the Horizon skills and draws cards in
-/// its own workspace. A local id that the actor form does not accept gives no
-/// identity, and the program then draws no card.
-///
-/// The front desk under [`super::FRONT_DESK`] has an identity of its own and the
-/// program of a front desk ([`horizon_core::agent_bridge::claude_for_front_desk`]).
-/// That program has no built-in tool, so the conversation writes the words of the
-/// person to the work items and does no work itself.
-///
-/// The frame never calls this function: the identity reads the file system, so
-/// the job of [`super::worker`] builds the specification of a start.
-pub(super) fn program_spec(
-    program: &std::path::Path,
-    cwd: &std::path::Path,
-    session: SessionChoice,
-    local_id: &str,
-) -> ProgramSpec {
-    let mut spec = if local_id == super::FRONT_DESK {
-        let identity = BridgeIdentity::front_desk();
-        horizon_core::agent_bridge::claude_for_front_desk(cwd, session, &identity)
-    } else if let Some(identity) = BridgeIdentity::for_workspace(local_id) {
-        horizon_core::agent_bridge::claude_for_workspace(cwd, session, &identity)
-    } else {
-        tracing::warn!(local_id, "the workspace of this conversation has no orchestrator actor");
-        horizon_core::agent_bridge::claude(cwd, session)
-    };
-    spec.program = program.to_path_buf();
-    spec
-}
-
-/// Makes the folder that the program of `local_id` runs in, which the front desk
-/// keeps under the Horizon home. The worker of the dock calls this before a start,
-/// so no frame reads a directory or makes one. A folder that cannot be made leaves
-/// the program in the directory that the job names, and its start names why.
-pub(super) fn make_directory(directory: &std::path::Path, local_id: &str) {
-    if let Err(error) = std::fs::create_dir_all(directory) {
-        tracing::warn!(%error, %local_id, "the folder of this conversation is not there");
-    }
-}
-
-/// The events of a program that the dock runs, as the line format of Claude
-/// Code reads them.
-pub(super) fn codec() -> Box<dyn horizon_core::agent_bridge::LineCodec> {
-    Box::new(ClaudeCodec::new())
-}
-
-/// The words of the operating system under the error of a start.
-fn failure_detail(error: &horizon_core::agent_bridge::BridgeError) -> String {
-    match std::error::Error::source(error) {
-        Some(source) => source.to_string(),
-        None => error.to_string(),
     }
 }
 

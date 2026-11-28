@@ -642,13 +642,27 @@ when it names one of those kinds.
   folder that a saved session names, the load of a stored conversation, the
   record of its session in the board, one write for each conversation that holds
   settled entries, the delete of a workspace that goes, and the outcome of each
-  job. `orchestrator_dock.rs` keeps the state of the run and queues each start
-  and each stop on the worker of the dock, a thread of its own, named
+  job. `orchestrator_dock.rs` keeps the state of the run, and `bridges.rs` queues
+  each start and each stop on the worker of the dock, a thread of its own, named
   `orchestrator-dock`, and separate from the coordination worker of
-  `app::browser_host_io`. `worker.rs` runs those jobs and answers whether a
+  `app::browser_host_io`. `bridges.rs` also holds the bound of the close.
+  `switches.rs` holds the switches of the dock and the rectangle of a frame, and
+  `drafts.rs` holds the draft of each conversation and the example that a click
+  puts there. `worker.rs` runs those jobs and answers whether a
   worker took one, and `programs.rs` records the identity of each program whose
   stop is owed, so the close of Horizon can end it. `text.rs` lays the text of
-  the dock out. The switch of this part is the setting
+  the dock out. Three files of the dock are parents of small modules:
+  `session.rs` (`session/start.rs` the request of a start and the answer of the
+  worker, `session/events.rs` the pass that reads the events of a bridge,
+  `session/lines.rs` the wake line and the queue of the lines of Horizon,
+  `session/program.rs` the specification of the program, its folder and its
+  codec), `list.rs` (`list/reference_rows.rs` the reference row of a card and of
+  a work item, `list/text_rows.rs` the bubble of the person and the text of the
+  agent, `list/tool_rows.rs` the row of one tool call, `list/notice_rows.rs` one
+  notice and the row of a turn that waits) and `window.rs`
+  (`window/proposals.rs` the press on a proposal and the answer of the check of
+  its folders, `window/work_item_notices.rs` the notices of the front desk for
+  the states of its work items). The switch of this part is the setting
   `features.orchestrator_dock`, which is on at first and which the window reads on
   every frame. The environment variable of the fixture of the smoke test wins over
   it: `HORIZON_ORCHESTRATOR_DOCK=1` turns the dock on for the run and
