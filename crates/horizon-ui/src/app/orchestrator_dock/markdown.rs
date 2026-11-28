@@ -38,6 +38,8 @@ pub(super) struct Span {
 
 /// The mark of a bullet of a list, which stands in place of `-` or `*`.
 const BULLET: &str = "\u{2022} ";
+/// The bar of a quoted line, which stands in place of `>`.
+const QUOTE: &str = "\u{2502} ";
 /// The fence of a block of code.
 const FENCE: &str = "```";
 
@@ -70,6 +72,13 @@ pub(super) fn spans(text: &str) -> Vec<Span> {
 fn line_spans(line: &str, out: &mut Spans) {
     if let Some(heading) = heading(line) {
         out.push(heading, Style::Bold);
+        return;
+    }
+    if let Some(quote) = line.strip_prefix("> ").or_else(|| (line == ">").then_some("")) {
+        // The mark of a quote becomes a bar, so a quoted line stands apart
+        // without its mark.
+        out.push(QUOTE, Style::Plain);
+        inline_spans(quote, out);
         return;
     }
     let indent_len = line.len() - line.trim_start().len();
@@ -266,6 +275,18 @@ mod tests {
             spans("#no heading"),
             vec![span("#no heading", Style::Plain)],
             "a heading needs a space after its marks"
+        );
+    }
+
+    #[test]
+    fn a_quoted_line_gets_a_bar_in_place_of_its_mark() {
+        assert_eq!(
+            spans("It reads:\n> Cache hits are **quiet**,\n> the build ends.\n2 > 1"),
+            vec![
+                span("It reads:\n\u{2502} Cache hits are ", Style::Plain),
+                span("quiet", Style::Bold),
+                span(",\n\u{2502} the build ends.\n2 > 1", Style::Plain),
+            ]
         );
     }
 

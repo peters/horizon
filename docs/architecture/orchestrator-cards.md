@@ -176,6 +176,10 @@ answers a question from wherever the person looks
   that the saved card holds. The owner of a card may be an orchestrator or an
   agent panel; a card of Horizon's own asks for a setting on its own path and
   stands in no group.
+  A card with no such callout is a question too while its owner holds a wait for
+  a press (`next_click`) and the card has a row of buttons: the text of that
+  question is the heading of the card, and its answers are the buttons. A real
+  agent program asked this way. The question ends when the wait ends.
 - **The order is the order of the cards.** The oldest first, by the time of the
   last update of a card, which is the time that the document with that callout
   arrived, and then by the order of the board. The group shows three questions

@@ -261,10 +261,14 @@ impl HorizonApp {
         if let Err(refusal) = self.request_caller(request) {
             return Some(refusal);
         }
-        match panel_id {
+        let answer = match panel_id {
             Some(panel_id) => self.begin_card_click_wait(root, request, panel_id),
             None => self.begin_any_card_click_wait(root, request),
-        }
+        };
+        // A wait that stays open makes the buttons of its card a question of the
+        // person, which the sidebar shows.
+        self.sidebar_list.count_inbox_change();
+        answer
     }
 
     /// Starts a wait that names one card.
@@ -504,6 +508,10 @@ impl HorizonApp {
         let owners: Vec<String> = self.block_clicks.agent_waiters.keys().cloned().collect();
         for owner in owners {
             answered |= self.settle_agent_wait(&owner, now_millis);
+        }
+        if answered {
+            // A wait that ended asks no longer, so the sidebar reads its questions.
+            self.sidebar_list.count_inbox_change();
         }
         answered
     }

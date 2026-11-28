@@ -1538,8 +1538,8 @@ hides it, whatever the setting says. No other value of the variable is a switch.
   draws the marks of Markdown that an agent writes every day and does not show
   them as text: `**bold**` at weight 620, `*italic*` in italics, `` `code` `` and
   the lines of a fenced block at 12.5 JetBrains Mono `FG_SOFT` on `PANEL_BG_ALT`,
-  the line of a heading at weight 620, and `- ` or `* ` at the start of a line as
-  a bullet. A mark with no partner on its line stays text, so no character of a
+  the line of a heading at weight 620, `- ` or `* ` at the start of a line as
+  a bullet, and `> ` at the start of a line as a bar. A mark with no partner on its line stays text, so no character of a
   message is lost. Every span is text: no link and no path is active, and the
   person selects and copies the text.
 - An entry of a tool is one row, indented 13 points: a dot of 6 points, the name

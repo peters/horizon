@@ -276,3 +276,45 @@ fn the_conversation_names_the_press_of_a_card_of_an_orchestrator_with_cut_text()
         "the label and the heading of the card are cut to forty characters each"
     );
 }
+
+/// A real agent program asked with a row of buttons and a wait, and no callout.
+/// The sidebar showed nothing, and the row of the workspace said `working`. The
+/// buttons of a card whose owner waits for a press are a question of the person.
+#[test]
+fn the_buttons_that_an_owner_waits_for_are_a_question_of_the_sidebar() {
+    let (temp, ctx, mut app) = dock_app();
+    let _local_id = start_dock(&mut app, &ctx, temp.path());
+    let (panel_id, id) = orchestrator_card(&mut app, &ctx);
+    assert!(
+        app.read_questions().is_empty(),
+        "buttons that nobody waits for ask nothing"
+    );
+
+    let request = orchestrator_request(Operation::NextClick {
+        panel_id: Some(panel_id),
+        timeout_millis: Some(30_000),
+    });
+    assert!(
+        app.apply_block_request_waiting(&request, &ctx).is_none(),
+        "the wait of the orchestrator stays open"
+    );
+    let questions = app.read_questions();
+    assert_eq!(questions.len(), 1, "the owner waits, so its buttons ask");
+    assert_eq!(questions[0].panel, id);
+    assert_eq!(questions[0].text, "Plan", "the heading of the card is the text");
+    assert_eq!(
+        questions[0]
+            .answers
+            .iter()
+            .map(|answer| answer.id.as_str())
+            .collect::<Vec<_>>(),
+        ["continue"]
+    );
+
+    press(&mut app, id, "continue");
+    let _ = app.settle_block_clicks();
+    assert!(
+        app.read_questions().is_empty(),
+        "the wait read the press, so the card asks no longer"
+    );
+}

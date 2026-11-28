@@ -18,9 +18,10 @@
 //! at most once a second. A frame lays out the cached texts of a question, so a
 //! frame that changes nothing builds no string.
 
-use horizon_browser_control::block::Component;
+use horizon_browser_control::block::{Button, Component};
 use horizon_core::{BlockPanelState, PanelId, WorkspaceId};
 
+use crate::block_widget::chip::ChipState;
 use crate::theme;
 
 use super::super::HorizonApp;
@@ -80,7 +81,12 @@ pub(in crate::app) struct Question {
 impl HorizonApp {
     /// Reads the questions of this board, the oldest first: one for each card that
     /// is open, whose document is not finished, and that holds a callout whose
-    /// answer nobody pressed.
+    /// answer nobody pressed, or buttons that its owner waits for.
+    ///
+    /// A real agent program asked `blue or green?` with a row of buttons and a
+    /// `next_click`, and no callout. A card whose owner holds a wait for a press
+    /// asks the person as a callout does, so its buttons are a question too, with
+    /// the heading of the card as its text.
     ///
     /// The order is the time of the last update of a card, which is the time that
     /// the document with that callout arrived, and after it the order of the
@@ -104,10 +110,16 @@ impl HorizonApp {
             let Some(workspace) = self.board.workspace(panel.workspace_id) else {
                 continue;
             };
-            let Some(callout) = self.first_unanswered(panel.id, card) else {
+            let asked = match self.first_unanswered(panel.id, card) {
+                Some(Component::Callout { text, buttons, .. }) => Some((text.as_str(), buttons.as_slice())),
+                _ => self
+                    .awaited_buttons(panel.id, card)
+                    .map(|buttons| (card.heading(), buttons)),
+            };
+            let Some((text, buttons)) = asked else {
                 continue;
             };
-            let question = question_of(panel.id, panel.workspace_id, &workspace.name, callout);
+            let question = question_of(panel.id, panel.workspace_id, &workspace.name, text, buttons);
             questions.push((card.updated_at_millis, index, question));
         }
         questions.sort_by_key(|(at, index, _)| (*at, *index));
@@ -121,6 +133,21 @@ impl HorizonApp {
                 component,
                 Component::Callout { buttons, .. } if !buttons.is_empty() && !answered(self, panel, component)
             )
+        })
+    }
+
+    /// The first row of buttons of `card`, while the owner of the card holds a wait
+    /// for a press on it.
+    fn awaited_buttons<'a>(&self, panel: PanelId, card: &'a BlockPanelState) -> Option<&'a [Button]> {
+        let listens = self
+            .card_titlebar_chip(panel)
+            .is_some_and(|chip| chip.state == ChipState::Listening);
+        if !listens {
+            return None;
+        }
+        card.document.components.iter().find_map(|component| match component {
+            Component::Buttons { items } if !items.is_empty() => Some(items.as_slice()),
+            _ => None,
         })
     }
 
@@ -190,11 +217,7 @@ fn answered(app: &HorizonApp, panel: PanelId, callout: &Component) -> bool {
 }
 
 /// The question of one card, with the texts that an item draws.
-fn question_of(panel: PanelId, workspace: WorkspaceId, name: &str, callout: &Component) -> Question {
-    let (text, buttons) = match callout {
-        Component::Callout { text, buttons, .. } => (text.as_str(), buttons.as_slice()),
-        _ => ("", &[][..]),
-    };
+fn question_of(panel: PanelId, workspace: WorkspaceId, name: &str, text: &str, buttons: &[Button]) -> Question {
     let text = plain(text, MAX_TEXT_CHARS);
     let answers: Vec<Answer> = buttons
         .iter()
@@ -249,7 +272,7 @@ pub(in crate::app) fn asking_card(
     text: &str,
     answers: &[(&str, &str)],
 ) -> PanelId {
-    use horizon_browser_control::block::{BlockDocument, Button, Tone};
+    use horizon_browser_control::block::{BlockDocument, Tone};
 
     let local_id = app.board.workspace(workspace).expect("workspace").local_id.clone();
     // A question is the question of a card whose owner is here, so the test holds
