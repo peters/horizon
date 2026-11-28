@@ -10,21 +10,24 @@
 //! an idle frame reads no machine and builds no string.
 
 mod agents;
+mod notice;
+mod paint;
+
+use notice::render_sticky_notice;
 
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
-use egui::{CursorIcon, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use egui::{Rect, Vec2, pos2, vec2};
 use horizon_core::{PanelId, SshConnectionStatus, WorkspaceId};
 
 use crate::theme;
 
 use super::super::HorizonApp;
 use super::text;
-use super::{HALF_FILL, SidebarActions, caption, rows};
+use super::{SidebarActions, caption, rows};
 
 pub(in crate::app) use agents::MachineWatchRow;
-use agents::fold_spoken;
 
 /// The height of one machine row, its inset in the sidebar, its radius and its
 /// padding.
@@ -33,27 +36,10 @@ const PADDING: f32 = 10.0;
 /// The side of the box that marks a machine and its radius.
 const BOX_SIDE: f32 = 24.0;
 const BOX_RADIUS: u8 = 7;
-/// The two rounded bars of the glyph of a machine, the gap between them and the
-/// stroke that draws them.
-const BAR_WIDTH: f32 = 9.0;
-const BAR_HEIGHT: f32 = 3.2;
-const BAR_GAP: f32 = 1.6;
-const BAR_STROKE: f32 = 1.3;
-/// The size of the name of a machine row and of the line under it.
-const NAME_SIZE: f32 = 12.5;
-const LINE_SIZE: f32 = 10.5;
 /// The hover text of the control that sets a machine up.
 pub(super) const SET_UP_HOVER: &str = "Set up a machine";
-/// The side of the fold control at the right end of a machine row.
-pub(super) const FOLD_SIDE: f32 = 18.0;
-/// The mark of the fold control: the agents are open, then folded.
-const FOLD_MARKS: [&str; 2] = ["\u{25BE}", "\u{25B8}"];
 /// How long the reason of a refused machine stays in the section.
 pub(super) const NOTICE: Duration = Duration::from_secs(10);
-/// The side of the close control of the line that stays until a person closes it.
-const CLOSE_SIDE: f32 = 18.0;
-/// The corner radius of that control.
-const CLOSE_RADIUS: u8 = 5;
 
 /// The clock of the short notice of the section: the clock of the computer, or the
 /// clock of a test, which moves forward instead of waiting for ten seconds.
@@ -81,8 +67,6 @@ impl NoticeClock {
 }
 /// The quiet mark of a machine whose last change the server has not decided.
 pub(super) const PENDING_MARK: &str = "pending";
-/// The circular radius of a machine row behind the pointer.
-const CARD_RADIUS: u8 = 10;
 
 /// The state of the terminal of one machine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -228,41 +212,6 @@ impl HorizonApp {
         };
     }
 
-    /// Says why an action of the person opened nothing, in the machine section.
-    ///
-    /// It is the one short notice of this window: a machine action, a panel
-    /// that cannot start and a browser engine that ends at once all say their
-    /// reason here, in the danger tone, for [`NOTICE`].
-    pub(in crate::app) fn set_sidebar_notice(&mut self, line: String) {
-        self.set_sidebar_notice_in(SidebarNoticeTone::Error, line);
-    }
-
-    /// Says one line that answers a key press of the person and is not an error.
-    pub(in crate::app) fn set_sidebar_plain_notice(&mut self, line: String) {
-        self.set_sidebar_notice_in(SidebarNoticeTone::Plain, line);
-    }
-
-    fn set_sidebar_notice_in(&mut self, tone: SidebarNoticeTone, line: String) {
-        self.sidebar_notice = Some(line);
-        self.sidebar_notice_until = Some(self.notice_clock.now() + NOTICE);
-        self.sidebar_notice_tone = tone;
-    }
-
-    /// Says one line that stays until the person closes it, in the machine section.
-    ///
-    /// It has its own close control and no timer, because it names something that
-    /// is gone for good: the panels that an opened session left out. A short notice
-    /// of an action beside it neither replaces it nor ends with it.
-    pub(in crate::app) fn set_sidebar_sticky_notice(&mut self, line: String) {
-        self.sidebar_sticky_notice = Some(line);
-    }
-
-    /// Forgets the line that stays until the person closes it, which is what its
-    /// close control asks for.
-    pub(in crate::app) fn dismiss_sidebar_sticky_notice(&mut self) {
-        self.sidebar_sticky_notice = None;
-    }
-
     /// Draws the machine section below the work items, when this Horizon keeps a
     /// machine.
     pub(super) fn render_sidebar_machines(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
@@ -347,246 +296,7 @@ impl HorizonApp {
     pub(super) fn server_line_reason(&self) -> Option<&'static str> {
         self.machine_rows.server_reason
     }
-
-    /// Draws one machine row and turns a press on it into an action.
-    fn render_sidebar_machine(&mut self, ui: &mut egui::Ui, row: &MachineRow, actions: &mut SidebarActions) {
-        let rect = ui.allocate_space(Vec2::new(ui.available_width(), ROW_HEIGHT)).1;
-        let card = self::card(rect);
-        let hovered = ui.rect_contains_pointer(rect);
-        if hovered {
-            ui.painter()
-                .rect_filled(card, CARD_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), HALF_FILL));
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
-        // The agents hang under an open row, and a folded row says in one line who
-        // waits. A machine with no line under its row has nothing to fold, so it
-        // has no mark. The mark stands at the right end of the row, because the box
-        // of the machine takes the left one.
-        let foldable = !row.watch.agents.is_empty() || row.watch.quiet.is_some();
-        let fold = Rect::from_min_size(
-            pos2(
-                rect.max.x - super::fold::INSET - FOLD_SIDE,
-                card.center().y - FOLD_SIDE / 2.0,
-            ),
-            Vec2::splat(FOLD_SIDE),
-        );
-        let folded = self.machine_watch.folded(&row.name);
-        if foldable && render_fold_control(ui, fold, &row.name, folded, hovered) {
-            self.machine_watch.toggle_fold(&row.name);
-        }
-        let elided = paint_machine_row(ui, card, row, folded, foldable, fold);
-
-        // The press of the fold control is no press on the machine, so the row ends
-        // before it.
-        let click_rect = Rect::from_min_max(rect.min, pos2(fold.min.x, rect.max.y));
-        let response = ui.interact(
-            click_rect,
-            ui.make_persistent_id(("sidebar_machine", row.name.as_str())),
-            Sense::click(),
-        );
-        let spoken = spoken(row);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
-        let response = if elided {
-            response.on_hover_text(format!("{}\n{spoken}", row.name))
-        } else {
-            response.on_hover_text(spoken)
-        };
-        if response.clicked() {
-            machine_click(row, actions);
-        }
-        self.show_machine_context_menu(&response, row, actions);
-        if !folded {
-            row.watch.paint_rows(ui, row, actions);
-        }
-    }
 }
-
-/// Paints the box, the name, the line and the summary of a machine row in `card`,
-/// and answers whether the room of the row cuts the name.
-fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, foldable: bool, fold: Rect) -> bool {
-    let machine_box = box_rect(card);
-    paint_machine_box(ui.painter(), machine_box, row.state);
-
-    let text_left = machine_box.max.x + PADDING;
-    let text_right = if foldable {
-        fold.min.x - 6.0
-    } else {
-        card.max.x - PADDING
-    };
-    // The price stands at the right end of the row, on the line of the name, and it
-    // gives way last: the name ends before it, so the price of a record stays whole.
-    // The second line keeps the whole width, so the size and the place stay whole.
-    let price = row.price.as_deref().map(|price| {
-        text::mono_line(
-            ui,
-            &price_line(price),
-            LINE_SIZE,
-            theme::FG_SOFT(),
-            (text_right - text_left).max(1.0),
-        )
-    });
-    let price_width = price.as_ref().map_or(0.0, |price| price.size().x + 6.0);
-    let summary = row.watch.summary.as_deref().filter(|_| folded).map(|words| {
-        text::line(
-            ui,
-            words,
-            LINE_SIZE,
-            text::REGULAR,
-            text::secondary(),
-            (text_right - text_left).max(1.0),
-        )
-    });
-    let summary_width = summary.as_ref().map_or(0.0, |summary| summary.size().x + 6.0);
-    let mark = row.pending.then(|| {
-        text::line(
-            ui,
-            PENDING_MARK,
-            10.0,
-            text::REGULAR,
-            text::secondary(),
-            (text_right - text_left).max(1.0),
-        )
-    });
-    let mark_width = mark.as_ref().map_or(0.0, |mark| mark.size().x + 6.0);
-    let name = text::line(
-        ui,
-        &row.name,
-        NAME_SIZE,
-        text::SEMIBOLD,
-        theme::FG(),
-        (text_right - text_left - mark_width - price_width).max(1.0),
-    );
-    let second = row.second.as_deref().map(|second| {
-        text::line(
-            ui,
-            second,
-            LINE_SIZE,
-            text::REGULAR,
-            text::secondary(),
-            (text_right - text_left - summary_width).max(1.0),
-        )
-    });
-    let name_height = name.size().y;
-    // The summary of a folded machine stands on the second line, and it is that
-    // line when the row says nothing else.
-    let second_height = second.as_ref().or(summary.as_ref()).map_or(0.0, |line| line.size().y);
-    let gap = if second_height > 0.0 { 2.0 } else { 0.0 };
-    let top = card.center().y - (name_height + gap + second_height) / 2.0;
-    let painter = ui.painter();
-    let name_elided = name.elided;
-    painter.galley(pos2(text_left, top), name, theme::FG());
-    if let Some(mark) = mark {
-        ui.painter().galley(
-            pos2(
-                text_right - price_width - mark.size().x,
-                top + (name_height - mark.size().y) / 2.0,
-            ),
-            mark,
-            text::secondary(),
-        );
-    }
-    if let Some(price) = price {
-        ui.painter().galley(
-            pos2(text_right - price.size().x, top + (name_height - price.size().y) / 2.0),
-            price,
-            theme::FG_SOFT(),
-        );
-    }
-    let line_top = top + name_height + gap;
-    if let Some(second) = second {
-        ui.painter()
-            .galley(pos2(text_left, line_top), second, text::secondary());
-    }
-    if let Some(summary) = summary {
-        ui.painter().galley(
-            pos2(text_right - summary.size().x, line_top),
-            summary,
-            text::secondary(),
-        );
-    }
-    name_elided
-}
-
-/// Paints the fold control of a machine row at its right end, which a screen
-/// reader names, and answers whether the person pressed it.
-fn render_fold_control(ui: &egui::Ui, rect: Rect, machine: &str, folded: bool, lit: bool) -> bool {
-    let spoken = fold_spoken(folded, machine);
-    let response = ui.interact(
-        rect,
-        ui.make_persistent_id(("sidebar_machine_fold", machine)),
-        Sense::click(),
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
-    let color = if lit { theme::FG() } else { text::secondary() };
-    let mark = text::line(
-        ui,
-        FOLD_MARKS[usize::from(folded)],
-        10.0,
-        text::REGULAR,
-        color,
-        FOLD_SIDE,
-    );
-    ui.painter().galley(rect.center() - mark.size() / 2.0, mark, color);
-    response.on_hover_text(spoken).clicked()
-}
-
-/// The line that stays until the person closes it, and its close control. Answers
-/// whether the person closed it.
-///
-/// The control is a press target of its own, as a machine row is, so a keyboard
-/// reaches it with Tab and ends it with Space or Enter, and the ring of the focus
-/// says where the keyboard is.
-fn render_sticky_notice(ui: &mut egui::Ui, note: &str, id: egui::Id) -> bool {
-    let mut closed = false;
-    ui.horizontal_top(|ui| {
-        ui.add_space(18.0);
-        let width = (ui.available_width() - CLOSE_SIDE - 4.0).max(40.0);
-        ui.label(text::paragraph(
-            ui,
-            note,
-            11.0,
-            text::REGULAR,
-            theme::PALETTE_YELLOW(),
-            width,
-        ));
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(CLOSE_SIDE), Sense::hover());
-        let response = ui.interact(rect, id, Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, CLOSE_SPOKEN));
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-            ui.painter()
-                .rect_filled(rect, CLOSE_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), 170));
-        }
-        if response.has_focus() {
-            ui.painter().rect_stroke(
-                rect,
-                CLOSE_RADIUS,
-                Stroke::new(1.0_f32, theme::ACCENT()),
-                egui::StrokeKind::Outside,
-            );
-        }
-        let color = if response.hovered() || response.has_focus() {
-            theme::FG()
-        } else {
-            text::secondary()
-        };
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            CLOSE_MARK,
-            egui::FontId::proportional(11.0),
-            color,
-        );
-        if response.clicked() {
-            closed = true;
-        }
-    });
-    closed
-}
-
-/// The mark of the close control, and what a screen reader calls it.
-const CLOSE_MARK: &str = "\u{00d7}";
-const CLOSE_SPOKEN: &str = "Close this line";
 
 /// The id of the close control of the sticky line, which a test presses.
 pub(in crate::app) fn sticky_close_id() -> egui::Id {
@@ -639,47 +349,6 @@ pub(super) fn box_rect(card: Rect) -> Rect {
 /// the machine hangs from.
 pub(super) fn dot_center(card: Rect) -> egui::Pos2 {
     box_rect(card).center()
-}
-
-/// The colour of the state of the terminal of a machine, when the row shows one.
-fn state_color(state: MachineState) -> Option<egui::Color32> {
-    match state {
-        MachineState::Closed | MachineState::Connecting => None,
-        MachineState::Reconnecting => Some(theme::PALETTE_YELLOW()),
-        MachineState::Connected => Some(theme::PALETTE_GREEN()),
-        MachineState::Disconnected => Some(theme::PALETTE_RED()),
-    }
-}
-
-/// Paints the box of a machine row: its outline and the two bars of its glyph, in
-/// the colour of the state of its terminal where that state has one.
-pub(super) fn paint_machine_box(painter: &egui::Painter, rect: Rect, state: MachineState) {
-    painter.rect_stroke(
-        rect,
-        BOX_RADIUS,
-        Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
-        egui::StrokeKind::Inside,
-    );
-    let color = state_color(state).unwrap_or_else(theme::FG_SOFT);
-    let stroke = Stroke::new(BAR_STROKE, color);
-    let center = rect.center();
-    let total = 2.0 * BAR_HEIGHT + BAR_GAP;
-    let top = center.y - total / 2.0;
-    for index in 0..2 {
-        let bar = Rect::from_min_size(
-            pos2(
-                center.x - BAR_WIDTH / 2.0,
-                top + usize_to_f32(index) * (BAR_HEIGHT + BAR_GAP),
-            ),
-            Vec2::new(BAR_WIDTH, BAR_HEIGHT),
-        );
-        painter.rect_stroke(bar, 1, stroke, egui::StrokeKind::Inside);
-    }
-}
-
-/// `value` as a float, for the geometry of a row.
-fn usize_to_f32(value: usize) -> f32 {
-    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 /// What the right end of a machine row says about one hour of the machine: the

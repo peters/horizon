@@ -8,8 +8,11 @@ use std::time::{Duration, Instant};
 use egui::Context;
 use horizon_browser_control::block::BlockDocument;
 use horizon_browser_control::manifest::block;
+use horizon_browser_control::manifest::block::{Operation, Outcome, Request};
 use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchSnapshot, MachineWatchState, WatchLink};
-use horizon_core::{Machine, MachineRegistry, Machines, PanelKind, RuntimeState, StartupDecision};
+use horizon_core::{
+    BlockPanelState, Machine, MachineRegistry, Machines, Panel, PanelKind, RuntimeState, StartupDecision,
+};
 
 use super::*;
 use crate::app::block_requests::ClaimedBlockRequest;

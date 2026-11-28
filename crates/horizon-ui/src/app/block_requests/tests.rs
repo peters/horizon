@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use super::*;
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use horizon_core::{RuntimeState, StartupDecision};
+use horizon_core::agent_bridge::actor;
+use horizon_core::browser::manifest::block::Operation;
+use horizon_core::{CardPlace, PanelKind, RuntimeState, StartupDecision, WorkspaceId};
 
 fn app() -> (tempfile::TempDir, Context, HorizonApp) {
     let runtime = RuntimeState {

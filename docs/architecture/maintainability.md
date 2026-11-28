@@ -565,6 +565,13 @@ when it names one of those kinds.
     coordination worker searched once for this run, and the rows. The button
     `+ Rent a machine` and its message are `sidebar/rent_machine.rs`, and its
     press reaches the dock through `HorizonApp::say_to_active_orchestrator`.
+    The row of a work item, its fold control, its press and its drag are
+    `sidebar/workspace_row.rs`, the row of a panel is `sidebar/panel_row.rs`, and
+    `sidebar/apply.rs` applies the actions that the pass of the sidebar took. The
+    machine section is `sidebar/machines.rs`: it reads the rows, the state of each
+    machine and the line of the link to the server. `sidebar/machines/paint.rs`
+    draws one machine row and `sidebar/machines/notice.rs` holds the short notice
+    and the line that stays until a person closes it.
   - `settings`: settings editor state and save/apply flows
   - `shared_terminals`: the join of the shared terminals. `shared_terminals.rs`
     starts and stops the live link and its pump, and does in each frame the
@@ -608,12 +615,16 @@ when it names one of those kinds.
   sentence, `app::panels::mic` draws the icon of the title bar, and
   `app::settings::speech` is the **Speech** tab.
 
-- `app::welcome` is the first start page. `welcome.rs` picks the form of the page
-  and draws the frame that both forms share, `welcome/front_desk.rs` is the page
-  that sends the person to the front desk, with its steps, its link and the four
-  starts under it, `welcome/tiles.rs` holds the four starts, `welcome/cache.rs`
-  keeps the layout of both pages and the state of the link, `welcome/layout.rs`
-  holds the width rule, `welcome/pickup.rs` is the section **Pick up where you
+- `app::welcome` is the first start page. `welcome.rs` holds the frame that both
+  forms share, the title and the press of a tile with the constants of the page,
+  `welcome/frame.rs` picks the form of the page and starts what a tile names, and
+  `welcome/page.rs` draws the page of four tiles: its heading, its heading line,
+  the section under it and the row of shortcuts. `welcome/front_desk.rs` is the
+  page that sends the person to the front desk, with its steps, its link and the
+  four starts under it, `welcome/tiles.rs` holds the four starts,
+  `welcome/cache.rs` keeps the layout of both pages and the state of the link,
+  `welcome/layout.rs` holds the width rule, `welcome/pickup.rs` is the section
+  **Pick up where you
   left off** and `welcome/art.rs` draws the small drawings of the four starts.
 
 - `app::orchestrator_dock` is the conversation dock at the right edge of the root
@@ -685,8 +696,12 @@ when it names one of those kinds.
 
 - `app::block_requests` claims the card requests of the agents, applies them on
   the frame and answers them on the coordination worker. `block_requests.rs`
-  holds the claim state, the dispatch of one operation and the write of one
-  answer. The checks that settle a caller and the workspace of its cards are
+  holds the claim state, the frame poll, the answer queue and the write of one
+  answer, `block_requests/dispatch.rs` sends one claimed request to the operation
+  that answers it, and `block_requests/cards.rs` holds the card operations: the
+  create, the update, the inspect, the show, the hide and the close, with the
+  reads that name a card of a workspace. The checks that settle a caller and the
+  workspace of its cards are
   `block_requests/caller.rs`: `request_caller` maps an actor to `CardCaller`, and
   `owner_workspace` answers the workspace of the cards of one owner.
   `block_requests/work_items.rs` holds the three operations of the front desk: the
@@ -697,6 +712,13 @@ when it names one of those kinds.
   and the report of a worker. It opens the panel of a worker through
   `start_worker`, which takes the path of a preset of the settings and the prompt
   line of the panel that an agent opened.
+
+- `app::block_clicks` settles the clicks that a person makes on a card on their way
+  to the agent that owns it. `block_clicks.rs` holds the state of the waits and
+  the frame pass that settles them, `block_clicks/waits.rs` holds the open wait of
+  one card and of every card of one owner, `block_clicks/press.rs` holds the press
+  path of a card, and `block_clicks/wake.rs` sends the one line that wakes an
+  owner.
 
 - `app::orchestrator_dock::workers` holds the state of the workers of each
   conversation of the dock: the panel, the preset, the kind, the last report and

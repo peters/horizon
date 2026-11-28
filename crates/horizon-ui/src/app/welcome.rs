@@ -18,8 +18,10 @@
 
 mod art;
 mod cache;
+mod frame;
 mod front_desk;
 mod layout;
+mod page;
 mod pickup;
 mod tiles;
 
@@ -35,14 +37,7 @@ use crate::typeface::{self, Weight};
 
 pub(in crate::app) use self::cache::WelcomeCache;
 use self::cache::WelcomeMetrics;
-use self::layout::{ROW_GAP, TILE_GAP, page_width};
-use self::pickup as pickup_section;
 use super::HorizonApp;
-use super::session_pickup::SessionPickup;
-use super::setup;
-use horizon_core::setup::{FolderPanel, find_program, setup_agents};
-
-use self::pickup::PickupSectionPress;
 
 /// The space between the edge of the canvas and the page, in whole points.
 const PAGE_PAD_SIDE: i8 = 60;
@@ -111,74 +106,6 @@ pub(in crate::app) const LEAD: &str = "Horizon is one canvas for your terminals,
 pub(in crate::app) const SHORTCUTS_LEAD: &str = "You know Horizon already?";
 
 impl HorizonApp {
-    /// Draws the first start page, while the board holds no workspace and no
-    /// panel. The dock decides the form of the page: a window that shows the dock
-    /// sends the person to the front desk, and a window without it names the four
-    /// starts.
-    pub(super) fn render_welcome_page(&mut self, ctx: &Context) {
-        if !self.welcome_page_visible() {
-            return;
-        }
-        if self.front_desk_page_shows() {
-            self.render_front_desk_page(ctx);
-        } else {
-            self.render_tiles_page(ctx);
-        }
-    }
-
-    /// Whether the page sends the person to the front desk: the dock is on and it
-    /// took its column in this frame.
-    ///
-    /// A window that leaves less than 320 points of canvas beside the dock draws
-    /// no dock, and then the page of four tiles stands unchanged, as it does while
-    /// the setting is off or the environment switch is `0`.
-    pub(in crate::app) fn front_desk_page_shows(&self) -> bool {
-        self.orchestrator_dock.visible() && self.orchestrator_dock.frame_rect().is_some()
-    }
-
-    /// Draws the page of four tiles, which a window without the dock shows.
-    fn render_tiles_page(&mut self, ctx: &Context) {
-        if !self.welcome_page_visible() {
-            return;
-        }
-        let canvas = self.canvas_rect(ctx);
-        let width = page_width(canvas.width());
-        // The rows of the section are read before the block is measured, because
-        // they are part of its height.
-        let pickup = self.session_pickup.first_page();
-        // The block is measured before it is shown, because a block that fits
-        // the canvas is centred in it and one that does not starts at the top.
-        let measure = ctx.layer_painter(egui::LayerId::new(
-            Order::Background,
-            Id::unique("welcome_page_measure"),
-        ));
-        let shortcut_lines = self.shortcut_lines();
-        let foot_rows = shortcut_rows(&measure, width, &shortcut_lines);
-        let metrics = self
-            .welcome
-            .metrics(&measure, width, pickup.len(), foot_rows, canvas.height());
-        let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
-        // A canvas that is wider than the reading width of the page keeps the same
-        // air on both sides of the block.
-        let left = canvas.min.x + (canvas.width() - width) * 0.5;
-        let inner = Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, canvas.max.y));
-        let painted = page_frame(
-            ctx,
-            inner,
-            metrics.block_height + PAGE_PAD_BOTTOM,
-            "welcome_page",
-            |ui, content| paint_page(ui, content, metrics, &shortcut_lines, &pickup, &self.session_pickup),
-        );
-        let painted = painted.unwrap_or_default();
-
-        if let Some(tile) = painted.tile {
-            self.start_welcome_tile(ctx, tile);
-        }
-        if let Some(press) = painted.pickup {
-            self.apply_pickup_press(ctx, &press);
-        }
-    }
-
     /// The keys of this computer, as the row under the tiles says them.
     fn shortcut_lines(&self) -> Vec<(String, String)> {
         let primary = super::util::primary_shortcut_label();
@@ -196,65 +123,6 @@ impl HorizonApp {
                 self.shortcuts.open_remote_hosts.display_label(primary),
             ),
         ]
-    }
-
-    /// Starts what a tile of the first page names.
-    fn start_welcome_tile(&mut self, ctx: &Context, tile: WelcomeTile) {
-        match tile.goal() {
-            Some(goal) => self.press_set_up(ctx, goal),
-            None => self.start_agent_tile(ctx),
-        }
-    }
-
-    /// The first tile starts a panel of the first agent preset, in the order of
-    /// the settings, whose program this computer has.
-    ///
-    /// A computer with no agent program keeps the first preset of the settings,
-    /// and one line says that this is a terminal. The search reads the folders of
-    /// the `PATH`, so it runs on the coordination worker and the panel opens on a
-    /// later frame.
-    fn start_agent_tile(&mut self, ctx: &Context) {
-        if self.presets.is_empty() {
-            self.create_panel(ctx);
-            return;
-        }
-        let workspace_id = self.ensure_workspace_visible(ctx);
-        let presets = self.presets.clone();
-        let programs: Vec<String> = setup_agents(&presets).into_iter().map(|agent| agent.program).collect();
-        let searched = programs.clone();
-        let opening = ctx.clone();
-        self.browser_create_host.io.then(
-            move || {
-                searched
-                    .iter()
-                    .map(|program| find_program(program, None).is_some())
-                    .collect::<Vec<bool>>()
-            },
-            move |app, found| {
-                let found = found.unwrap_or_default();
-                let preset = match setup::installed_agent(&presets, &found) {
-                    FolderPanel::Preset(index) => presets.get(index).cloned(),
-                    FolderPanel::Terminal => {
-                        app.set_sidebar_plain_notice(no_agent_program(&programs));
-                        presets.first().cloned()
-                    }
-                };
-                match preset {
-                    Some(preset) => app.add_panel_to_workspace(&opening, workspace_id, preset, None),
-                    None => app.create_panel(&opening),
-                }
-            },
-        );
-    }
-
-    /// Whether the first page shows: no workspace, no panel, and no dialog over
-    /// the canvas.
-    pub(in crate::app) fn welcome_page_visible(&self) -> bool {
-        welcome_page_shows(
-            self.board.workspaces.len(),
-            self.board.panels.len(),
-            self.fixed_overlays_visible(),
-        )
     }
 }
 
@@ -353,77 +221,6 @@ fn no_agent_program(programs: &[String]) -> String {
 /// Whether the first page shows, from the counts of the board.
 pub(in crate::app) fn welcome_page_shows(workspace_count: usize, panel_count: usize, overlays_visible: bool) -> bool {
     overlays_visible && workspace_count == 0 && panel_count == 0
-}
-
-/// What a frame of the page pressed.
-#[derive(Default)]
-struct WelcomePagePress {
-    /// The tile that the person pressed.
-    tile: Option<WelcomeTile>,
-    /// The row of the section that the person pressed, or its control `Show all`.
-    pickup: Option<PickupSectionPress>,
-}
-
-/// Paints the whole page inside `content` and answers the presses of the person.
-fn paint_page(
-    ui: &mut Ui,
-    content: Rect,
-    metrics: WelcomeMetrics,
-    shortcuts: &[(String, String)],
-    pickup: &[horizon_core::PickupFolder],
-    state: &SessionPickup,
-) -> WelcomePagePress {
-    let painter = ui.painter().clone();
-    let mut y = content.min.y + HEADING_GAP;
-    y = paint_heading(&painter, content, metrics, y);
-    let mut pressed = None;
-    for (index, tile) in WelcomeTile::ALL.iter().enumerate() {
-        let (row, column) = metrics.cell(index);
-        #[allow(clippy::cast_precision_loss)]
-        let x = content.min.x + column as f32 * (metrics.tile_width + TILE_GAP);
-        #[allow(clippy::cast_precision_loss)]
-        let top = y + row as f32 * (metrics.tile_height + ROW_GAP);
-        let rect = Rect::from_min_size(Pos2::new(x, top), Vec2::new(metrics.tile_width, metrics.tile_height));
-        if paint_tile(ui, *tile, rect, index, metrics) {
-            pressed = Some(*tile);
-        }
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let rows = WelcomeTile::ALL.len().div_ceil(metrics.columns.max(1)) as f32;
-    let below_tiles = y + rows * metrics.tile_height + (rows - 1.0).max(0.0) * ROW_GAP;
-    let pickup_press = if metrics.pickup_height > 0.0 {
-        pickup_section::paint_section(ui, content, below_tiles + pickup_section::SECTION_GAP, pickup, |row| {
-            state.is_confirmed(row.kind, &row.session_id)
-        })
-    } else {
-        None
-    };
-    let foot = below_tiles + metrics.pickup_height + SHORTCUTS_GAP;
-    let _ = paint_shortcuts(&painter, content, foot, shortcuts);
-    WelcomePagePress {
-        tile: pressed,
-        pickup: pickup_press,
-    }
-}
-
-/// Paints the heading and its line, and answers the top of the tiles.
-fn paint_heading(painter: &Painter, content: Rect, metrics: WelcomeMetrics, y: f32) -> f32 {
-    let center = content.center().x;
-    let heading = painter.layout_job(heading_job(HEADING, HEADING_FONT, theme::FG(), Weight::Black));
-    let left = center - heading.size().x * 0.5;
-    painter.galley(Pos2::new(left, y), heading, theme::FG());
-    let lead_top = y + metrics.heading_height + HEADING_GAP;
-    let lead = painter.layout_job(centred_job(
-        LEAD,
-        &FontId::proportional(LEAD_FONT),
-        theme::FG_SOFT(),
-        HEADING_MAX_WIDTH.min(content.width().max(1.0)),
-        Weight::Regular,
-    ));
-    // The rows of a centred job stand around its own origin, so the galley is
-    // drawn on the middle line of the page.
-    painter.galley(Pos2::new(center, lead_top), lead, theme::FG_SOFT());
-    lead_top + metrics.lead_height + HEADING_BLOCK_GAP - HEADING_GAP
 }
 
 /// One line of `text` at `size` and `weight`, as the mockups draw it.
@@ -564,67 +361,19 @@ fn action_colour() -> Color32 {
     theme::blend(theme::ACCENT(), theme::FG(), 0.30)
 }
 
-/// The rows that the shortcuts take on a page `width` wide. The painter of the
-/// measure is not visible, so the measure paints nothing.
-fn shortcut_rows(measure: &Painter, width: f32, lines: &[(String, String)]) -> usize {
-    let mut unseen = measure.clone();
-    unseen.set_invisible();
-    let page = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 0.0));
-    paint_shortcuts(&unseen, page, 0.0, lines)
-}
-
-/// Paints the shortcuts under the tiles, and answers the rows that they take.
-///
-/// A name and its key that do not fit the width of the page start the next row,
-/// so a narrow window cuts no part of the line at its right edge.
-fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String, String)]) -> usize {
-    let lead = painter.layout_no_wrap(
-        SHORTCUTS_LEAD.to_owned(),
-        FontId::proportional(SHORTCUTS_FONT),
-        theme::FG_SOFT(),
-    );
-    let height = lead.size().y;
-    let (mut x, mut y, mut rows) = (content.min.x, top, 1);
-    painter.galley(Pos2::new(x, y), lead.clone(), theme::FG_SOFT());
-    x += lead.size().x + SHORTCUT_GAP;
-    for (label, keys) in lines {
-        let text = painter.layout_no_wrap(label.clone(), FontId::proportional(SHORTCUTS_FONT), theme::FG_SOFT());
-        let key = painter.layout_no_wrap(keys.clone(), FontId::monospace(KEY_FONT), theme::FG_SOFT());
-        let chip_size = key.size() + Vec2::new(12.0, 4.0);
-        if x > content.min.x && x + text.size().x + 6.0 + chip_size.x > content.max.x {
-            x = content.min.x;
-            y += SHORTCUT_ROW;
-            rows += 1;
-        }
-        painter.galley(Pos2::new(x, y), text.clone(), theme::FG_SOFT());
-        x += text.size().x + 6.0;
-        let chip = Rect::from_min_size(Pos2::new(x, y + (height - key.size().y) * 0.5 - 1.0), chip_size);
-        painter.rect_filled(chip, CornerRadius::same(KEY_RADIUS), theme::PANEL_BG());
-        painter.rect_stroke(
-            chip,
-            CornerRadius::same(KEY_RADIUS),
-            Stroke::new(1.0, theme::BORDER_SUBTLE()),
-            StrokeKind::Inside,
-        );
-        painter.galley(chip.min + Vec2::new(6.0, 2.0), key, theme::FG_SOFT());
-        x = chip.max.x + SHORTCUT_GAP;
-    }
-    rows
-}
-
 #[cfg(test)]
 impl HorizonApp {
     /// The height of the block of the first start page and of its section, for a
     /// test that pins the layout of the page.
     pub(in crate::app) fn welcome_block_heights_for_test(&mut self, ctx: &Context) -> (f32, f32) {
         let canvas = self.canvas_rect(ctx);
-        let width = page_width(canvas.width());
+        let width = layout::page_width(canvas.width());
         let pickup = self.session_pickup.first_page();
         let measure = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
             Id::unique("welcome_page_measure_test"),
         ));
-        let foot_rows = shortcut_rows(&measure, width, &self.shortcut_lines());
+        let foot_rows = page::shortcut_rows(&measure, width, &self.shortcut_lines());
         let metrics = self
             .welcome
             .metrics(&measure, width, pickup.len(), foot_rows, canvas.height());
