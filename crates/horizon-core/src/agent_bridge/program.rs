@@ -76,6 +76,13 @@ Each task then has its own orchestrator. Answer in a few short lines: say which 
 one question only when a task names no outcome. Never answer a question of a work item for the person, \
 and never claim that work is done.";
 
+/// The text that the orchestrator of a workspace gets after the system text of
+/// Claude Code: what its conversation is, and what a worker is. A run with the
+/// real program showed why the second part is there: asked for a worker, the
+/// program started a subagent of its own, because nothing told it that a worker
+/// is a panel that Horizon starts.
+pub const ORCHESTRATOR_PROMPT: &str = "You are the orchestrator of one work item of Horizon. The person reads your conversation in the dock of the Horizon window, beside the panels of this workspace. Show a plan, a choice or a result as a card with your tool block_panel, as the skill horizon-block says. A worker is another agent program that Horizon starts in a panel of this workspace for you. When the person asks for a worker, or names another agent program for a part of the work, call block_panel with the operation worker_start, the name of that program and one task. Do not use a subagent tool of your own in place of a worker. The report of a worker comes to you as a turn, the operation workers reads the workers that you have, and worker_message sends one message to one of them. Ask the person on a card before you rent a machine or spend money.";
+
 /// One program that Horizon starts, and nothing of it comes from the program's
 /// own output.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,9 +190,19 @@ impl BridgeIdentity {
 /// and the Horizon skills, and the environment that names it to that server. It
 /// adds no work-resume plugin, no `HORIZON_WORK_*` variable and no named secret,
 /// because the orchestrator of this part has no turn ledger and no panel of the
-/// board.
+/// board. Its last addition is [`ORCHESTRATOR_PROMPT`], a constant text of this
+/// Horizon.
 #[must_use]
 pub fn claude_for_workspace(cwd: &Path, session: SessionChoice, identity: &BridgeIdentity) -> ProgramSpec {
+    let mut spec = claude_with_identity(cwd, session, identity);
+    spec.args.push(OsString::from("--append-system-prompt"));
+    spec.args.push(OsString::from(ORCHESTRATOR_PROMPT));
+    spec
+}
+
+/// [`claude`] with the identity of one actor of this Horizon: the plugin
+/// directory and the environment that names the actor to the Horizon MCP server.
+fn claude_with_identity(cwd: &Path, session: SessionChoice, identity: &BridgeIdentity) -> ProgramSpec {
     let mut spec = claude(cwd, session);
     if let Some(plugin_dir) = &identity.plugin_dir {
         spec.args.push(OsString::from("--plugin-dir"));
@@ -206,15 +223,15 @@ pub fn claude_for_workspace(cwd: &Path, session: SessionChoice, identity: &Bridg
 
 /// The program of the front desk: the conversation that belongs to no workspace.
 ///
-/// It is [`claude_for_workspace`] with the same command line and then three
-/// additions: [`NO_TOOLS`], the model of [`front_desk_model`] and
-/// [`FRONT_DESK_PROMPT`]. The front desk does no work itself, so it has no tool
+/// It is the command line of [`claude_for_workspace`] without the prompt of an
+/// orchestrator, and then three additions: [`NO_TOOLS`], the model of
+/// [`front_desk_model`] and [`FRONT_DESK_PROMPT`]. The front desk does no work itself, so it has no tool
 /// to do it with. The person of that conversation is the person of this computer
 /// and the model comes from this Horizon, so neither value can arrive from the
 /// output of a program.
 #[must_use]
 pub fn claude_for_front_desk(cwd: &Path, session: SessionChoice, identity: &BridgeIdentity) -> ProgramSpec {
-    let mut spec = claude_for_workspace(cwd, session, identity);
+    let mut spec = claude_with_identity(cwd, session, identity);
     spec.args.push(OsString::from("--tools"));
     spec.args.push(OsString::from(NO_TOOLS));
     spec.args.push(OsString::from("--model"));

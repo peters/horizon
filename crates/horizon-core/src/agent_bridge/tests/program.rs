@@ -57,6 +57,25 @@ fn line_format() -> Vec<String> {
     arguments(&claude(Path::new("/tmp/work"), SessionChoice::New(SESSION.to_owned())))
 }
 
+/// The last addition of the orchestrator of a workspace: its constant prompt.
+fn orchestrator_prompt() -> Vec<String> {
+    vec![
+        "--append-system-prompt".to_owned(),
+        crate::agent_bridge::ORCHESTRATOR_PROMPT.to_owned(),
+    ]
+}
+
+/// A run with the real program showed an orchestrator that started a subagent of
+/// its own when the person asked for a worker. The prompt names the operation.
+#[test]
+fn the_prompt_of_an_orchestrator_names_the_operations_of_its_workers() {
+    let prompt = crate::agent_bridge::ORCHESTRATOR_PROMPT;
+    for word in ["block_panel", "worker_start", "workers", "worker_message", "subagent"] {
+        assert!(prompt.contains(word), "{word}");
+    }
+    assert!(prompt.is_ascii() && !prompt.contains('\n'), "one line of plain text");
+}
+
 #[test]
 fn the_program_of_a_workspace_adds_the_plugin_dir_of_claude_code() {
     let spec = claude_for_workspace(
@@ -67,6 +86,7 @@ fn the_program_of_a_workspace_adds_the_plugin_dir_of_claude_code() {
     let mut expected = line_format();
     expected.push("--plugin-dir".to_owned());
     expected.push("/tmp/horizon-home/runtime/agent-plugins/host/claude-code".to_owned());
+    expected.extend(orchestrator_prompt());
     assert_eq!(arguments(&spec), expected);
     assert_eq!(spec.program, PathBuf::from("claude"));
     assert_eq!(spec.cwd, PathBuf::from("/tmp/work"));
@@ -79,7 +99,9 @@ fn a_start_without_a_plugin_dir_names_no_plugin() {
         SessionChoice::New(SESSION.to_owned()),
         &identity(None),
     );
-    assert_eq!(arguments(&spec), line_format());
+    let mut expected = line_format();
+    expected.extend(orchestrator_prompt());
+    assert_eq!(arguments(&spec), expected);
 }
 
 #[test]
@@ -291,12 +313,14 @@ fn the_program_of_the_front_desk_is_an_orchestrator_with_no_tool_and_its_own_pro
         &front_desk_identity(Some("/tmp/horizon-home/runtime/agent-plugins/host/claude-code")),
     );
 
-    // The line of an orchestrator of a workspace, and then the three additions.
+    // The line of an orchestrator of a workspace without the prompt of an
+    // orchestrator, and then the three additions.
     let mut expected = arguments(&claude_for_workspace(
         Path::new("/home/person/.horizon/front-desk"),
         SessionChoice::New(SESSION.to_owned()),
         &front_desk_identity(Some("/tmp/horizon-home/runtime/agent-plugins/host/claude-code")),
     ));
+    expected.truncate(expected.len() - orchestrator_prompt().len());
     assert!(expected.iter().any(|argument| argument == "--plugin-dir"));
     // A test process names no model, so the front desk takes the model of this
     // line of Horizon.

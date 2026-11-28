@@ -146,6 +146,11 @@ whole rule.
 - **The system text is one constant of Horizon.** `FRONT_DESK_PROMPT` is a text
   of this repository. It holds no text of a program, of a page, of a file or of
   the person. The start passes it as one argument of `--append-system-prompt`.
+  The orchestrator of a workspace gets `ORCHESTRATOR_PROMPT` in the same way: a
+  constant text of this repository that says what its conversation is and that
+  a worker is a panel that Horizon starts through `worker_start`. It gives the
+  program no permission: each operation that it names is checked when it is
+  called.
 - **The program has no built-in tool.** The start passes `--tools ""`, so the
   conversation answers with words and does no work itself. The next part of this
   work adds the tool that makes work items.

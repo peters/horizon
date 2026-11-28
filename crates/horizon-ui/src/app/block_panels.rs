@@ -44,7 +44,17 @@ pub(in crate::app) struct PendingPrompt {
     panel: PanelId,
     line: String,
     give_up_at: Instant,
+    /// When the text of the line is in the panel: the instant at which Horizon
+    /// sends the key that submits it.
+    submit_at: Option<Instant>,
 }
+
+/// How long Horizon waits between the text of a prompt line and the key that
+/// submits it. A run with the real Claude Code showed the text of a task in the
+/// field of the program, not sent: a program that reads a paste does not take a
+/// key of the same write as the end of the line. The key is a write of its own,
+/// after the program read the paste.
+pub(in crate::app) const SUBMIT_AFTER: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// How long Horizon waits for the program of a new panel to draw before it drops
 /// the prompt line of a request.
@@ -96,6 +106,7 @@ impl AgentPanels {
             panel,
             line: line.to_owned(),
             give_up_at: now + PROMPT_WINDOW,
+            submit_at: None,
         });
     }
 
@@ -300,10 +311,20 @@ impl HorizonApp {
         let now = Instant::now();
         let mut kept: Vec<PendingPrompt> = Vec::new();
         let mut typed = false;
-        for prompt in std::mem::take(&mut self.agent_opens.panels.prompts) {
+        for mut prompt in std::mem::take(&mut self.agent_opens.panels.prompts) {
             let Some(panel) = self.board.panel_mut(prompt.panel) else {
                 continue;
             };
+            if let Some(submit_at) = prompt.submit_at {
+                // The text is in the panel, and the key that submits it follows
+                // as a write of its own.
+                if now < submit_at {
+                    kept.push(prompt);
+                } else {
+                    typed |= panel.write_input(b"\r");
+                }
+                continue;
+            }
             let ready = prompt_ready(panel);
             let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
                 continue;
@@ -314,9 +335,10 @@ impl HorizonApp {
                 }
                 continue;
             }
-            let mut bytes = crate::input::paste_bytes(&prompt.line, mode, true);
-            bytes.push(b'\r');
+            let bytes = crate::input::paste_bytes(&prompt.line, mode, true);
             typed |= panel.write_input(&bytes);
+            prompt.submit_at = Some(now + SUBMIT_AFTER);
+            kept.push(prompt);
         }
         self.agent_opens.panels.prompts = kept;
         typed

@@ -71,6 +71,15 @@ A worker reaches one operation:
   constant sentence that tells the worker to report with `worker_report` when
   the task is done or when it cannot continue. The whole prompt line is one line
   of the terminal: each control character of the task becomes a space.
+- The text of a prompt line and the key that submits it are two writes. The key
+  follows the text after a short time, because a program that reads a paste
+  does not take a key of the same write as the end of the line. A run with the
+  real Claude Code showed the task in the field of the worker, not sent.
+- The program of the orchestrator starts with one constant text of Horizon,
+  `ORCHESTRATOR_PROMPT`. It says that a worker is a panel that Horizon starts,
+  and that the program does not use a subagent of its own in place of a worker.
+  A run with the real program showed why: asked for a worker, it started a
+  subagent of its own.
 - The answer of `worker_start` names the local id of the panel of the worker,
   and `workers` answers the local id, the preset, the kind of the program, the
   state `working` or `idle`, and the last report of each worker, cut to 400

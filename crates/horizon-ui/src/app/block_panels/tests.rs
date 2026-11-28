@@ -400,11 +400,22 @@ fn a_prompt_line_goes_into_the_panel_once_its_program_has_drawn() {
         typed = app.write_ready_prompts();
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(typed, "the line goes out once the program of the panel drew");
     assert!(
-        !app.agent_opens.panels.holds_prompts(),
-        "the line goes out one time and no second line follows"
+        typed,
+        "the text of the line goes out once the program of the panel drew"
     );
+    // The key that submits the line is a write of its own, a short time later: a
+    // real program did not take a key of the same write as the end of the line.
+    assert!(
+        app.agent_opens.panels.holds_prompts(),
+        "the key that submits the line still waits"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.agent_opens.panels.holds_prompts() {
+        assert!(Instant::now() < deadline, "the key that submits the line goes out");
+        let _ = app.write_ready_prompts();
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(!app.write_ready_prompts(), "nothing waits, so nothing is typed");
 
     let deadline = Instant::now() + Duration::from_secs(10);
