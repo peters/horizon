@@ -18,6 +18,16 @@ use horizon_core::{MachineError, MachineKeys, MachineRegistry, Machines, browser
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
 
+/// What one `machine_set` does to the key that this computer binds to the machine.
+enum KeyChange {
+    /// The request names no key: the binding stays as it is.
+    Keep,
+    /// The request names the empty text: the binding goes.
+    Clear,
+    /// The request names a key: the machine binds it.
+    Set(String),
+}
+
 impl HorizonApp {
     /// The registry file of this Horizon home.
     pub(in crate::app) fn machine_registry(&self) -> MachineRegistry {
@@ -142,7 +152,16 @@ impl HorizonApp {
         let facts = horizon_core::MachineFacts::reported(size, place, price_per_hour);
         let checked = horizon_core::machines::check(name, ssh, session, provider, repository, folder, cards).and_then(
             |checked| {
-                let key = key.map(horizon_core::machines::machine_key_name).transpose()?;
+                // An update keeps the key that it says nothing about, as it keeps a
+                // fact, and the empty text clears it. A real run showed why: the
+                // update that marks a machine for cards names no key, and a list
+                // that forgot the key there left a machine that Horizon could not
+                // reach.
+                let key = match key {
+                    None => KeyChange::Keep,
+                    Some("") => KeyChange::Clear,
+                    Some(name) => KeyChange::Set(horizon_core::machines::machine_key_name(name)?),
+                };
                 Ok((checked.record(u64::try_from(manifest::now_millis()).unwrap_or(0)), key))
             },
         );
@@ -163,10 +182,15 @@ impl HorizonApp {
             root,
             ctx,
             move || {
-                if let Some(key) = key.as_deref() {
+                if let KeyChange::Set(key) = &key {
                     keys.require(key)?;
                 }
                 let machines = Machines::from_store(&registry, store)?;
+                let key = match key {
+                    KeyChange::Set(key) => Some(key),
+                    KeyChange::Clear => None,
+                    KeyChange::Keep => machines.key(&record.name).map(str::to_owned),
+                };
                 let record = facts.checked(machines.find(&record.name))?.into_record(record);
                 let (next, created) = machines.with_record(record, key.as_deref())?;
                 next.save()?;

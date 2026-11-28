@@ -250,7 +250,16 @@ fn a_machine_set_writes_the_record_of_this_horizon_home() {
     let listed = machines(&mut app, &ctx, &root);
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].host, "203.0.113.11");
-    assert_eq!(listed[0].key, None, "a set without a key forgets the old one");
+    assert_eq!(
+        listed[0].key.as_deref(),
+        Some("build-1"),
+        "a set that names no key keeps the key of the machine"
+    );
+
+    let cleared = answered(&mut app, &ctx, &root, set("build-1", "203.0.113.11", Some(""), None));
+    assert!(matches!(&cleared, Outcome::MachineSet { .. }), "{cleared:?}");
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(listed[0].key, None, "the empty text clears the key of the machine");
 }
 
 #[test]
