@@ -157,12 +157,17 @@ impl HorizonApp {
             .iter()
             .map(|panel| (panel.id, panel))
             .collect::<HashMap<_, _>>();
+        // The dock of a visible front desk names the conversation of no workspace,
+        // so no row of this list is the active one and no row opens its panels.
+        // This is a rule of the drawing: the active workspace of the board and the
+        // focus of the canvas stay as they are.
+        let front_desk = self.orchestrator_dock.visible() && self.orchestrator_dock.front_desk().shows(&self.board);
 
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
-                let is_active = self.board.active_workspace == Some(workspace.id);
+                let is_active = !front_desk && self.board.active_workspace == Some(workspace.id);
                 let shows_panels = sidebar_workspace_shows_panels(is_active, accordion);
                 let panels = workspace
                     .panels
@@ -341,6 +346,10 @@ impl HorizonApp {
         self.handle_sidebar_workspace_drag(ui, workspace, row_rect, &row_response, drag_state, click_target_hovered);
 
         if row_clicked {
+            // A press on a workspace row shows that workspace in the dock, also
+            // while the row is already the active one: the person asks for the
+            // conversation of that workspace.
+            self.orchestrator_dock.front_desk_mut().show_workspace();
             // With the accordion the panel rows are collapsed, so selecting a
             // workspace reveals its selected panel instead of panning to the
             // whole workspace. Single-panel workspaces behave the same in
@@ -708,6 +717,26 @@ impl HorizonApp {
             self.board.arrange_workspace(workspace_id, layout);
             self.mark_runtime_dirty();
         }
+    }
+}
+
+/// The rows that the sidebar draws, which a test reads: the `local_id` of each
+/// workspace that it draws as active, and the number of panel rows that it opens.
+#[cfg(test)]
+impl HorizonApp {
+    pub(in crate::app) fn sidebar_drawn_rows(&self) -> (Vec<String>, usize) {
+        let data = self.sidebar_workspace_data();
+        let active = data
+            .iter()
+            .filter(|entry| entry.is_active)
+            .filter_map(|entry| self.board.workspace(entry.id))
+            .map(|workspace| workspace.local_id.clone())
+            .collect();
+        let panels = data
+            .iter()
+            .map(|entry| entry.panels.iter().filter(|panel| !panel.label.is_empty()).count())
+            .sum();
+        (active, panels)
     }
 }
 

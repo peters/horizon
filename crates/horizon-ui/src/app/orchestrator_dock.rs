@@ -1,5 +1,5 @@
 //! The orchestrator dock: the column at the right edge of the root window that
-//! holds the conversation with the orchestrator of a workspace.
+//! holds one conversation with an orchestrator.
 //!
 //! The dock draws the frame of the experiment, the header, the list of the
 //! entries and the composer. One conversation belongs to one workspace, keyed by
@@ -7,6 +7,14 @@
 //! bridge of `horizon_core::agent_bridge`: the program of that conversation runs
 //! with no terminal, and its events arrive on a channel that a frame reads with
 //! `try_iter`. A conversation that the dock does not show keeps running.
+//!
+//! One more conversation belongs to no workspace: the front desk, under the
+//! reserved key [`FRONT_DESK`]. It runs the program of
+//! [`horizon_core::agent_bridge::claude_for_front_desk`], it keeps its draft, its
+//! file and its record as a conversation of a workspace does, and it shows at the
+//! start of Horizon. A workspace row of the sidebar, a change of the active
+//! workspace and the back control of the header turn the dock between the two
+//! (see [`OrchestratorDock::shown`]).
 //!
 //! The start of a bridge starts a process and a stop can wait, so neither runs on
 //! the thread of a frame: both go to the worker of [`worker`], a thread of the
@@ -26,6 +34,7 @@
 
 mod composer;
 mod empty;
+mod front_desk;
 mod header;
 mod layout;
 mod list;
@@ -44,8 +53,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::Rect;
+use horizon_core::Board;
 use horizon_core::agent_bridge::{Bridge, BridgeError, STOP_TIMEOUT};
 
+pub(in crate::app) use self::front_desk::FRONT_DESK;
+use self::front_desk::FrontDesk;
 use self::programs::Program;
 use self::session::{Session, Start};
 use super::HorizonApp;
@@ -88,10 +100,14 @@ pub(in crate::app) struct OrchestratorDock {
     /// environment names in its place.
     program: PathBuf,
     /// The conversation of each workspace, by the `local_id` that a restart
-    /// keeps. A `WorkspaceId` is new at every start, so it cannot be the key.
+    /// keeps, and the conversation of the front desk under [`FRONT_DESK`]. A
+    /// `WorkspaceId` is new at every start, so it cannot be the key.
     sessions: HashMap<String, Session>,
-    /// The draft of each workspace, by the same `local_id`.
+    /// The draft of each conversation, by the same key.
     drafts: HashMap<String, String>,
+    /// The front desk of this run, which belongs to no workspace, and the choice
+    /// of the conversation that a frame draws.
+    front_desk: FrontDesk,
     /// The folder that keeps one conversation file for each workspace of the
     /// session that this app opened, or `None` while nothing is saved.
     storage: Option<PathBuf>,
@@ -108,6 +124,9 @@ pub(in crate::app) struct OrchestratorDock {
     /// the tests of the layout read.
     #[cfg(test)]
     last_frame: Option<LastFrame>,
+    /// The rectangles of the marks of the header in the last frame of a test.
+    #[cfg(test)]
+    last_header: Option<header::Parts>,
 }
 
 impl Default for OrchestratorDock {
@@ -153,6 +172,7 @@ impl OrchestratorDock {
             program,
             sessions: HashMap::new(),
             drafts: HashMap::new(),
+            front_desk: FrontDesk::default(),
             storage: None,
             worker: worker::Worker::default(),
             stops_pending: 0,
@@ -160,6 +180,8 @@ impl OrchestratorDock {
             close_wait: None,
             #[cfg(test)]
             last_frame: None,
+            #[cfg(test)]
+            last_header: None,
         }
     }
 
@@ -228,6 +250,23 @@ impl OrchestratorDock {
         self.drafts.get(local_id).map_or("", String::as_str)
     }
 
+    /// The front desk of this dock, which belongs to no workspace, and the choice
+    /// of the conversation that a frame draws.
+    pub(in crate::app) fn front_desk(&self) -> &FrontDesk {
+        &self.front_desk
+    }
+
+    /// The same, for the parts that show a conversation or keep its record.
+    pub(in crate::app) fn front_desk_mut(&mut self) -> &mut FrontDesk {
+        &mut self.front_desk
+    }
+
+    /// Whether `local_id` names a conversation of a dock on `board`: a workspace
+    /// of that board, or the front desk.
+    fn is_conversation(board: &Board, local_id: &str) -> bool {
+        local_id == FRONT_DESK || board.workspace_id_by_local_id(local_id).is_some()
+    }
+
     /// The draft of the workspace that `local_id` names, which a test writes as a
     /// person who typed in the field would.
     #[cfg(test)]
@@ -285,6 +324,16 @@ impl OrchestratorDock {
         self.sessions.get_mut(local_id)?.stop()
     }
 
+    /// Stops every conversation of the dock, the front desk with them, and forgets
+    /// the record of the front desk: the board that they speak for goes, and so
+    /// does the session that the record belongs to.
+    pub(in crate::app) fn stop_and_clear(&mut self) {
+        self.stop_all_bridges();
+        self.sessions.clear();
+        self.drafts.clear();
+        self.front_desk.clear();
+    }
+
     /// Takes the bridge of every conversation, for the end of Horizon.
     fn stop_all(&mut self) -> Vec<Bridge> {
         self.sessions.values_mut().filter_map(Session::shutdown).collect()
@@ -316,6 +365,11 @@ impl OrchestratorDock {
         let applied_id = local_id.to_owned();
         let handed = self.worker.then(
             move || {
+                // The folder of the front desk is made here and not on the frame:
+                // a frame reads no directory and makes none.
+                if started_id == FRONT_DESK {
+                    session::make_directory(&directory, FRONT_DESK);
+                }
                 let spec = session::program_spec(&program, &directory, session, &started_id);
                 Bridge::start(spec, session::codec(), wake)
             },
@@ -375,15 +429,6 @@ impl OrchestratorDock {
         for bridge in bridges {
             self.stop_bridge(bridge);
         }
-    }
-
-    /// Stops every bridge of the dock on the worker and forgets every
-    /// conversation and draft: the board that they speak for goes, as the programs
-    /// that its panels hold do.
-    pub(in crate::app) fn stop_and_clear(&mut self) {
-        self.stop_all_bridges();
-        self.sessions.clear();
-        self.drafts.clear();
     }
 
     /// The stops of the dock that the worker did not finish, which the pass of a
@@ -491,15 +536,29 @@ impl OrchestratorDock {
         self.last_frame
     }
 
+    /// Keeps the rectangles of the marks of the header of this frame for the tests
+    /// of the layout.
+    #[cfg(test)]
+    fn set_last_header(&mut self, rect: Rect, form: header::Form<'_>) {
+        self.last_header = Some(header::parts(rect, form));
+    }
+
+    /// The rectangles of the marks of the header of the last frame, which a test
+    /// reads to assert where the back control and the tile stand.
+    #[cfg(test)]
+    pub(in crate::app) fn last_header(&self) -> Option<header::Parts> {
+        self.last_header
+    }
+
     /// The conversation of `local_id`, which a test reads.
     #[cfg(test)]
     fn session(&self, local_id: &str) -> Option<&Session> {
         self.sessions.get(local_id)
     }
 
-    /// Whether a program of the dock runs for the workspace that `local_id`
-    /// names now, which is the presence of the orchestrator of that workspace:
-    /// a card of it reports that its owner is here while this answers `true`.
+    /// Whether a program of the dock runs for the conversation that `local_id`
+    /// names now, which is the presence of that orchestrator: a card of it reports
+    /// that its owner is here while this answers `true`.
     pub(in crate::app) fn running(&self, local_id: &str) -> bool {
         self.sessions.get(local_id).is_some_and(Session::has_bridge)
     }
@@ -584,23 +643,20 @@ fn dock_switch(value: Option<&str>) -> bool {
 }
 
 impl HorizonApp {
-    /// Sends `text` to the orchestrator of the active workspace as the message of
+    /// Sends `text` to the conversation that the dock shows, as the message of
     /// the person. It is the path of the button `+ Rent a machine`, which writes
     /// no draft: the send itself is [`HorizonApp::say_to_orchestrator`], which the
     /// composer calls too.
     ///
-    /// It answers whether a message went out: a window without an active workspace
-    /// sends nothing, and neither does one whose orchestrator works.
-    pub(in crate::app) fn say_to_active_orchestrator(&mut self, ctx: &egui::Context, text: &str) -> bool {
-        let Some(local_id) = self
-            .board
-            .active_workspace
-            .and_then(|id| self.board.workspace(id))
-            .map(|workspace| workspace.local_id.clone())
-        else {
+    /// It answers whether a message went out: the front desk is not a workspace to
+    /// rent a machine for, so a dock that shows the front desk sends nothing here,
+    /// and neither does a conversation that works.
+    pub(in crate::app) fn say_to_shown_orchestrator(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let shown = self.orchestrator_dock.front_desk().key(&self.board).to_owned();
+        if shown == FRONT_DESK {
             return false;
-        };
-        self.say_to_orchestrator(ctx, &local_id, text)
+        }
+        self.say_to_orchestrator(ctx, &shown, text)
     }
 }
 

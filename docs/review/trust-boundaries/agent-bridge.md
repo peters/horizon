@@ -1,13 +1,15 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**,crates/horizon-ui/src/app/orchestrator_dock.rs,crates/horizon-ui/src/app/orchestrator_dock/**,scripts/device-smoke/orchestrator_standin.py,scripts/device-smoke/serve.py"
+applyTo: "crates/horizon-core/src/agent_bridge.rs,crates/horizon-core/src/agent_bridge/**,crates/horizon-ui/src/app/orchestrator_dock.rs,crates/horizon-ui/src/app/orchestrator_dock/**,crates/horizon-ui/src/app/sidebar/rent_machine.rs,scripts/device-smoke/orchestrator_standin.py,scripts/device-smoke/serve.py"
 ---
 
 # Trust boundary of the agent bridge
 
 Horizon runs one agent program with no terminal, sends the messages of the person
 to it as JSON lines, and reads its JSON lines as typed events. The program is
-Claude Code, and its one caller is the orchestrator dock of the window
-(`crates/horizon-ui/src/app/orchestrator_dock/`).
+Claude Code, and its caller is the orchestrator dock of the window
+(`crates/horizon-ui/src/app/orchestrator_dock/`). The dock runs one program for
+each conversation: one for each workspace, and one for the front desk, which
+belongs to no workspace.
 
 The program is another process of this computer, and its output is a text that no
 part of Horizon controls. Every byte of its standard output and of its standard
@@ -72,12 +74,15 @@ the same rules.
   `Bridge::send`, which builds the line with `serde_json`. The prompt never
   appears on the command line, in the process list or in a log line.
 - **One message comes from Horizon and not from a person.**
-  `HorizonApp::say_to_active_orchestrator` sends the one sentence of the sidebar
+  `HorizonApp::say_to_shown_orchestrator` sends the one sentence of the sidebar
   button `+ Rent a machine`, which is a constant of
   `app::sidebar::rent_machine`. That sentence is the words of Horizon: it holds
   no text of a program, of a page or of a file, so the button adds no untrusted
-  input to the bridge. It starts the program of the active workspace when that
-  workspace has none, on the worker of the dock, as the composer does.
+  input to the bridge. The message goes to the conversation that the dock shows,
+  which is the conversation of a workspace: the button is disabled, and sends
+  nothing, while the dock shows the front desk. It starts the program of that
+  conversation when the conversation has none, on the worker of the dock, as the
+  composer does.
 - **A name of a nested agent is removed.** Every inherited variable with the
   prefix `CLAUDE_CODE_` or `HORIZON_WORK_`, the variable `CLAUDECODE`, and the
   four names of an agent identity (`HORIZON`, `HORIZON_BROWSER_ACTOR`,
@@ -119,6 +124,41 @@ The dock starts one program for the orchestrator of a workspace with
   it: one grammar, bounded texts, a refused line dropped whole, and no text of it
   in a log line, a path, a command line or a file.
 
+## What the program of the front desk gets
+
+The front desk is the conversation of the dock that belongs to no workspace. The
+dock starts its program with `claude_for_front_desk`
+(`crates/horizon-core/src/agent_bridge/program.rs`), and
+[`docs/architecture/front-desk.md`](../../architecture/front-desk.md) states the
+whole rule.
+
+- **The actor is one constant, and it owns no workspace.** The actor is
+  `horizon:front-desk` (`actor::FRONT_DESK`). It holds no local id, so no
+  workspace of this board can match it. The host refuses every card request of
+  that actor with `caller_unavailable`, so the program creates no card, reads no
+  card and opens no panel (`app/block_requests/caller.rs`).
+- **The model is a name and never an option.** The variable
+  `HORIZON_FRONT_DESK_MODEL` reaches the command line as one value of `--model`,
+  and only while it is a name of at most 64 bytes of the letters, digits, dot,
+  hyphen and underscore that does not start with a hyphen. Every other value
+  gives `haiku`. No byte of the value is read as another option of the program or
+  as a word of a shell.
+- **The system text is one constant of Horizon.** `FRONT_DESK_PROMPT` is a text
+  of this repository. It holds no text of a program, of a page, of a file or of
+  the person. The start passes it as one argument of `--append-system-prompt`.
+- **The program has no built-in tool.** The start passes `--tools ""`, so the
+  conversation answers with words and does no work itself. The next part of this
+  work adds the tool that makes work items.
+- **The child is the same untrusted program.** Every rule of this page holds for
+  it: one grammar, bounded texts, a refused line dropped whole, and no text of it
+  in a log line, a path, a command line or a file.
+- **The conversation and its record keep the same rules.** Its file is
+  `sessions/<session id>/conversations/front-desk.jsonl`, the folder is `0700`
+  and the file is `0600`, and its record is `RuntimeState.front_desk`. The
+  session id of that record is text of the program, so the next start resumes it
+  only in the form of a UUID. A state file of an older build holds no such field
+  and loads with a new session.
+
 ## What the dock draws
 
 The dock is another reader of the untrusted text of the program, so the same
@@ -146,9 +186,10 @@ rules hold for it.
 
 ## The stored conversation is untrusted when it is read back
 
-The dock keeps the entries of a workspace in
-`sessions/<session id>/conversations/<workspace local id>.jsonl`, one JSON object
-per line, so a restart shows the conversation again
+The dock keeps the entries of one conversation in
+`sessions/<session id>/conversations/<key>.jsonl`, one JSON object per line, where
+the key is the local id of a workspace or the reserved key `front-desk`, so a
+restart shows the conversation again
 ([the architecture page](../../architecture/agent-bridge.md#storage)). That file
 is a file of the person's home: the process that wrote it can stop in the middle
 of a line, a damaged block reaches it, and the person can edit it. A later start
@@ -175,7 +216,7 @@ therefore reads it as untrusted text.
   reaches the name.
 - **The record of the session id is text of the program.** `WorkspaceState
   .orchestrator` holds the session id that the program named and the name of its
-  file. The dock keeps the value as the conversation cut it, one line of
+  file, and `RuntimeState.front_desk` holds the same record for the front desk. The dock keeps the value as the conversation cut it, one line of
   `MAX_SUMMARY_CHARS` characters. The next start resumes it only when it is a
   UUID, and any other value starts a new session. It never becomes a word of a
   shell, a path or a log line, and a record whose program name differs from the

@@ -6,6 +6,10 @@
 //! caller is the whole right of it, so `owner_workspace` answers it for the cards
 //! of one owner, and a card of another workspace is never readable through it.
 //!
+//! The front desk is one more actor of the dock, and it owns no workspace. It
+//! therefore creates no card, reads no card and opens no panel, and every request
+//! of that actor is refused with `caller_unavailable`.
+//!
 //! Nothing here changes the board or reads the disk: the checks read the
 //! manifest of the request, the board, the dock and the machine list that the
 //! frame holds.
@@ -64,6 +68,11 @@ impl HorizonApp {
         if request.deadline_at_millis <= manifest::now_millis() {
             return Err(request_expired());
         }
+        if actor::is_front_desk(&request.actor) {
+            // The front desk belongs to no workspace, so it has no card of its own
+            // and no panel to open: this slice grants it nothing.
+            return Err(caller_unavailable());
+        }
         if let Some(panel) = actor_panel(&self.board, &request.actor) {
             return Ok(CardCaller::Panel(panel));
         }
@@ -86,8 +95,12 @@ impl HorizonApp {
     }
 
     /// The workspace of the cards of `owner`: its panel's, the orchestrator's
-    /// workspace, or its machine's.
+    /// workspace, or its machine's. The front desk owns no workspace, so it reads
+    /// no card.
     pub(in crate::app) fn owner_workspace(&self, owner: &str) -> Option<WorkspaceId> {
+        if actor::is_front_desk(owner) {
+            return None;
+        }
         if let Some(panel) = actor_panel(&self.board, owner) {
             return Some(panel.workspace_id);
         }

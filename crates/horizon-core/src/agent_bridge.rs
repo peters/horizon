@@ -46,7 +46,8 @@ pub use codec::{ClaudeCodec, LineCodec, LineShape};
 pub use conversation::{Conversation, ConversationSnapshot, Entry, LimitNote, Link, ToolState};
 pub use event::{BridgeEvent, DropReason};
 pub use program::{
-    BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, ProgramSpec, SessionChoice, claude, claude_for_workspace,
+    BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, FRONT_DESK_MODEL, FRONT_DESK_MODEL_ENV, FRONT_DESK_PROMPT,
+    NO_TOOLS, ProgramSpec, SessionChoice, claude, claude_for_front_desk, claude_for_workspace, front_desk_model,
 };
 pub use worker::{Bridge, BridgeError};
 

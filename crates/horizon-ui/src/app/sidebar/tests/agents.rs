@@ -13,7 +13,7 @@ use horizon_core::PanelKind;
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::OrchestratorDock;
 use crate::app::sidebar::agents::{AgentPrograms, FOUND, GROUP, LOOKING, NOT_FOUND, PROGRAMS};
-use crate::app::sidebar::rent_machine::{LABEL, MESSAGE, NO_WORKSPACE};
+use crate::app::sidebar::rent_machine::{FRONT_DESK, LABEL, MESSAGE, NO_WORKSPACE};
 use crate::test_egui::DiscardTextures;
 
 /// The stand-in of an orchestrator that names its session and then waits for the
@@ -225,6 +225,9 @@ fn the_rent_button_sends_one_message_to_the_orchestrator_of_the_active_workspace
     let (_temp, mut app) = app_with_program(program);
     let workspace = app.board.create_workspace("alpha");
     app.board.focus_workspace(workspace);
+    // The dock shows the conversation of that workspace, as a press on its row
+    // does: a machine belongs to one work item.
+    app.orchestrator_dock.front_desk_mut().show_workspace();
     let local_id = app
         .board
         .workspace(workspace)
@@ -277,6 +280,8 @@ fn the_rent_button_is_disabled_without_an_active_workspace() {
         0,
         "no press opens a conversation without a workspace"
     );
-    // The button is drawn, and its hover says what a press would need.
+    // The button is drawn, and its hover says what a press would need: the front
+    // desk is the conversation of the dock, and it owns no machine.
+    assert_eq!(FRONT_DESK, "Open a work item first");
     assert_eq!(NO_WORKSPACE, "Open a workspace first");
 }

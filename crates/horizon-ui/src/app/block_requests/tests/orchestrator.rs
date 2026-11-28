@@ -789,3 +789,55 @@ fn the_conversation_of_the_workspace_names_the_card_of_its_orchestrator() {
         "the card left the board"
     );
 }
+
+/// The front desk of the dock owns no workspace, so every operation of that actor
+/// is refused: it creates no card, reads no card and opens no panel. The caller is
+/// named by the one constant of the bridge, and no workspace of the board can
+/// match it.
+#[test]
+fn the_front_desk_actor_is_caller_unavailable_for_every_operation() {
+    let (_temp, ctx, mut app) = app();
+    let before = app.board.panels.len();
+    let operations = [
+        Operation::List,
+        Operation::Create {
+            title: Some("Plan".into()),
+            document: document("Plan"),
+        },
+        Operation::Update {
+            panel_id: "any-card".into(),
+            document: document("Plan"),
+        },
+        Operation::Inspect {
+            panel_id: "any-card".into(),
+        },
+        Operation::Visibility {
+            panel_id: "any-card".into(),
+            visible: false,
+        },
+        Operation::Close {
+            panel_id: "any-card".into(),
+        },
+    ];
+    for operation in operations {
+        let mut request = orchestrator_request(&app, 0, operation.clone());
+        request.actor = actor::FRONT_DESK.to_owned();
+        let outcome = app.apply_block_request(&request, &ctx);
+        assert_eq!(
+            code(&outcome),
+            "caller_unavailable",
+            "the front desk asks for {operation:?}: {outcome:?}"
+        );
+    }
+    assert_eq!(app.board.panels.len(), before, "a refused request draws no card");
+    assert!(
+        app.owner_workspace(actor::FRONT_DESK).is_none(),
+        "the front desk owns no workspace, so it reads no card"
+    );
+    let mut caller = orchestrator_request(&app, 0, Operation::List);
+    caller.actor = actor::FRONT_DESK.to_owned();
+    assert!(
+        app.request_caller(&caller).is_err(),
+        "the host refuses the actor of the front desk before any operation runs"
+    );
+}

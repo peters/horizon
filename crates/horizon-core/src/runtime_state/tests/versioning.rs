@@ -197,3 +197,35 @@ fn mixed_runtime_state() -> RuntimeState {
         ..RuntimeState::default()
     }
 }
+
+/// The front desk is one more conversation, and it belongs to no workspace: its
+/// record stands beside the workspaces, so a file of an older build loads
+/// without one and a file of this build keeps it.
+#[test]
+fn a_state_file_without_a_front_desk_loads_and_keeps_the_record_of_one() {
+    let older = "version: 3\nactive_workspace_local_id: null\nfocused_panel_local_id: null\nworkspaces: []\n";
+    let state: RuntimeState = serde_yaml::from_str(older).expect("the file of an older build loads");
+    assert_eq!(
+        state.front_desk, None,
+        "a file without the field starts a new front desk session"
+    );
+    assert!(
+        serde_yaml::to_string(&RuntimeState::default())
+            .expect("the state of a start")
+            .find("front_desk")
+            .is_none(),
+        "a state without a front desk writes no field"
+    );
+
+    let saved = RuntimeState {
+        front_desk: Some(OrchestratorConversationState {
+            session_id: Some("00000000-0000-4000-8000-000000000001".to_owned()),
+            program: "claude".to_owned(),
+        }),
+        ..RuntimeState::default()
+    };
+    let yaml = serde_yaml::to_string(&saved).expect("the state of a start with a front desk");
+    assert!(yaml.contains("front_desk"), "{yaml}");
+    let loaded: RuntimeState = serde_yaml::from_str(&yaml).expect("the state loads again");
+    assert_eq!(loaded.front_desk, saved.front_desk);
+}

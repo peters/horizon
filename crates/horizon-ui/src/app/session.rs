@@ -191,6 +191,11 @@ impl HorizonApp {
         // before any coordination job can remove their transcripts.
         self.keep_transcripts_of_saved_board(runtime_state);
         self.replace_the_board();
+        // The front desk belongs to no workspace, so its record comes from the
+        // state of the session and not from the board that this start opens.
+        self.orchestrator_dock
+            .front_desk_mut()
+            .restore(runtime_state.front_desk.clone());
         // The kept panels of the previous board do not stand on this one.
         self.forget_kept_browser_failures();
         self.reset_native_file_input();

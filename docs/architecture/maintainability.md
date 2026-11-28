@@ -601,12 +601,17 @@ when it names one of those kinds.
   window, and the one caller of `horizon_core::agent_bridge`. `layout.rs` holds
   the width rule, the rectangle of a frame and `leftmost_panel`, which decides
   where the canvas ends beside the dock and an open Settings panel. `header.rs`
-  shows the tile, the name, the state and the cost of the active workspace.
+  shows the marks, the name, the state and the cost of the conversation that the
+  dock shows: the back control and the tile of a workspace, and no mark for the
+  front desk.
   `list.rs` draws the entries of the conversation: the bubble of the person, the
   text of the agent, one row of a tool and one notice, and it bounds what one
-  frame lays out. `composer.rs` draws the field of the draft of each workspace,
-  the send or stop control and the three chips, and it takes the plain Enter
-  while the field holds the keys. `session.rs` is the conversation of one
+  frame lays out. `composer.rs` draws the field of the draft of each conversation,
+  the send or stop control and, for a workspace alone, the three chips, and it
+  takes the plain Enter while the field holds the keys. `empty.rs` draws the
+  empty state and its example rows of the two forms. `front_desk.rs` holds the one
+  conversation that belongs to no workspace and the choice of the conversation
+  that a frame draws. `session.rs` is the conversation of one
   workspace: its entries, its bridge, the messages that wait for that bridge, the
   generation that makes a late start stale, the notices of Horizon, the state of
   the header and the bookkeeping of the stored file of a conversation. The frame
@@ -630,7 +635,12 @@ when it names one of those kinds.
   session lives on disk (`crates/horizon-core/src/agent_bridge/store.rs`).
   `say_to_orchestrator` is the one send of a message, which the composer and the
   button `+ Rent a machine` of the sidebar both call; the button reaches it
-  through `say_to_active_orchestrator`, which names the workspace. The dock draws
+  through `say_to_shown_orchestrator`, which names the conversation that the dock
+  shows and sends nothing while that conversation is the front desk. The dock
+  keeps one more conversation that belongs to no workspace: the front desk, under
+  the reserved key `FRONT_DESK`. `FrontDesk::key` decides which of the two a frame
+  draws, and `docs/architecture/front-desk.md` states its actor, its program and
+  its record in `RuntimeState.front_desk`. The dock draws
   no galley and no string while the switch is off, and the `Agents` group of the
   sidebar draws none either.
 

@@ -1,11 +1,16 @@
-//! The actor of the orchestrator of one workspace: the identity of the agent
-//! program that the dock runs with no terminal.
+//! The actor of the orchestrator of one workspace, and of the front desk: the
+//! identity of the agent program that the dock runs with no terminal.
 //!
 //! A card names the actor of the program that drew it, and the host resolves
 //! that name against its own board. The name of an orchestrator therefore holds
 //! one workspace local id and nothing else: the form is
 //! `horizon:orchestrator/<local id>`, beside the form of a session of a machine,
 //! `horizon:machine/<machine>/<session>` (`crates/horizon-core/src/node_cards/paths.rs`).
+//!
+//! The front desk is one conversation that belongs to no workspace, so it has a
+//! form of its own: [`FRONT_DESK`], which holds no local id. The host accepts the
+//! name and refuses every operation of that caller, because a conversation that
+//! owns no workspace has no card of its own and no panel to open.
 //!
 //! Only a local id of the form that [`crate::new_local_id`] makes is accepted:
 //! 36 bytes of lower-case hexadecimal in groups of 8, 4, 4, 4 and 12, divided by
@@ -19,6 +24,13 @@
 /// from every prefix of a panel (`horizon:<local id>`) and from the prefix of a
 /// machine session, so one actor names one caller.
 pub const ORCHESTRATOR_PREFIX: &str = "horizon:orchestrator/";
+
+/// The actor of the front desk, the one conversation of the dock that belongs to
+/// no workspace.
+///
+/// A workspace local id is a UUID, so this name can never be the actor of a
+/// workspace of this build: the two forms cannot meet.
+pub const FRONT_DESK: &str = "horizon:front-desk";
 
 /// The bytes of a local id that this form holds: the length of the UUID that
 /// [`crate::new_local_id`] makes. A shorter or longer id is refused, so the name
@@ -63,9 +75,16 @@ pub fn of_workspace(local_id: &str) -> Option<String> {
 }
 
 /// The local id of the workspace of an orchestrator actor, or `None` for every
-/// other actor, such as the actor of a panel or of a machine session.
+/// other actor, such as the actor of a panel, of a machine session or of the
+/// front desk.
 #[must_use]
 pub fn workspace_of(actor: &str) -> Option<&str> {
     let local_id = actor.strip_prefix(ORCHESTRATOR_PREFIX)?;
     is_local_id(local_id).then_some(local_id)
+}
+
+/// Whether `actor` is the actor of the front desk.
+#[must_use]
+pub fn is_front_desk(actor: &str) -> bool {
+    actor == FRONT_DESK
 }

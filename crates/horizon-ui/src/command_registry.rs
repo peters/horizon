@@ -16,6 +16,8 @@ pub enum CommandId {
     ToggleMinimap,
     /// The switch of the orchestrator dock of this run.
     ToggleOrchestratorDock,
+    /// The conversation of the front desk in the orchestrator dock.
+    ShowFrontDesk,
     ToggleFullscreenWindow,
     ToggleFullscreenPanel,
     ZoomReset,
@@ -165,6 +167,13 @@ fn view_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEn
             "Toggle Orchestrator Dock",
             &["orchestrator", "dock", "conversation", "agent"],
         ),
+        // The front desk is one conversation of the dock, which belongs to no
+        // workspace: its command shows it and needs no shortcut of its own.
+        command_entry_without_shortcut(
+            CommandId::ShowFrontDesk,
+            "Show Front Desk",
+            &["front", "desk", "conversation", "task", "work"],
+        ),
         command_entry(
             CommandId::ToggleFullscreenWindow,
             "Toggle Fullscreen (Window)",
@@ -234,9 +243,10 @@ mod tests {
     #[test]
     fn action_commands_all_have_shortcuts() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            // The switch of the orchestrator dock is an experiment without a
-            // shortcut of its own, so a command that has none must be that one.
-            let expected = entry.id != CommandId::ToggleOrchestratorDock;
+            // The switch of the orchestrator dock and the conversation of the front
+            // desk need no shortcut of their own, so a command without one must be
+            // one of the two.
+            let expected = !matches!(entry.id, CommandId::ToggleOrchestratorDock | CommandId::ShowFrontDesk);
             assert_eq!(
                 entry.shortcut.is_some(),
                 expected,

@@ -1186,10 +1186,12 @@ The page that shows while the board is empty answers the size of the window.
   outline, and its label is Inter 12.5 `FG`, centred. Hover: the outline is
   `FG_DIM` and the pointer is a pointing hand. A press sends
   `Rent a machine for this workspace. Show me the card with the type, the place and the price first.`
-  to the orchestrator of the active workspace, on the path of the send control of
-  the composer. A window without an active workspace draws the label in `FG_DIM`
-  and says `Open a workspace first` in its hover. A window whose orchestrator
-  works draws it so as well, and its hover says `The orchestrator works`.
+  to the conversation that the dock shows, on the path of the send control of the
+  composer. A dock that shows the front desk draws the label in `FG_DIM` and says
+  `Open a work item first` in its hover, because a machine belongs to one work
+  item. A window without an active workspace draws the label in `FG_DIM` and says
+  `Open a workspace first` in its hover. A window whose orchestrator works draws
+  it so as well, and its hover says `The orchestrator works`.
 - The agents of a machine hang under its row, in the form and the painter of
   the panel rows of a workspace: a 1 px tree guide (`BORDER_STRONG` alpha 200)
   from the state dot of the machine, the two letters of the kind, the name of
@@ -1287,18 +1289,36 @@ start.
   shows), the dock and the Settings panel.
 - The surface is `BG_ELEVATED`. A 1 px `BORDER_SUBTLE` line is at its left edge.
   The content stays inside the rectangle of the dock.
+- The dock shows one of two conversations: the front desk, which belongs to no
+  workspace, or the conversation of a workspace. The header has two forms, and
+  each form has a mark at its left or none.
 - The header has 16 points of horizontal padding and 12 points of vertical
-  padding. A 1 px `BORDER_SUBTLE` line is under it. The tile of the active
-  workspace is 26 by 26 points. The name is 13.5 Semibold `FG` and ends with an
-  ellipsis. The line under the name is 11.5 Regular `FG_SOFT` and reads
-  `Orchestrator · Claude Code on this computer`. It takes the whole width of the
-  header, because the chip and the cost stand above it on the row of the name.
-  With no active workspace, there is no tile, the name line reads
-  `No work item is open`, and there is no second line and no chip.
-- A state chip stands at the right edge of the header, on the row of the name. It
-  has the form of the chip of a card: 20 points high, radius 8, a `BG_ELEVATED`
-  fill, a 1 px `BORDER_SUBTLE` outline, 8 points of horizontal inset, a dot of 6
-  points 4 points left of the text, and the text at 10.5 JetBrains Mono
+  padding. A 1 px `BORDER_SUBTLE` line is under it. The name is 13.5 Semibold
+  `FG` and ends with an ellipsis. The line under the name is 11.5 Regular
+  `FG_SOFT`. It takes the whole width of the header, because the chip and the
+  cost stand above it on the row of the name.
+- The header of a workspace has the tile of that workspace 26 by 26 points, as
+  the row of the workspace list draws it, and the line under the name reads
+  `Orchestrator · Claude Code on this computer`.
+- The header of a workspace also has a back control 8 points left of the tile,
+  which returns the dock to the front desk. It is 22 by 22 points at radius 7.
+  It has no fill at rest, and it draws a chevron that points left: two lines of
+  1.5 px in `FG_SOFT`, 5 points wide and 9 points high, centred on the control.
+  A pointer over it fills the control with `PANEL_BG_ALT` and turns the lines to
+  `FG`, and it shows the pointing hand. Its hover text is `Front desk`, and that
+  text is also its accessible name. The air between the control and the tile is
+  8 points, so the tile, the name and the second line stand 30 points right of
+  their place without the control. The name elides earlier by those 30 points.
+  Nothing else of the header changes.
+- The header of the front desk has no mark: no tile and no back control. Its name
+  is `Front desk` at the left padding of the header, and the line under it reads
+  `Starts and watches the work items`. The state chip and the cost stay at the
+  right edge, as for a workspace.
+- The state chip stands at the right edge of the header, on the row of the name,
+  in both forms. It has the form of the chip of a card: 20 points high, radius 8,
+  a `BG_ELEVATED` fill, a 1 px `BORDER_SUBTLE` outline, 8 points of horizontal
+  inset, a dot of 6 points 4 points left of the text, and the text at 10.5
+  JetBrains Mono
   `FG_SOFT`. The chip draws the same painter as the chip of a card
   (`block_widget/chip.rs`). The text and the dot of each state are:
 
@@ -1317,19 +1337,27 @@ start.
   that is too narrow for the name, the cost and the chip cuts the name with an
   ellipsis first, and then hides the cost. The chip stays.
 - The empty state is vertically centred between the header and the composer,
-  with 28 points of horizontal padding. Its title is `Say what you want done.`
-  at 15 Bold `FG`. The two sentences under the title are 13.5 Regular `FG_SOFT`.
-  They wrap at a line height of 1.55 times the size. It draws only while the
-  conversation of the workspace holds no entry.
+  with 28 points of horizontal padding. Its title is 15 Bold `FG`. The two
+  sentences under the title are 13.5 Regular `FG_SOFT`. They wrap at a line
+  height of 1.55 times the size. It draws only while the conversation that the
+  dock shows holds no entry.
+- The empty state of a workspace has the title `Say what you want done.`, and the
+  two sentences read `The orchestrator reads the repository, makes a plan and
+  shows it as cards. It asks before a machine is rented.`
+- The empty state of the front desk has the title `What should be done?`, and the
+  two sentences read `Write one message with one task or more. The front desk
+  starts a work item for each task and tells you when one needs you.`
 - Two example rows stand under the two sentences, 12 points below them and 8
-  points apart: `Fix #1987 on a rented machine` and `Why is the cold start slow?
-  Measure it first.` A row takes the full width of the empty state block, with
-  radius 10, a `PANEL_BG` fill, a 1 px `BORDER_SUBTLE` outline, a padding of 12
-  by 9 points, and its text at 12.5 Regular `FG` on one line with an ellipsis. A
-  pointer over a row outlines it in `FG_DIM` and shows the pointing hand. A click
-  puts the text of that row into an empty draft of the active workspace and gives
-  the keyboard to the field. A draft that holds text stays as the person wrote
-  it. The click sends nothing.
+  points apart. The rows of a workspace are `Fix #1987 on a rented machine` and
+  `Why is the cold start slow? Measure it first.`. The rows of the front desk are
+  `Fix #1987 and make the cold start faster` and `What waits
+  for me?`. A row takes the full width of the empty state block, with radius 10,
+  a `PANEL_BG` fill, a 1 px `BORDER_SUBTLE` outline, a padding of 12 by 9 points,
+  and its text at 12.5 Regular `FG` on one line with an ellipsis. A pointer over
+  a row outlines it in `FG_DIM` and shows the pointing hand. A click puts the
+  text of that row into the empty draft of the conversation that the dock shows
+  and gives the keyboard to the field. A draft that holds text stays as the
+  person wrote it. The click sends nothing.
 - The list is a vertical scroll area between the header and the composer, with
   16 points of padding and 16 points between two entries. New entries stand at
   the bottom, and the list follows the bottom while the person has not scrolled
@@ -1376,11 +1404,14 @@ start.
 - The composer keeps the bottom edge of the dock. From its top down: a 1 px
   `BORDER_SUBTLE` line, 12 points of padding, the field, 10 points of gap, the
   row of the chips, and 14 points of padding to the bottom edge. The left and
-  right padding is 16 points.
+  right padding is 16 points. The composer of the front desk has no row of
+  chips: the field takes the place of that row, and the 14 points of bottom
+  padding follow the field.
 - The field takes the full width of the composer. It is a multiline text edit at
   radius 12, with a `BG` fill and a 1 px `BORDER_STRONG` outline, which becomes a
   1 px `ACCENT` outline while the field holds the keyboard. Its hint is
-  `Write to the orchestrator`. Its text is 13.5 `FG`, with a margin of 14 points
+  `Write to the orchestrator`, and `Write to the front desk` for the front desk.
+  Its text is 13.5 `FG`, with a margin of 14 points
   at its left and 12 points above and below it. The text ends 8 points before the
   control. The field is at least 48 points high, which holds one row. It grows to
   6 rows upward, and it clips a longer draft. The row of the chips keeps its
@@ -1402,7 +1433,8 @@ start.
   the control sends it. A draft of white space only sends nothing. While the
   conversation is busy a press stops the program of that conversation; the field
   keeps the keys, and Enter then sends nothing.
-- The three read-only chips are under the field, left aligned and 8 points apart.
+- The three read-only chips are under the field of a workspace, left aligned and
+  8 points apart. The front desk draws no chip and keeps no room for one.
   They wrap to the next row when the dock is too narrow for them. A chip has
   radius 8, a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and a padding of
   10 by 5 points. Its label line is 10.5 `FG_DIM` and its value line is 12.5 `FG`.
@@ -1422,6 +1454,15 @@ start.
   dock.
 - The field takes the keyboard only after a click in it. The dock takes no other
   widget of the window, so a terminal panel keeps the keys when the dock appears.
+- The dock shows one conversation at a time. The start of Horizon shows the front
+  desk. A press on a row of the workspace list, also on the row that is already
+  active, and every change of the active workspace show that workspace. The back
+  control of the header and the command `Show Front Desk` show the front desk. A
+  board without a workspace shows the front desk.
+- While the dock is visible and shows the front desk, the workspace list draws no
+  row as active and opens no panel row under a workspace. The active workspace of
+  the board and the focus of the canvas do not change: this is a rule of the
+  drawing. A dock that is not visible leaves the list as it is.
 
 ## Terminal
 

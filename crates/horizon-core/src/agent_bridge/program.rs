@@ -14,6 +14,13 @@
 //! for one workspace with no panel, so it gets the actor of that workspace, the
 //! identity variables of an agent panel and the plugin directory of Claude Code,
 //! and no work-resume plugin.
+//!
+//! [`claude_for_front_desk`] is the program of the front desk: the same command
+//! line as an orchestrator, and then three additions that make it a
+//! conversation and nothing else. It gets no built-in tool ([`NO_TOOLS`]), the
+//! model of the front desk ([`front_desk_model`]) and one system text
+//! ([`FRONT_DESK_PROMPT`]) that names its job, so it writes the words of the
+//! person to the work items and never does the work itself.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -41,6 +48,32 @@ pub const ENV_REMOVE_NAMES: [&str; 5] = [
 
 /// The flags of the line format of the codec of Claude Code.
 const CLAUDE_ARGS: [&str; 5] = ["-p", "--input-format", "stream-json", "--output-format", "stream-json"];
+
+/// The value of `--tools` that leaves the front desk no built-in tool. The help
+/// of Claude Code names the empty word as the form for none.
+pub const NO_TOOLS: &str = "";
+
+/// The name of the variable that gives the front desk another model than
+/// [`FRONT_DESK_MODEL`] of this line of Horizon. A value that is not of the form
+/// [`MODEL_BYTES`] is ignored.
+pub const FRONT_DESK_MODEL_ENV: &str = "HORIZON_FRONT_DESK_MODEL";
+
+/// The model of the front desk of a start that names none.
+pub const FRONT_DESK_MODEL: &str = "haiku";
+
+/// The greatest length of a model name that Horizon passes as one argument. A
+/// longer value is not a model of Claude Code.
+const MODEL_BYTES: usize = 64;
+
+/// The text that the front desk gets after the system text of Claude Code: what
+/// the conversation is for, and what it cannot do in this part.
+pub const FRONT_DESK_PROMPT: &str = "You are the front desk of Horizon. The person writes one message that holds \
+one or more tasks, and you turn it into work items. You do not do the work \
+yourself and you have no tool for it. Each task becomes a work item with its own \
+orchestrator, which reads the repository and reports to the person. Answer in a \
+few short lines, in the language of the person: say which tasks you read, and \
+ask one question only when a task names no outcome. Never answer a question of a \
+work item for the person, and never claim that work is done.";
 
 /// One program that Horizon starts, and nothing of it comes from the program's
 /// own output.
@@ -116,16 +149,29 @@ impl BridgeIdentity {
     #[must_use]
     pub fn for_workspace(local_id: &str) -> Option<Self> {
         let actor = super::actor::of_workspace(local_id)?;
+        Some(Self::in_this_horizon(actor))
+    }
+
+    /// The identity of the front desk of this Horizon, which owns no workspace.
+    #[must_use]
+    pub fn front_desk() -> Self {
+        Self::in_this_horizon(super::actor::FRONT_DESK.to_owned())
+    }
+
+    /// The identity of one actor of this Horizon: the host instance, the home
+    /// that holds the request queues, the program that runs this Horizon and the
+    /// plugin directory of Claude Code.
+    fn in_this_horizon(actor: String) -> Self {
         let host_instance = crate::browser::manifest::host_instance().to_string();
         let home = crate::HorizonHome::resolve();
         let plugin_dir = home.claude_plugin_dir_for_host(&host_instance);
-        Some(Self {
+        Self {
             actor,
             host_instance,
             home: home.root().to_path_buf(),
             executable: crate::browser_mcp_executable().unwrap_or_default(),
             plugin_dir: plugin_dir.is_dir().then_some(plugin_dir),
-        })
+        }
     }
 }
 
@@ -155,6 +201,50 @@ pub fn claude_for_workspace(cwd: &Path, session: SessionChoice, identity: &Bridg
         .map(|(name, value)| (OsString::from(name), OsString::from(value)))
         .collect();
     spec
+}
+
+/// The program of the front desk: the conversation that belongs to no workspace.
+///
+/// It is [`claude_for_workspace`] with the same command line and then three
+/// additions: [`NO_TOOLS`], the model of [`front_desk_model`] and
+/// [`FRONT_DESK_PROMPT`]. The front desk does no work itself, so it has no tool
+/// to do it with. The person of that conversation is the person of this computer
+/// and the model comes from this Horizon, so neither value can arrive from the
+/// output of a program.
+#[must_use]
+pub fn claude_for_front_desk(cwd: &Path, session: SessionChoice, identity: &BridgeIdentity) -> ProgramSpec {
+    let mut spec = claude_for_workspace(cwd, session, identity);
+    spec.args.push(OsString::from("--tools"));
+    spec.args.push(OsString::from(NO_TOOLS));
+    spec.args.push(OsString::from("--model"));
+    spec.args.push(OsString::from(front_desk_model(
+        std::env::var(FRONT_DESK_MODEL_ENV).ok().as_deref(),
+    )));
+    spec.args.push(OsString::from("--append-system-prompt"));
+    spec.args.push(OsString::from(FRONT_DESK_PROMPT));
+    spec
+}
+
+/// The model of the front desk: the value of [`FRONT_DESK_MODEL_ENV`] while it
+/// is a name of a model, and [`FRONT_DESK_MODEL`] for every other value.
+///
+/// A name holds [`MODEL_BYTES`] bytes or less of the letters, digits, dot, hyphen
+/// and underscore, so it is one argument of the program and no word of a shell.
+/// A name does not start with a hyphen, so the value of the variable can never be
+/// read as another option of the program.
+#[must_use]
+pub fn front_desk_model(value: Option<&str>) -> String {
+    value
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= MODEL_BYTES
+                && !value.starts_with('-')
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        })
+        .unwrap_or(FRONT_DESK_MODEL)
+        .to_owned()
 }
 
 /// The program of one Claude Code conversation, with no terminal.

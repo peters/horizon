@@ -1,13 +1,17 @@
-//! The header of the dock: the tile and the name of the active workspace, the
-//! state chip at its right edge, and the cost of the conversation left of it.
+//! The header of the dock: the mark and the name of the conversation that the
+//! dock shows, the state chip at its right edge, and the cost of the conversation
+//! left of it.
 //!
-//! The tile is the tile of the workspace row of the sidebar, drawn at the side
-//! of the header, so a person reads the same mark in both places.
+//! The dock shows one of two conversations, so the header has two forms. The
+//! front desk belongs to no workspace: its name stands at the left padding and no
+//! mark stands before it. A workspace shows the tile of its row of the sidebar, so
+//! a person reads the same mark in both places, and the back control that returns
+//! to the front desk stands 8 points left of that tile.
 //!
-//! The second line names the program of the dock: `Orchestrator · Claude Code
-//! on this computer`. The state of the conversation stands in the chip at the
-//! right edge, in the form of the chip of a card, so a person reads the same
-//! mark in both places.
+//! The second line names the conversation: `Orchestrator · Claude Code on this
+//! computer` for a workspace, and the job of the front desk for the front desk.
+//! The state of the conversation stands in the chip at the right edge, in the form
+//! of the chip of a card, so a person reads the same mark in both places.
 //!
 //! The cost of the ended turns stands left of the chip while it is above zero.
 //! A header that is too narrow for the name, the cost and the chip cuts the name
@@ -15,7 +19,7 @@
 
 use std::sync::Arc;
 
-use egui::{Galley, Rect, Stroke, Ui, vec2};
+use egui::{CursorIcon, Galley, Rect, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 use horizon_core::Workspace;
 
 use crate::app::sidebar::rows;
@@ -32,6 +36,20 @@ const PADDING_Y: f32 = 12.0;
 /// The side of the tile and the air between it and the two lines.
 const TILE_SIDE: f32 = 26.0;
 const TILE_GAP: f32 = 10.0;
+/// The side of the back control, its corner radius, the air between it and the
+/// tile, and the size of the chevron that it draws: 5 points wide and 9 high,
+/// centred on the control.
+const BACK_SIDE: f32 = 22.0;
+const BACK_RADIUS: u8 = 7;
+const BACK_GAP: f32 = 8.0;
+const BACK_CHEVRON_WIDTH: f32 = 5.0;
+const BACK_CHEVRON_HEIGHT: f32 = 9.0;
+const BACK_STROKE: f32 = 1.5;
+/// The name of the back control, which a screen reader reads and a pointer reads
+/// as its hover text.
+const BACK_NAME: &str = "Front desk";
+/// The widget id of the back control.
+const BACK_ID: &str = "orchestrator_dock_back";
 const NAME_SIZE: f32 = 13.5;
 const STATE_SIZE: f32 = 11.5;
 const LINE_GAP: f32 = 2.0;
@@ -43,11 +61,48 @@ const TEXT_CHIP_GAP: f32 = 8.0;
 /// The least width of the name line before the cost hides. The name is cut with
 /// an ellipsis at any width, so the cost goes first.
 const NAME_MIN_WIDTH: f32 = 96.0;
-/// The second line of a header of the dock: the program, without its state,
+/// The second line of a header of a workspace: the program, without its state,
 /// which the chip names.
 pub(super) const PROGRAM_LINE: &str = "Orchestrator \u{b7} Claude Code on this computer";
-/// The name line of a window with no active workspace.
-pub(super) const NO_WORKSPACE_LINE: &str = "No work item is open";
+/// The first line of a header of the front desk, and the second one, which names
+/// what the front desk does.
+pub(super) const FRONT_DESK_TITLE: &str = "Front desk";
+pub(super) const FRONT_DESK_LINE: &str = "Starts and watches the work items";
+
+/// What the header of the dock names: the front desk, which belongs to no
+/// workspace, or one workspace of the board.
+#[derive(Clone, Copy)]
+pub(super) enum Form<'a> {
+    FrontDesk,
+    Workspace(&'a Workspace),
+}
+
+impl<'a> Form<'a> {
+    /// The first line of the header.
+    fn title(self) -> &'a str {
+        match self {
+            Self::FrontDesk => FRONT_DESK_TITLE,
+            Self::Workspace(workspace) => workspace.name.as_str(),
+        }
+    }
+
+    /// The second line of the header, under the first one.
+    fn line(self) -> &'static str {
+        match self {
+            Self::FrontDesk => FRONT_DESK_LINE,
+            Self::Workspace(_) => PROGRAM_LINE,
+        }
+    }
+
+    /// The room that the marks at the left take before the two lines: the back
+    /// control and the tile of a workspace, and nothing for the front desk.
+    fn leading(self) -> f32 {
+        match self {
+            Self::FrontDesk => 0.0,
+            Self::Workspace(_) => BACK_SIDE + BACK_GAP + TILE_SIDE + TILE_GAP,
+        }
+    }
+}
 
 /// The state chip at the right edge of the header: the words of the state and
 /// the mark at its left.
@@ -75,7 +130,7 @@ impl Chip {
     }
 }
 
-/// What the header names of the conversation of the active workspace.
+/// What the header names of the conversation that the dock shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct State {
     /// The chip of the state of the conversation.
@@ -85,8 +140,8 @@ pub(super) struct State {
 }
 
 impl State {
-    /// The state of the conversation of `session`, or the state of a workspace
-    /// that has no conversation yet.
+    /// The state of the conversation of `session`, or the state of a
+    /// conversation that started no program yet.
     pub(super) fn of(session: Option<&Session>) -> Self {
         session.map_or(
             Self {
@@ -101,32 +156,53 @@ impl State {
     }
 }
 
+/// The rectangles of the marks of the header, which the tests of the layout read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::app) struct Parts {
+    /// The back control, while the header shows a workspace.
+    pub(in crate::app) back: Option<Rect>,
+    /// The tile of the workspace, while the header shows one.
+    pub(in crate::app) tile: Option<Rect>,
+    /// The left edge of the first and of the second line.
+    pub(in crate::app) text_left: f32,
+}
+
+/// The rectangles of the marks of the header of `rect`.
+pub(super) fn parts(rect: Rect, form: Form<'_>) -> Parts {
+    let back = matches!(form, Form::Workspace(_)).then(|| {
+        Rect::from_min_size(
+            pos2(rect.min.x + PADDING_X, rect.center().y - BACK_SIDE / 2.0),
+            vec2(BACK_SIDE, BACK_SIDE),
+        )
+    });
+    let tile = back.map(|back| {
+        Rect::from_min_size(
+            pos2(back.max.x + BACK_GAP, rect.center().y - TILE_SIDE / 2.0),
+            vec2(TILE_SIDE, TILE_SIDE),
+        )
+    });
+    let text_left = tile.map_or(rect.min.x + PADDING_X, |tile| tile.max.x + TILE_GAP);
+    Parts { back, tile, text_left }
+}
+
 /// The three galleys of the header.
 struct Lines {
     name: Arc<Galley>,
-    state: Option<Arc<Galley>>,
+    state: Arc<Galley>,
     cost: Option<Arc<Galley>>,
 }
 
-/// The room that the tile of the header takes before its two lines.
-fn tile_space(workspace: Option<&Workspace>) -> f32 {
-    if workspace.is_some() { TILE_SIDE + TILE_GAP } else { 0.0 }
-}
-
 /// The width of the chip of `state`, which stands at the right edge.
-fn chip_width(ui: &Ui, state: Option<State>) -> f32 {
-    state.map_or(0.0, |state| {
-        chip::words_width(ui.painter(), state.chip.word) + TEXT_CHIP_GAP
-    })
+fn chip_width(ui: &Ui, state: State) -> f32 {
+    chip::words_width(ui.painter(), state.chip.word) + TEXT_CHIP_GAP
 }
 
-/// The galleys of the header of `width` points: the name of the active
-/// `workspace`, the line of the program under it, the cost and the chip at the
-/// right.
-fn lines(ui: &Ui, width: f32, workspace: Option<&Workspace>, state: Option<State>) -> Lines {
-    let column = (width - 2.0 * PADDING_X - tile_space(workspace)).max(0.0);
+/// The galleys of the header of `width` points: the name of `form`, the line
+/// under it, the cost and the chip at the right.
+fn lines(ui: &Ui, width: f32, form: Form<'_>, state: State) -> Lines {
+    let column = (width - 2.0 * PADDING_X - form.leading()).max(0.0);
     let name_column = (column - chip_width(ui, state)).max(0.0);
-    let mut cost = state.and_then(|state| cost(ui, state.cost_usd_total, name_column));
+    let mut cost = cost_of(ui, state.cost_usd_total, name_column);
     let mut name_width = match &cost {
         Some(cost) => (name_column - cost.size().x - COST_GAP).max(1.0),
         None => name_column,
@@ -137,16 +213,15 @@ fn lines(ui: &Ui, width: f32, workspace: Option<&Workspace>, state: Option<State
         cost = None;
         name_width = name_column;
     }
-    let name = workspace.map_or(NO_WORKSPACE_LINE, |workspace| workspace.name.as_str());
-    let name = text::line(ui, name, NAME_SIZE, Weight::Semibold, theme::FG(), name_width);
+    let name = text::line(ui, form.title(), NAME_SIZE, Weight::Semibold, theme::FG(), name_width);
     // The second line keeps the whole column: the chip and the cost stand on the
     // row of the name, so this line never meets them.
-    let state = state.map(|_| text::line(ui, PROGRAM_LINE, STATE_SIZE, Weight::Regular, theme::FG_SOFT(), column));
+    let state = text::line(ui, form.line(), STATE_SIZE, Weight::Regular, theme::FG_SOFT(), column);
     Lines { name, state, cost }
 }
 
 /// The total of the conversation left of the chip, while it is above zero.
-fn cost(ui: &Ui, cost_usd_total: f64, max_width: f32) -> Option<Arc<Galley>> {
+fn cost_of(ui: &Ui, cost_usd_total: f64, max_width: f32) -> Option<Arc<Galley>> {
     (cost_usd_total > 0.0).then(|| {
         text::mono_line(
             ui,
@@ -158,71 +233,96 @@ fn cost(ui: &Ui, cost_usd_total: f64, max_width: f32) -> Option<Arc<Galley>> {
     })
 }
 
-/// The height of the header of the active `workspace` at `width` points, which
-/// the dock works out before it draws the header.
-pub(super) fn height(ui: &Ui, width: f32, workspace: Option<&Workspace>, state: Option<State>) -> f32 {
-    let lines = lines(ui, width, workspace, state);
-    let text_height = lines.state.as_ref().map_or(lines.name.size().y, |state| {
-        lines.name.size().y + LINE_GAP + state.size().y
-    });
-    let chip_height = state.map_or(0.0, |_| chip::height());
+/// The height of the header of `form` at `width` points, which the dock works out
+/// before it draws the header.
+pub(super) fn height(ui: &Ui, width: f32, form: Form<'_>, state: State) -> f32 {
+    let lines = lines(ui, width, form, state);
+    let text_height = lines.name.size().y + LINE_GAP + lines.state.size().y;
+    let chip_height = chip::height();
     (text_height.max(TILE_SIDE).max(chip_height) + 2.0 * PADDING_Y).ceil()
 }
 
-/// Draws the header of the dock for the active `workspace` in `rect`, its line
-/// under the name, the cost left of the chip and the chip at the right edge.
-pub(super) fn render(ui: &Ui, rect: Rect, workspace: Option<&Workspace>, state: Option<State>) {
-    let lines = lines(ui, rect.width(), workspace, state);
+/// Draws the header of `form` in `rect`, its line under the name, the cost left of
+/// the chip and the chip at the right edge. It answers whether the person pressed
+/// the back control, which the front desk has and a workspace shows.
+pub(super) fn render(ui: &Ui, rect: Rect, form: Form<'_>, state: State) -> bool {
+    let lines = lines(ui, rect.width(), form, state);
     let name_height = lines.name.size().y;
-    let text_height = lines
-        .state
-        .as_ref()
-        .map_or(name_height, |state| name_height + LINE_GAP + state.size().y);
+    let text_height = name_height + LINE_GAP + lines.state.size().y;
+    let parts = parts(rect, form);
 
-    let tile_left = rect.min.x + PADDING_X;
-    let text_left = tile_left + tile_space(workspace);
+    let text_left = parts.text_left;
     let text_top = rect.center().y - text_height / 2.0;
-    if let Some(workspace) = workspace {
-        let tile = Rect::from_min_size(
-            egui::pos2(tile_left, rect.center().y - TILE_SIDE / 2.0),
-            vec2(TILE_SIDE, TILE_SIDE),
-        );
-        // The dock shows the active workspace, so its tile is the active one.
+    if let (Some(tile), Form::Workspace(workspace)) = (parts.tile, form) {
+        // The dock shows the workspace of this form, so its tile is the active
+        // one.
         let accent = theme::workspace_accent(workspace.color_idx);
         rows::paint_workspace_tile(ui, tile, &workspace.name, accent, true);
     }
 
     let painter = ui.painter();
-    painter.galley(egui::pos2(text_left, text_top), lines.name, theme::FG());
+    painter.galley(pos2(text_left, text_top), Arc::clone(&lines.name), theme::FG());
     let state_top = text_top + name_height + LINE_GAP;
-    if let Some(state) = lines.state {
-        painter.galley(egui::pos2(text_left, state_top), state, theme::FG_SOFT());
-    }
+    painter.galley(pos2(text_left, state_top), Arc::clone(&lines.state), theme::FG_SOFT());
 
-    if let Some(state) = state {
-        let width = chip::words_width(painter, state.chip.word);
-        // The chip and the cost stand on the row of the name, so the line under
-        // them keeps the whole width of the header.
-        let chip_center = text_top + name_height / 2.0;
-        let chip = Rect::from_min_size(
-            egui::pos2(rect.max.x - PADDING_X - width, chip_center - chip::height() / 2.0),
-            vec2(width, chip::height()),
+    let width = chip::words_width(painter, state.chip.word);
+    // The chip and the cost stand on the row of the name, so the line under them
+    // keeps the whole width of the header.
+    let chip_center = text_top + name_height / 2.0;
+    let chip = Rect::from_min_size(
+        pos2(rect.max.x - PADDING_X - width, chip_center - chip::height() / 2.0),
+        vec2(width, chip::height()),
+    );
+    if let Some(cost) = lines.cost {
+        // The cost and the chip share one centre line at the right edge.
+        let cost_rect = Rect::from_min_size(
+            pos2(
+                chip.min.x - COST_GAP - cost.size().x,
+                chip.center().y - cost.size().y / 2.0,
+            ),
+            cost.size(),
         );
-        if let Some(cost) = lines.cost {
-            // The cost and the chip share one centre line at the right edge.
-            let cost_rect = Rect::from_min_size(
-                egui::pos2(
-                    chip.min.x - COST_GAP - cost.size().x,
-                    chip.center().y - cost.size().y / 2.0,
-                ),
-                cost.size(),
-            );
-            painter.galley(cost_rect.min, cost, theme::FG_SOFT());
-        }
-        chip::paint_words(painter, chip, state.chip.word, state.chip.dot);
+        painter.galley(cost_rect.min, cost, theme::FG_SOFT());
     }
+    chip::paint_words(painter, chip, state.chip.word, state.chip.dot);
     painter.line_segment(
         [rect.left_bottom(), rect.right_bottom()],
         Stroke::new(1.0_f32, theme::BORDER_SUBTLE()),
     );
+    parts.back.is_some_and(|back| back_control(ui, back))
+}
+
+/// Draws the back control on `rect` and answers whether the person pressed it. It
+/// has no fill at rest, and the hover fills it with `PANEL_BG_ALT` and turns its
+/// chevron to `FG`.
+fn back_control(ui: &Ui, rect: Rect) -> bool {
+    let response = ui.interact(rect, ui.make_persistent_id(BACK_ID), Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter();
+    if hovered {
+        painter.rect_filled(rect, BACK_RADIUS, theme::PANEL_BG_ALT());
+    }
+    let color = if hovered { theme::FG() } else { theme::FG_SOFT() };
+    let stroke = Stroke::new(BACK_STROKE, color);
+    let centre = rect.center();
+    let tip = pos2(centre.x - BACK_CHEVRON_WIDTH / 2.0, centre.y);
+    painter.line_segment(
+        [
+            pos2(tip.x + BACK_CHEVRON_WIDTH, centre.y - BACK_CHEVRON_HEIGHT / 2.0),
+            tip,
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            tip,
+            pos2(tip.x + BACK_CHEVRON_WIDTH, centre.y + BACK_CHEVRON_HEIGHT / 2.0),
+        ],
+        stroke,
+    );
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, BACK_NAME));
+    let response = response
+        .on_hover_text(BACK_NAME)
+        .on_hover_cursor(CursorIcon::PointingHand);
+    response.clicked()
 }

@@ -1,9 +1,15 @@
-//! The empty state of the dock: how the orchestrator works, centred between the
+//! The empty state of the dock: what the conversation does, centred between the
 //! header and the composer, with two example rows under the two sentences.
+//!
+//! The dock shows one of two conversations, so this module has two forms. A
+//! workspace names the orchestrator of that workspace; the front desk names its
+//! own job, and its example rows ask for work items. Both forms keep the same
+//! sizes and the same gaps.
 //!
 //! A row of an example is a text that the person can put into the draft with one
 //! click. This module draws the rows and answers the text of the row that the
-//! person clicked; the dock keeps the draft of the workspace and sends nothing.
+//! person clicked; the dock keeps the draft of that conversation and sends
+//! nothing.
 
 use std::sync::Arc;
 
@@ -22,6 +28,14 @@ const TITLE_SIZE: f32 = 15.0;
 const SENTENCES: &str = "The orchestrator reads the repository, makes a plan and shows it as cards. \
                           It asks before a machine is rented.";
 const SENTENCES_SIZE: f32 = 13.5;
+/// The empty state of the front desk: the question that it asks the person, what
+/// it does with the message, and the two example rows of a conversation that
+/// starts work items.
+pub(super) const FRONT_DESK_TITLE: &str = "What should be done?";
+pub(super) const FRONT_DESK_SENTENCES: &str = "Write one message with one task or more. The front desk \
+                                                starts a work item for each task and tells you when one \
+                                                needs you.";
+const FRONT_DESK_EXAMPLES: [&str; 2] = ["Fix #1987 and make the cold start faster", "What waits for me?"];
 const SENTENCES_LINE_HEIGHT: f32 = 1.55;
 const GAP: f32 = 8.0;
 /// The two example rows under the sentences of the empty state: their texts, the
@@ -38,24 +52,69 @@ const EXAMPLE_PADDING_Y: f32 = 9.0;
 const EXAMPLE_RADIUS: u8 = 10;
 const EXAMPLE_SIZE: f32 = 12.5;
 
-/// Draws the empty state in `body`, and answers the text of the example that the
-/// person clicked.
-pub(super) fn render(ui: &Ui, body: Rect) -> Option<&'static str> {
+/// What the empty state of the dock describes: the orchestrator of a workspace,
+/// or the front desk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Form {
+    Workspace,
+    FrontDesk,
+}
+
+impl Form {
+    /// The empty state of the conversation that the dock shows, which the dock
+    /// names as one value.
+    pub(super) const fn of(shows_front_desk: bool) -> Self {
+        if shows_front_desk {
+            Self::FrontDesk
+        } else {
+            Self::Workspace
+        }
+    }
+
+    /// The title of this form.
+    fn title(self) -> &'static str {
+        match self {
+            Self::Workspace => TITLE,
+            Self::FrontDesk => FRONT_DESK_TITLE,
+        }
+    }
+
+    /// The two sentences under the title of this form.
+    fn sentences(self) -> &'static str {
+        match self {
+            Self::Workspace => SENTENCES,
+            Self::FrontDesk => FRONT_DESK_SENTENCES,
+        }
+    }
+
+    /// The two example rows of this form.
+    fn examples(self) -> [&'static str; 2] {
+        match self {
+            Self::Workspace => EXAMPLES,
+            Self::FrontDesk => FRONT_DESK_EXAMPLES,
+        }
+    }
+}
+
+/// Draws the empty state of `form` in `body`, and answers the text of the example
+/// that the person clicked.
+pub(super) fn render(ui: &Ui, body: Rect, form: Form) -> Option<&'static str> {
     let text_width = body.width() - 2.0 * PADDING_X;
     if text_width <= 0.0 || body.height() <= 0.0 {
         return None;
     }
-    let title = text::line(ui, TITLE, TITLE_SIZE, Weight::Bold, theme::FG(), text_width);
+    let examples_of = form.examples();
+    let title = text::line(ui, form.title(), TITLE_SIZE, Weight::Bold, theme::FG(), text_width);
     let sentences = text::paragraph(
         ui,
-        SENTENCES,
+        form.sentences(),
         SENTENCES_SIZE,
         Weight::Regular,
         theme::FG_SOFT(),
         text_width,
         SENTENCES_LINE_HEIGHT,
     );
-    let examples: Vec<Arc<Galley>> = EXAMPLES
+    let examples: Vec<Arc<Galley>> = examples_of
         .iter()
         .map(|text| {
             text::line(
@@ -110,7 +169,7 @@ pub(super) fn render(ui: &Ui, body: Rect) -> Option<&'static str> {
         );
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if response.clicked() {
-            picked = Some(EXAMPLES[index]);
+            picked = Some(examples_of[index]);
         }
         row_top += example_height + EXAMPLE_ROW_GAP;
     }

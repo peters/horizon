@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::PanelKind;
 use crate::agent_bridge::{
-    BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, SessionChoice, actor, claude, claude_for_workspace,
+    BridgeIdentity, ENV_REMOVE_NAMES, ENV_REMOVE_PREFIXES, SessionChoice, actor, claude, claude_for_front_desk,
+    claude_for_workspace,
 };
 use crate::panel::spawn::agent_env;
 
@@ -257,4 +258,152 @@ fn a_start_without_an_identity_removes_the_identity_of_a_nested_agent() {
         Vec::new(),
         "a start without an identity sets no identity of its own"
     );
+}
+
+/// The identity of the front desk of the test.
+fn front_desk_identity(plugin_dir: Option<&str>) -> BridgeIdentity {
+    BridgeIdentity {
+        actor: actor::FRONT_DESK.to_owned(),
+        host_instance: crate::browser::manifest::host_instance().to_string(),
+        home: PathBuf::from(HOME),
+        executable: PathBuf::from(EXECUTABLE),
+        plugin_dir: plugin_dir.map(PathBuf::from),
+    }
+}
+
+/// The three additions of the front desk that follow the line of an orchestrator.
+fn front_desk_additions(model: &str) -> Vec<String> {
+    vec![
+        "--tools".to_owned(),
+        crate::agent_bridge::NO_TOOLS.to_owned(),
+        "--model".to_owned(),
+        model.to_owned(),
+        "--append-system-prompt".to_owned(),
+        crate::agent_bridge::FRONT_DESK_PROMPT.to_owned(),
+    ]
+}
+
+#[test]
+fn the_program_of_the_front_desk_is_an_orchestrator_with_no_tool_and_its_own_prompt() {
+    let spec = claude_for_front_desk(
+        Path::new("/home/person/.horizon/front-desk"),
+        SessionChoice::New(SESSION.to_owned()),
+        &front_desk_identity(Some("/tmp/horizon-home/runtime/agent-plugins/host/claude-code")),
+    );
+
+    // The line of an orchestrator of a workspace, and then the three additions.
+    let mut expected = arguments(&claude_for_workspace(
+        Path::new("/home/person/.horizon/front-desk"),
+        SessionChoice::New(SESSION.to_owned()),
+        &front_desk_identity(Some("/tmp/horizon-home/runtime/agent-plugins/host/claude-code")),
+    ));
+    assert!(expected.iter().any(|argument| argument == "--plugin-dir"));
+    // A test process names no model, so the front desk takes the model of this
+    // line of Horizon.
+    expected.extend(front_desk_additions(crate::agent_bridge::FRONT_DESK_MODEL));
+    assert_eq!(arguments(&spec), expected);
+    assert_eq!(spec.cwd, PathBuf::from("/home/person/.horizon/front-desk"));
+    assert_eq!(
+        environment(&spec).get("HORIZON_BROWSER_ACTOR"),
+        Some(&actor::FRONT_DESK.to_owned()),
+        "the front desk speaks as its own actor"
+    );
+    assert_eq!(
+        environment(&spec).get("HORIZON_BROWSER_ACTOR"),
+        Some(&crate::agent_bridge::actor::FRONT_DESK.to_owned()),
+        "the actor of the front desk is the one constant of the bridge"
+    );
+}
+
+#[test]
+fn the_front_desk_names_no_tool_and_writes_about_a_hundred_and_twenty_words() {
+    assert_eq!(crate::agent_bridge::NO_TOOLS, "", "the empty word leaves no tool");
+    let prompt = crate::agent_bridge::FRONT_DESK_PROMPT;
+    let words = prompt.split_whitespace().count();
+    assert!(
+        (90..=150).contains(&words),
+        "the system text of the front desk is about 120 words, and it is {words}: {prompt}"
+    );
+    assert!(prompt.contains("front desk of Horizon"));
+    assert!(prompt.contains("work item"));
+    assert!(prompt.contains("no tool"));
+}
+
+#[test]
+fn the_model_of_the_front_desk_holds_a_name_and_falls_back_to_haiku() {
+    let model = crate::agent_bridge::front_desk_model;
+    assert_eq!(crate::agent_bridge::FRONT_DESK_MODEL, "haiku");
+    assert_eq!(model(None), "haiku");
+    assert_eq!(model(Some("sonnet")), "sonnet");
+    assert_eq!(model(Some("claude-sonnet-5.0_x")), "claude-sonnet-5.0_x");
+    assert_eq!(model(Some("5-sonnet")), "5-sonnet");
+    assert_eq!(
+        model(Some(&"a".repeat(64))),
+        "a".repeat(64),
+        "the longest name that a model of the front desk holds"
+    );
+    // A value that is not a name of a model: another model of this line of
+    // Horizon answers instead, so no other argument of the program can arrive.
+    for refused in [
+        "",
+        " ",
+        // A name holds no slash, no space and no control character, and it does
+        // not start with a hyphen: the value can never be read as another option.
+        "--dangerously-skip-permissions",
+        "-5",
+        "sonnet 5",
+        "sonnet\n",
+        "/tmp/model",
+        "a;rm",
+        "mod\u{e8}le",
+        &"a".repeat(65),
+        "../../etc/passwd",
+    ] {
+        assert_eq!(
+            model(Some(refused)),
+            "haiku",
+            "the value {refused:?} is no model of the front desk"
+        );
+    }
+}
+
+#[test]
+fn the_front_desk_keeps_the_rule_of_the_session_id_of_an_orchestrator() {
+    // An id that is not of the form of a UUID never reaches the command line.
+    for id in ["--dangerously-skip-permissions", "a-session", &"a".repeat(4096)] {
+        let spec = claude_for_front_desk(
+            Path::new("/tmp/front-desk"),
+            SessionChoice::Resume(id.to_owned()),
+            &front_desk_identity(None),
+        );
+        let arguments = arguments(&spec);
+        assert!(
+            !arguments.iter().any(|argument| argument == id),
+            "the id {id:?} is on the command line: {arguments:?}"
+        );
+        assert!(
+            !arguments.iter().any(|argument| argument == "--resume"),
+            "a resume that cannot name a session starts a new one: {arguments:?}"
+        );
+        let at = arguments
+            .iter()
+            .position(|argument| argument == "--session-id")
+            .expect("the new session of the start");
+        assert_eq!(
+            arguments.get(at + 1).map(String::len),
+            Some(36),
+            "the new session carries a uuid: {arguments:?}"
+        );
+    }
+    let spec = claude_for_front_desk(
+        Path::new("/tmp/front-desk"),
+        SessionChoice::Resume(SESSION.to_owned()),
+        &front_desk_identity(None),
+    );
+    let arguments = arguments(&spec);
+    let at = arguments
+        .iter()
+        .position(|argument| argument == "--resume")
+        .expect("the resumed session of the front desk");
+    assert_eq!(arguments.get(at + 1), Some(&SESSION.to_owned()));
 }

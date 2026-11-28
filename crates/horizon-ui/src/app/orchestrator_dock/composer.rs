@@ -1,11 +1,17 @@
-//! The composer of the dock: the field of the draft of the active workspace,
-//! the send control inside it and the three chips that the dock reads of this
-//! part.
+//! The composer of the dock: the field of the draft of the conversation that the
+//! dock shows, the send control inside it and the three chips that the dock reads
+//! of this part.
 //!
 //! The composer hangs on the bottom edge of the dock, so it works out its
 //! rectangles from the bottom up before it draws: the line at its top, the field
 //! over the full width of the composer, and the row of the chips under it. A
 //! field that grows takes the room upward and never moves the chips.
+//!
+//! The front desk has no chips. Its work items choose the orchestrator, the
+//! workers and the place of each task, so the chips of a conversation that
+//! belongs to no workspace would say nothing. Its form keeps the field, the send
+//! control and their numbers, and the room of the chips goes to the bottom
+//! padding.
 //!
 //! The field writes the draft of the person. Enter sends it and Shift+Enter
 //! makes a new line, so the return key of the text edit is Shift+Enter and this
@@ -58,7 +64,30 @@ const FIELD_MARGIN_Y: i8 = 12;
 const FIELD_MARGIN_RIGHT: i8 = 49;
 const FIELD_MIN_HEIGHT: f32 = 48.0;
 const FIELD_RADIUS: u8 = 12;
+/// The hint of the field of each form of the composer.
 pub(super) const FIELD_HINT: &str = "Write to the orchestrator";
+pub(super) const FRONT_DESK_HINT: &str = "Write to the front desk";
+
+/// The words and the parts of one form of the composer: the hint of the field and
+/// whether the row of the chips draws under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) struct Form {
+    hint: &'static str,
+    chips: bool,
+}
+
+/// The composer of the conversation of a workspace, which names the orchestrator,
+/// the workers and the place of the work.
+pub(in crate::app) const WORKSPACE: Form = Form {
+    hint: FIELD_HINT,
+    chips: true,
+};
+/// The composer of the front desk, which has no chip: one message starts work
+/// items, and each of them chooses its own orchestrator, workers and place.
+pub(in crate::app) const FRONT_DESK: Form = Form {
+    hint: FRONT_DESK_HINT,
+    chips: false,
+};
 /// The control inside the field at its right end: its side, the air between it
 /// and the inner edge of the field, and its radius.
 const SEND_SIDE: f32 = 34.0;
@@ -115,14 +144,25 @@ pub(in crate::app) struct Parts {
     pub(super) chips: Rect,
 }
 
+/// The room under the field that the chips of `form` take, with the air above
+/// them, or nothing for a form without chips.
+fn chips_room(ui: &Ui, form: Form, inner_width: f32) -> f32 {
+    if form.chips {
+        ROW_GAP + chips_height(ui, inner_width)
+    } else {
+        0.0
+    }
+}
+
 /// The composer of `draft` at the bottom edge of `content`, whose height follows
-/// the rows of the draft and the rows of the chips. A dock that is shorter than
-/// that gives the composer the room that it has, so no part leaves the dock.
-pub(super) fn parts(ui: &Ui, content: Rect, draft: &str) -> Parts {
+/// the rows of the draft and the rows of the chips of `form`. A dock that is
+/// shorter than that gives the composer the room that it has, so no part leaves
+/// the dock.
+pub(super) fn parts(ui: &Ui, content: Rect, draft: &str, form: Form) -> Parts {
     let inner_width = (content.width() - 2.0 * PADDING_X).max(0.0);
     let field_width = inner_width.max(1.0);
     let field_height = field_height(ui, draft, field_width);
-    let height = (LINE_HEIGHT + PADDING_TOP + field_height + ROW_GAP + chips_height(ui, inner_width) + PADDING_BOTTOM)
+    let height = (LINE_HEIGHT + PADDING_TOP + field_height + chips_room(ui, form, inner_width) + PADDING_BOTTOM)
         .min(content.height());
     let rect = Rect::from_min_max(pos2(content.min.x, content.max.y - height), content.max);
     let field_top = rect.min.y + LINE_HEIGHT + PADDING_TOP;
@@ -134,10 +174,16 @@ pub(super) fn parts(ui: &Ui, content: Rect, draft: &str) -> Parts {
         ),
         vec2(SEND_SIDE, SEND_SIDE),
     );
-    let chips = Rect::from_min_max(
-        pos2(rect.min.x + PADDING_X, field.max.y + ROW_GAP),
-        pos2(rect.max.x - PADDING_X, rect.max.y - PADDING_BOTTOM),
-    );
+    // A form without chips keeps no room for them: its rows draw nowhere and take
+    // no height.
+    let chips = if form.chips {
+        Rect::from_min_max(
+            pos2(rect.min.x + PADDING_X, field.max.y + ROW_GAP),
+            pos2(rect.max.x - PADDING_X, rect.max.y - PADDING_BOTTOM),
+        )
+    } else {
+        Rect::from_min_max(field.max, field.max)
+    };
     Parts {
         rect,
         field,
@@ -146,18 +192,20 @@ pub(super) fn parts(ui: &Ui, content: Rect, draft: &str) -> Parts {
     }
 }
 
-/// Draws the composer that [`parts`] worked out, with its line above it, and
-/// answers what the person asked for.
-pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bool, busy: bool) -> Asked {
+/// Draws the composer of `form` that [`parts`] worked out, with its line above it,
+/// and answers what the person asked for.
+pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bool, busy: bool, form: Form) -> Asked {
     ui.painter().hline(
         parts.rect.x_range(),
         parts.rect.min.y,
         Stroke::new(LINE_HEIGHT, theme::BORDER_SUBTLE()),
     );
     let can_send = enabled && !busy && !draft.trim().is_empty();
-    let sent = field(ui, parts.field, draft, enabled, enabled && !busy);
+    let sent = field(ui, parts.field, draft, enabled, enabled && !busy, form.hint);
     let control = control(ui, parts.send, can_send, enabled, busy);
-    chips(ui, parts.chips);
+    if form.chips {
+        chips(ui, parts.chips);
+    }
     // A press on the control does what the glyph of the control shows: it stops
     // the turn that runs, and otherwise it sends the draft.
     if control && busy {
@@ -202,7 +250,7 @@ fn draft_galley(ui: &Ui, draft: &str, width: f32) -> Arc<Galley> {
 /// inside it, so a draft that is longer than the field is clipped instead of
 /// moving the parts under it. The outline turns to the accent while the field
 /// holds the keyboard.
-fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool, sends: bool) -> bool {
+fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool, sends: bool, hint: &str) -> bool {
     let focused = ui.memory(|memory| memory.has_focus(Id::unique(FIELD_ID)));
     let outline = if focused {
         theme::ACCENT()
@@ -229,7 +277,7 @@ fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool, sends: bool
     };
     let edit = egui::TextEdit::multiline(&mut *draft)
         .id(Id::unique(FIELD_ID))
-        .hint_text(FIELD_HINT)
+        .hint_text(hint)
         .font(FontId::proportional(FIELD_TEXT_SIZE))
         .text_color(theme::FG())
         .desired_width(rect.width())

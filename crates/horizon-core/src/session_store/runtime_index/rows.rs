@@ -129,6 +129,7 @@ fn without_workspaces(state: &RuntimeState) -> RuntimeState {
         focused_panel_local_id,
         detached_workspaces,
         workspaces: _,
+        front_desk,
         browser,
     } = state;
     RuntimeState {
@@ -140,6 +141,9 @@ fn without_workspaces(state: &RuntimeState) -> RuntimeState {
         focused_panel_local_id: focused_panel_local_id.clone(),
         detached_workspaces: detached_workspaces.clone(),
         workspaces: Vec::new(),
+        // The index splits a board into its workspaces and its panels, so the
+        // conversation of the front desk travels with the state that holds it.
+        front_desk: front_desk.clone(),
         browser: browser.clone(),
     }
 }

@@ -33,8 +33,9 @@ gradient bar of an agent text, and the chevron of the three chips.
   is not there.
 - Tasks OD-20 to OD-22 read the stored conversation. A saved session keeps it in
   the folder of that session, so each of those tasks needs the state folder of
-  the fixture and two starts of the candidate. Every other task uses a start that
-  saves nothing, and such a start writes no conversation.
+  the fixture and two starts of the candidate. Every other task uses a start
+  that saves nothing, and such a start writes no conversation. Tasks OD-27 to
+  OD-30 test the front desk, which belongs to no workspace.
 
 ## 3. Safety
 
@@ -813,6 +814,108 @@ The window of the candidate keeps the size of the fixture.
    Result: The picture shows the card with the chip `Claude`, the two notices of
    step 4, the wake line as the text of the program, and `Woken, you pressed go`.
 
+### 6.28 OD-27 — The start shows the front desk
+
+Tasks OD-27 to OD-30 test the front desk, the conversation of the dock that
+belongs to no workspace. Use the start of the fixture of section 5 with the
+stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`.
+
+1. Start the fixture with the switch of the dock on, and wait for the window.
+
+2. Read the dock and the sidebar.
+
+   Result: The dock shows the front desk, and it belongs to no workspace:
+   - Its header has no tile and no back control. The name line reads
+     `Front desk`, and the line under the name reads
+     `Starts and watches the work items`. The state chip at the right edge reads
+     `not connected`.
+   - The empty state reads `What should be done?`, and the two sentences under
+     it read `Write one message with one task or more. The front desk starts a
+     work item for each task and tells you when one needs you.` The two example
+     rows read `Fix #1987 and make the cold start faster`
+     and `What waits for me?`.
+   - The hint of the field reads `Write to the front desk`.
+   - No chip stands under the field. The field ends 14 points above the bottom
+     edge of the dock.
+   - No row of the workspace list is drawn as active, and no panel row stands
+     under a workspace. The canvas of the board does not change.
+   - The button `+ Rent a machine` is dim, and its hover text reads
+     `Open a work item first`.
+
+3. Take a picture of the window and name it `fd-empty`.
+
+   Result: The picture shows the front desk of step 2.
+
+### 6.29 OD-28 — A message to the front desk
+
+1. Click the field of the dock, write `hello front desk`, and press Enter.
+
+   Result: The field empties. The bubble `hello front desk` stands at the right of
+   the list, the state chip reads `working`, and the answer of the stand-in, `the
+   stand-in answers`, follows it at the left. The chip reads `ready` at the end of
+   the turn. The sidebar does not change.
+
+2. Take a picture of the window and name it `fd-talk`.
+
+   Result: The picture shows the bubble of the person and the answer of the
+   stand-in in the front desk.
+
+3. Write `and one more task` and press Enter.
+
+   Result: The bubble and one more answer follow the entries of step 1. The dock
+   starts no other program: the folder of the private state of the fixture holds
+   one process of the stand-in, as the log of the fixture shows.
+
+### 6.30 OD-29 — A press on a workspace row shows that workspace
+
+1. Press the row of a workspace in the workspace list.
+
+   Result: The dock shows the conversation of that workspace:
+   - The header has a back control at its left, a tile 26 by 26 points, the name
+     of the workspace, and the line `Orchestrator · Claude Code on this computer`
+     under it. The tile stands 30 points right of the place of the tile of a run
+     without the back control.
+   - The back control is 22 by 22 points at radius 7, it has no fill, and its
+     chevron points left. A pointer over it fills it with the panel surface of the
+     dock and turns the chevron to the foreground color alight. Its hover text
+     reads `Front desk`.
+   - The hint of the field reads `Write to the orchestrator`, and the three chips
+     `Orchestrator`, `Workers` and `Place` stand under the field.
+   - The row of that workspace is drawn as active, and the rows of its panels
+     stand under it.
+   - The state chip reads `not connected`, and the cost is absent.
+
+2. Take a picture of the window and name it `fd-workspace`.
+
+   Result: The picture shows the header with the back control, the active row of
+   the workspace, the three chips and the empty state of the workspace.
+
+3. Press the same row again.
+
+   Result: The dock keeps the conversation of that workspace, and no other part
+   of the window changes.
+
+### 6.31 OD-30 — The back control returns to the front desk
+
+1. Press the row of a workspace, as in step 1 of OD-29.
+
+2. Press the back control at the left of the header.
+
+   Result: The dock shows the front desk again, as OD-27 describes it: no tile,
+   no back control, the name `Front desk`, no chip under the field, and no active
+   row in the workspace list. The header shows the entries and the state of the
+   front desk as step 2 of OD-28 left them.
+
+3. Take a picture of the window and name it `fd-back`.
+
+   Result: The picture shows the front desk again, with the entries of the
+   earlier message.
+
+4. Open the command palette, choose `Show Front Desk`, and press the row of a
+   workspace again.
+
+   Result: Each of the two actions does what OD-27 and OD-29 describe.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.
@@ -901,6 +1004,24 @@ The window of the candidate keeps the size of the fixture.
   session folder.
 - A workspace whose last panel closes takes its conversation with it, and no
   program of that conversation runs after the close.
+- The start of Horizon shows the front desk: no tile, no back control, the name
+  `Front desk`, the line `Starts and watches the work items`, its own empty
+  state, the hint `Write to the front desk` and no chip under the field.
+- A message to the front desk starts one program, and the next message uses it.
+- A press on a workspace row shows that workspace: the back control stands 8
+  points left of its tile, the three chips stand under the field, and the row of
+  that workspace is drawn as active.
+- The back control and the command `Show Front Desk` show the front desk again.
+- While the front desk shows, no row of the workspace list is drawn as active and
+  no panel row stands under a workspace. The active workspace of the board and the
+  focus of the canvas do not change.
+- The button `+ Rent a machine` is dim while the front desk shows, and its hover
+  text reads `Open a work item first`.
+- The conversation of the front desk survives a restart of Horizon on a saved
+  session, and the state file of that session holds its record beside the
+  workspaces.
+- The close of Horizon and a switch of the saved session stop the program of the
+  front desk.
 
 ## 8. Cleanup
 

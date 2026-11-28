@@ -10,6 +10,10 @@ The card itself keeps the rules of
 The program and its line format keep the rules of
 [`agent-bridge.md`](agent-bridge.md).
 
+The front desk is the second conversation of the dock. It belongs to no
+workspace, so it owns no card and no workspace. [`front-desk.md`](front-desk.md)
+states its actor, its program and what it cannot do.
+
 ## The actor
 
 The actor of the orchestrator of the workspace with local id `W` is
@@ -67,6 +71,10 @@ The host maps an actor to a caller before it applies a request
   `caller_unavailable`. A read of a card of that owner follows the same rule, and
   the answer names the caller and no workspace.
 - A machine session actor is the caller `Session`, as before.
+- The actor of the front desk, `horizon:front-desk`, is refused with
+  `caller_unavailable` for every operation, and `owner_workspace` answers `None`
+  for it. It owns no workspace, so it creates no card, reads no card and opens no
+  panel. See [`front-desk.md`](front-desk.md#the-actor).
 
 A caller of `Orchestrator` has no panel, so:
 

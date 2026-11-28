@@ -1,14 +1,18 @@
-//! The stored side of the dock: the file of the conversation of each workspace,
-//! the record of its session in the runtime state, and the jobs of the worker
-//! that read and write them.
+//! The stored side of the dock: the file of the conversation of each workspace and
+//! of the front desk, the record of its session in the runtime state, and the jobs
+//! of the worker that read and write them.
 //!
 //! A conversation outlives a restart of Horizon in two parts. The record
 //! `WorkspaceState.orchestrator` of the saved board holds the session id of the
 //! agent program and the name of the program, and one file under
-//! `<session folder>/conversations/` holds the entries. Neither is written for a
-//! start that saves nothing: [`OrchestratorDock::set_storage`] names the folder
-//! of the session only while the app opened a saved session, as
-//! `HorizonApp::transcript_root` does for the terminal transcripts.
+//! `<session folder>/conversations/` holds the entries. The front desk belongs to
+//! no workspace, so its record stands beside the workspaces in
+//! `RuntimeState.front_desk`, and its file carries the reserved key as its name.
+//!
+//! Neither part is written for a start that saves nothing:
+//! [`OrchestratorDock::set_storage`] names the folder of the session only while
+//! the app opened a saved session, as `HorizonApp::transcript_root` does for the
+//! terminal transcripts.
 //!
 //! No frame reads or writes a file. Each load, append, compaction and delete is
 //! one job of the worker of the dock, in the order that the frames asked for
@@ -190,26 +194,36 @@ impl OrchestratorDock {
     }
 
     /// Queues the load of the stored conversation of each workspace that keeps
-    /// one and has no conversation of this run. The entries arrive on a later
-    /// frame; until then the dock shows the empty or the live state that it has.
+    /// one and has no conversation of this run, and the same load of the front
+    /// desk. The entries arrive on a later frame; until then the dock shows the
+    /// empty or the live state that it has.
     pub(in crate::app) fn restore_conversations(&mut self, board: &Board) {
         if self.storage.is_none() {
             return;
         }
         let program = self.program_name().to_owned();
-        for workspace in &board.workspaces {
-            let Some(record) = workspace.orchestrator.clone() else {
+        let mut wanted: Vec<(String, OrchestratorConversationState)> = board
+            .workspaces
+            .iter()
+            .filter_map(|workspace| {
+                let record = workspace.orchestrator.clone()?;
+                Some((workspace.local_id.clone(), record))
+            })
+            .collect();
+        // The front desk belongs to no workspace, so its record comes from the
+        // runtime state of this session and not from the board.
+        if let Some(record) = self.front_desk().record().cloned() {
+            wanted.push((super::FRONT_DESK.to_owned(), record));
+        }
+        for (local_id, record) in wanted {
+            let Some(path) = self.conversation_path(&local_id) else {
                 continue;
             };
-            let Some(path) = self.conversation_path(&workspace.local_id) else {
-                continue;
-            };
-            if self.sessions.contains_key(&workspace.local_id) {
+            if self.sessions.contains_key(&local_id) {
                 continue;
             }
             let session = super::session::Session::restored(record.session_id, &record.program, &program);
-            self.sessions.insert(workspace.local_id.clone(), session);
-            let local_id = workspace.local_id.clone();
+            self.sessions.insert(local_id.clone(), session);
             let loaded_id = local_id.clone();
             let handed = self.worker.then(
                 move || {
@@ -249,9 +263,11 @@ impl OrchestratorDock {
     }
 
     /// Keeps the record of each conversation of this board in step with the
-    /// session that its program named. The answer says whether a record changed,
-    /// so the caller marks the runtime state for its next save. Nothing changes
-    /// while the dock stores nothing: an unsaved start writes no record.
+    /// session that its program named, and the record of the front desk in the
+    /// state of this dock, which the caller saves beside the workspaces. The
+    /// answer says whether a record changed, so the caller marks the runtime state
+    /// for its next save. Nothing changes while the dock stores nothing: an
+    /// unsaved start writes no record.
     pub(in crate::app) fn sync_conversation_records(&mut self, board: &mut Board, program: &str) -> bool {
         if self.storage.is_none() || program.is_empty() {
             return false;
@@ -262,6 +278,13 @@ impl OrchestratorDock {
         }
         let mut changed = false;
         for (local_id, record) in wanted {
+            if local_id == super::FRONT_DESK {
+                if self.front_desk().record() != record.as_ref() {
+                    self.front_desk_mut().set_record(record);
+                    changed = true;
+                }
+                continue;
+            }
             let Some(workspace_id) = board.workspace_id_by_local_id(&local_id) else {
                 continue;
             };

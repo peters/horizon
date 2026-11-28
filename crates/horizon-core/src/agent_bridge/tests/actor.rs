@@ -67,3 +67,23 @@ fn every_other_actor_has_no_workspace() {
         assert_eq!(actor::workspace_of(other), None, "{other:?} names no workspace");
     }
 }
+
+/// The front desk is one more actor of the dock: it belongs to no workspace, so
+/// no local id names it and the two forms cannot meet.
+#[test]
+fn the_front_desk_is_one_actor_and_no_workspace() {
+    assert_eq!(actor::FRONT_DESK, "horizon:front-desk");
+    assert!(actor::is_front_desk(actor::FRONT_DESK));
+    let orchestrator = actor::of_workspace(WORKSPACE).expect("the actor of the workspace");
+    assert!(!actor::is_front_desk(&orchestrator));
+    assert_eq!(
+        actor::workspace_of(actor::FRONT_DESK),
+        None,
+        "the front desk owns no workspace"
+    );
+    assert!(!actor::is_local_id(actor::FRONT_DESK), "the front desk is no local id");
+    assert!(
+        !actor::is_uuid(actor::FRONT_DESK) && actor::FRONT_DESK.len() != actor::LOCAL_ID_BYTES,
+        "a workspace local id is a UUID, so the reserved name never meets one"
+    );
+}

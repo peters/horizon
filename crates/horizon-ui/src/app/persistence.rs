@@ -76,12 +76,15 @@ impl HorizonApp {
             .collect();
 
         let canvas_view = self.canvas_view;
-        let runtime_state = RuntimeState::from_board_with_detached_workspaces(
+        let mut runtime_state = RuntimeState::from_board_with_detached_workspaces(
             &self.board,
             self.window_config.clone(),
             canvas_view,
             detached_workspaces,
         );
+        // The conversation of the front desk belongs to no workspace, so the
+        // board keeps no record of it and the dock names it here.
+        runtime_state.front_desk = self.orchestrator_dock.front_desk().record().cloned();
         // The session writer saves it durably on its own thread; a failure is logged there
         // and tried again with the newest board.
         let _ = self

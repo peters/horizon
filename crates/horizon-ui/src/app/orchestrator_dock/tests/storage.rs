@@ -71,17 +71,18 @@ printf '%s\n' 'no conversation with that session' >&2
 exit 1
 "#;
 
-/// A window of one app on the home of `folder`.
-struct Harness {
-    ctx: Context,
-    app: HorizonApp,
+/// A window of one app on the home of `folder`, which the tests of the front desk
+/// share.
+pub(super) struct Harness {
+    pub(super) ctx: Context,
+    pub(super) app: HorizonApp,
     time: f64,
 }
 
 impl Harness {
     /// The app of a start on the home of `folder`, which the startup decision
     /// opens, and whose orchestrator runs `program`.
-    fn opening(folder: &Path, program: &Path, startup: StartupDecision) -> Self {
+    pub(super) fn opening(folder: &Path, program: &Path, startup: StartupDecision) -> Self {
         let ctx = Context::default();
         let mut app = app_in(&ctx, folder, &Config::default(), startup);
         app.orchestrator_dock.set_program(program.to_path_buf());
@@ -94,7 +95,7 @@ impl Harness {
 
     /// The app of a first start on the home of `folder`, which saves `state` as a
     /// session of its own.
-    fn saved(folder: &Path, program: &Path, state: RuntimeState) -> (Self, String) {
+    pub(super) fn saved(folder: &Path, program: &Path, state: RuntimeState) -> (Self, String) {
         let resolved = store_of(folder)
             .create_session_from_runtime(state)
             .expect("a saved session of the test");
@@ -112,7 +113,7 @@ impl Harness {
 
     /// The app of a second start on the home of `folder`, which opens the saved
     /// session `session_id` again.
-    fn reopened(folder: &Path, program: &Path, session_id: &str) -> Self {
+    pub(super) fn reopened(folder: &Path, program: &Path, session_id: &str) -> Self {
         let resolved = store_of(folder)
             .resume_session(session_id)
             .expect("the saved session loads");
@@ -126,7 +127,7 @@ impl Harness {
         )
     }
 
-    fn frame(&mut self) {
+    pub(super) fn frame(&mut self) {
         self.time += 0.016;
         let mut input = raw_input(WIDE, None);
         input.time = Some(self.time);
@@ -135,7 +136,7 @@ impl Harness {
 
     /// Runs frames until `wanted` holds, and names what the test waited for when
     /// the bound ends first.
-    fn wait_for(&mut self, what: &str, wanted: impl Fn(&HorizonApp) -> bool) {
+    pub(super) fn wait_for(&mut self, what: &str, wanted: impl Fn(&HorizonApp) -> bool) {
         let deadline = Instant::now() + BOUND;
         while !wanted(&self.app) {
             assert!(Instant::now() < deadline, "the test waited for {what}");
@@ -147,8 +148,22 @@ impl Harness {
     /// Sends `text` as the workspace of this test would, and runs the frame that
     /// starts the program.
     fn send(&mut self, text: &str) {
-        self.app.send_orchestrator_text(&self.ctx, WORKSPACE, text);
+        self.send_to(WORKSPACE, text);
+    }
+
+    /// Sends `text` to the conversation of `local_id`, and runs the frame that
+    /// starts its program.
+    pub(super) fn send_to(&mut self, local_id: &str, text: &str) {
+        self.app.send_orchestrator_text(&self.ctx, local_id, text);
         self.frame();
+    }
+
+    /// The path of the stored conversation of `local_id`.
+    pub(super) fn stored_path_of(&self, local_id: &str) -> PathBuf {
+        self.app
+            .orchestrator_dock
+            .stored_path(local_id)
+            .expect("the dock of a saved session stores its conversations")
     }
 
     /// The path of the stored conversation of the workspace of this test.
@@ -179,7 +194,7 @@ fn store_of(folder: &Path) -> SessionStore {
 
 /// The board of a test: one workspace with the editor panel that keeps it on
 /// the canvas.
-fn board_state() -> RuntimeState {
+pub(super) fn board_state() -> RuntimeState {
     RuntimeState {
         workspaces: vec![editor_workspace_state(WORKSPACE, [40.0, 40.0])],
         ..RuntimeState::default()
@@ -197,7 +212,7 @@ fn board_state_with_record(program: &str) -> RuntimeState {
 }
 
 /// The stand-in program of a test, written into `folder`.
-fn stand_in(folder: &Path, body: &str, args: &Path) -> PathBuf {
+pub(super) fn stand_in(folder: &Path, body: &str, args: &Path) -> PathBuf {
     let body = body
         .replace("@ARGS@", &args.display().to_string())
         .replace("@SESSION@", SESSION);
@@ -206,7 +221,7 @@ fn stand_in(folder: &Path, body: &str, args: &Path) -> PathBuf {
 
 /// The stubborn stand-in of a test, written into `folder`, which writes its own
 /// process id to `pid`.
-fn stubborn_stand_in(folder: &Path, pid: &Path) -> PathBuf {
+pub(super) fn stubborn_stand_in(folder: &Path, pid: &Path) -> PathBuf {
     let body = STUBBORN
         .replace("@PID@", &pid.display().to_string())
         .replace("@SESSION@", SESSION);
@@ -214,7 +229,7 @@ fn stubborn_stand_in(folder: &Path, pid: &Path) -> PathBuf {
 }
 
 /// The process id that the stubborn stand-in of a test wrote into `pid`.
-fn child_of(pid: &Path) -> u32 {
+pub(super) fn child_of(pid: &Path) -> u32 {
     let deadline = Instant::now() + BOUND;
     loop {
         if let Ok(text) = std::fs::read_to_string(pid)
@@ -240,7 +255,7 @@ fn program_runs(pid: u32) -> bool {
 
 /// Waits until the program of `pid` ended, and names what the test waited for.
 #[cfg(target_os = "linux")]
-fn wait_until_no_process(what: &str, pid: u32) {
+pub(super) fn wait_until_no_process(what: &str, pid: u32) {
     let deadline = Instant::now() + BOUND;
     while program_runs(pid) {
         assert!(Instant::now() < deadline, "the test waited for {what}");
@@ -276,7 +291,7 @@ fn answered(entries: &[Entry]) -> bool {
 }
 
 /// The entries that the file of `path` holds, which a test reads between frames.
-fn stored_entries(path: &Path) -> Vec<Entry> {
+pub(super) fn stored_entries(path: &Path) -> Vec<Entry> {
     store::load(path, MAX_ENTRIES)
         .map(|(entries, _)| entries)
         .unwrap_or_default()
@@ -284,7 +299,7 @@ fn stored_entries(path: &Path) -> Vec<Entry> {
 
 /// Waits until `wanted` holds for `path`, which the worker changes. It runs no
 /// frame.
-fn wait_for_path(what: &str, path: &Path, wanted: impl Fn(&Path) -> bool) {
+pub(super) fn wait_for_path(what: &str, path: &Path, wanted: impl Fn(&Path) -> bool) {
     let deadline = Instant::now() + BOUND;
     while !wanted(path) {
         assert!(Instant::now() < deadline, "the test waited for {what}");

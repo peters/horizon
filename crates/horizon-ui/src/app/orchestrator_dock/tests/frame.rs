@@ -7,7 +7,7 @@ use horizon_core::{RuntimeState, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::composer::{self, FIELD_HINT, FIELD_ID};
-use crate::app::orchestrator_dock::header::{NO_WORKSPACE_LINE, PROGRAM_LINE};
+use crate::app::orchestrator_dock::header::{FRONT_DESK_LINE, FRONT_DESK_TITLE, PROGRAM_LINE};
 use crate::app::orchestrator_dock::{LastFrame, OrchestratorDock};
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
@@ -109,8 +109,10 @@ impl Window {
         run_app_frame_with_input(&self.ctx, &mut self.app, input)
     }
 
-    /// Makes the workspace that `local_id` names the active one.
+    /// Makes the workspace that `local_id` names the active one, and shows its
+    /// conversation, as a press on its row of the sidebar does.
     pub(super) fn focus_workspace(&mut self, local_id: &str) {
+        self.app.orchestrator_dock.front_desk_mut().show_workspace();
         let found = self
             .app
             .board
@@ -329,7 +331,13 @@ fn the_canvas_and_the_minimap_keep_their_numbers_with_the_dock_off() {
     );
 
     let drawn = texts(&output);
-    for text in [PROGRAM_LINE, FIELD_HINT, "Say what you want done.", NO_WORKSPACE_LINE] {
+    for text in [
+        PROGRAM_LINE,
+        FIELD_HINT,
+        "Say what you want done.",
+        FRONT_DESK_TITLE,
+        FRONT_DESK_LINE,
+    ] {
         assert!(
             !drawn.iter().any(|drawn| drawn.text == text),
             "a dock that is off draws no {text:?}"

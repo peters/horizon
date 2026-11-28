@@ -4,6 +4,10 @@
 //! The frame takes the rectangle of the dock before any panel draws, so the
 //! canvas and the minimap of the frame read it. A start and a stop go to the
 //! worker of the dock and never run on this thread.
+//!
+//! One frame draws one conversation: the front desk, or the conversation of the
+//! active workspace, as [`super::OrchestratorDock::shown`] answers. Every action
+//! of the frame, such as the send and the stop, belongs to that conversation.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,16 +22,24 @@ use crate::theme;
 
 use super::layout::{dock_fits, dock_rect, dock_width};
 use super::session::{Said, Session, TOO_LONG_NOTICE};
-use super::{DOCK_PANEL_ID, composer, empty, header, layout, list};
+use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list};
 
 /// The wake of the bridge of a conversation: the next frame of this window.
 fn repaint_wake(ctx: &egui::Context) -> Arc<dyn Fn() + Send + Sync> {
     let ctx = ctx.clone();
     Arc::new(move || ctx.request_repaint())
 }
-/// The directory that the orchestrator of a workspace runs in: the directory of
-/// that workspace, or the home of the person when the workspace names none.
+/// The directory that the orchestrator of a conversation runs in: the directory
+/// of the workspace that `local_id` names, or the folder of the front desk under
+/// the Horizon home for a conversation that belongs to no workspace. A workspace
+/// that names no directory runs in the home of the person.
+///
+/// The folder of the front desk is made on the worker of the dock, before the
+/// program starts: this function only names a path.
 fn program_directory(board: &horizon_core::Board, local_id: &str) -> PathBuf {
+    if local_id == FRONT_DESK {
+        return horizon_core::HorizonHome::resolve().root().join(FRONT_DESK);
+    }
     board
         .workspace_id_by_local_id(local_id)
         .and_then(|id| board.workspace(id))
@@ -70,9 +82,24 @@ impl HorizonApp {
         self.orchestrator_dock.worker.wake_with(ui.ctx());
         let board = &self.board;
         let dock = &mut self.orchestrator_dock;
+        // The conversation of this frame: the front desk, or the workspace of the
+        // board that the dock shows.
+        let local_id = dock.front_desk().key(board).to_owned();
+        let form = match board.active_workspace.and_then(|id| board.workspace(id)) {
+            Some(workspace) if local_id != FRONT_DESK => header::Form::Workspace(workspace),
+            _ => header::Form::FrontDesk,
+        };
+        let shows_front_desk = matches!(form, header::Form::FrontDesk);
+        // The front desk has no chip of place, so its composer has no chip at all.
+        let composer_form = if shows_front_desk {
+            composer::FRONT_DESK
+        } else {
+            composer::WORKSPACE
+        };
         let mut asked = composer::Asked::Nothing;
         let mut picked = None;
         let mut pressed_card: Option<String> = None;
+        let mut back = false;
         egui::Panel::right(DOCK_PANEL_ID)
             .exact_size(rect.width())
             .frame(
@@ -88,51 +115,42 @@ impl HorizonApp {
                     pos2(ui.max_rect().min.x, ui.max_rect().min.y + TOOLBAR_HEIGHT),
                     ui.max_rect().max,
                 );
-                let workspace = board.active_workspace.and_then(|id| board.workspace(id));
-                let local_id = workspace.map(|workspace| workspace.local_id.as_str());
-                let session = local_id.and_then(|local_id| dock.sessions.get(local_id));
+                let session = dock.sessions.get(&local_id);
                 let snapshot = session.map(Session::snapshot);
-                // A window without an active workspace has no second line.
-                let state = workspace.map(|_| header::State::of(session));
+                // The front desk names its own job in the second line, so the
+                // state of its conversation stands in the chip alone.
+                let state = header::State::of(session);
                 let busy = snapshot.as_ref().is_some_and(|snapshot| snapshot.busy);
                 // The header and the composer are bottom and top edges of the dock,
                 // so they are worked out first and the list takes the room between
                 // them. A part that drew top down would move the parts under it.
-                let header_height = header::height(ui, content.width(), workspace, state);
-                let draft = local_id.map_or("", |local_id| dock.draft(local_id));
-                let composer = composer::parts(ui, content, draft);
+                let header_height = header::height(ui, content.width(), form, state);
+                let composer = composer::parts(ui, content, dock.draft(&local_id), composer_form);
                 let parts = layout::parts(content, header_height, composer.rect.height());
-                header::render(ui, parts.header, workspace, state);
-                let mut empty = String::new();
-                let draft = match local_id {
-                    Some(local_id) => dock.drafts.entry(local_id.to_owned()).or_default(),
-                    None => &mut empty,
-                };
-                asked = composer::render(ui, &composer, draft, local_id.is_some(), busy);
+                back = header::render(ui, parts.header, form, state);
+                #[cfg(test)]
+                dock.set_last_header(parts.header, form);
+                let draft = dock.drafts.entry(local_id.clone()).or_default();
+                asked = composer::render(ui, &composer, draft, true, busy, composer_form);
                 match snapshot {
                     Some(snapshot) if !snapshot.entries.is_empty() => {
                         pressed_card = list::render(
                             ui,
                             parts.body,
-                            local_id.unwrap_or_default(),
+                            &local_id,
                             &snapshot.entries,
                             list::waits_for_text(&snapshot.entries, snapshot.busy),
                             &|panel| board.panel_id_by_local_id(panel).is_some(),
                         );
                     }
-                    _ => picked = empty::render(ui, parts.body),
+                    _ => picked = empty::render(ui, parts.body, empty::Form::of(shows_front_desk)),
                 }
                 #[cfg(test)]
                 dock.set_last_frame(parts, composer);
             });
-        let Some(local_id) = self
-            .board
-            .active_workspace
-            .and_then(|id| self.board.workspace(id))
-            .map(|workspace| workspace.local_id.clone())
-        else {
-            return;
-        };
+        if back {
+            self.orchestrator_dock.front_desk_mut().show();
+        }
         if let Some(text) = picked
             && self.orchestrator_dock.pick_example(&local_id, text)
         {
@@ -170,6 +188,11 @@ impl HorizonApp {
             session.poll();
         }
         self.orchestrator_dock.poll_worker();
+        // The dock shows the front desk until a workspace row or a change of the
+        // active workspace shows that workspace.
+        self.orchestrator_dock
+            .front_desk_mut()
+            .follow_active_workspace(&self.board);
         // A workspace that closes takes its conversation with it: no program of
         // the dock speaks for a workspace that the board no longer holds.
         self.forget_workspaces_the_board_left();
@@ -188,12 +211,17 @@ impl HorizonApp {
     /// program ends on the worker, and its stored conversation leaves the session
     /// folder. A workspace leaves the board when its last panel closes, and the
     /// dock of that workspace has no control left to stop it with.
+    ///
+    /// The front desk belongs to no workspace, so no board ever leaves it: its
+    /// reserved key is never one of the keys that this pass forgets.
     fn forget_workspaces_the_board_left(&mut self) {
         let gone: Vec<String> = self
             .orchestrator_dock
             .sessions
             .keys()
-            .filter(|local_id| self.board.workspace_id_by_local_id(local_id).is_none())
+            .filter(|local_id| {
+                local_id.as_str() != FRONT_DESK && self.board.workspace_id_by_local_id(local_id).is_none()
+            })
             .cloned()
             .collect();
         for local_id in gone {
@@ -212,7 +240,7 @@ impl HorizonApp {
     /// above [`MAX_TEXT_BYTES`] bytes sends nothing and keeps the field of the
     /// person.
     pub(in crate::app) fn say_to_orchestrator(&mut self, ctx: &egui::Context, local_id: &str, text: &str) -> bool {
-        if self.board.workspace_id_by_local_id(local_id).is_none() || self.orchestrator_dock.busy(local_id) {
+        if !super::OrchestratorDock::is_conversation(&self.board, local_id) || self.orchestrator_dock.busy(local_id) {
             return false;
         }
         if text.len() > MAX_TEXT_BYTES {

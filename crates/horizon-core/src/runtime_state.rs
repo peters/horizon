@@ -93,6 +93,12 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
+    /// The conversation of the front desk of the session that this start opens.
+    /// That conversation belongs to no workspace, so it has a field of its own
+    /// beside the workspaces. A file that an older build wrote holds no field,
+    /// and the front desk then starts a new session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_desk: Option<OrchestratorConversationState>,
     /// Browser config injected by the app before restore. Core-only board
     /// snapshots store a default placeholder because a [`Board`] does not
     /// own the config that created it.
@@ -124,6 +130,7 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
+            front_desk: None,
             browser: config.browser.clone(),
         }
     }
@@ -389,6 +396,10 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
+            // The conversation of the front desk belongs to no workspace, so the
+            // caller that saves the state names it: a board writes no record of
+            // a conversation that it does not hold.
+            front_desk: None,
             // Save-path placeholder: the app refreshes this field with the
             // current config before any restore uses it.
             browser: crate::browser::BrowserConfig::default(),
@@ -411,6 +422,7 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
+            front_desk: None,
             browser: crate::browser::BrowserConfig::default(),
         }
     }

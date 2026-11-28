@@ -1,16 +1,18 @@
 //! The button `+ Rent a machine` at the end of the machine section of the
-//! sidebar: one press asks the orchestrator of the active workspace for a machine
-//! of its own, and the person confirms the type, the place and the price first.
+//! sidebar: one press asks the orchestrator of the conversation that the dock
+//! shows for a machine of its own, and the person confirms the type, the place and
+//! the price first.
 //!
 //! The button stands there only while the orchestrator dock is on, because the
-//! message goes to the orchestrator of the active workspace: a window whose dock
-//! is off has no conversation to send it to. The message is the one constant of
-//! this module, so the words of the request stand in one place.
+//! message goes to the conversation of that dock: a window whose dock is off has
+//! no conversation to send it to. The message is the one constant of this module,
+//! so the words of the request stand in one place.
 //!
 //! The press takes the path of the composer of the dock: the message enters the
-//! conversation of the workspace as the message of the person, and the program of
-//! that conversation starts when it has none. The button is drawn disabled, and
-//! sends nothing, while no workspace is active and while that orchestrator works.
+//! conversation as the message of the person, and the program of that conversation
+//! starts when it has none. The button is drawn disabled, and sends nothing, while
+//! the dock shows the front desk, while no workspace is active and while that
+//! orchestrator works: a machine belongs to one work item.
 
 use egui::{CursorIcon, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, vec2};
 
@@ -22,11 +24,13 @@ use super::text;
 
 /// The label of the button.
 pub(in crate::app) const LABEL: &str = "+ Rent a machine";
-/// The message that a press sends to the orchestrator of the active workspace.
+/// The message that a press sends to the orchestrator of the conversation that the
+/// dock shows.
 pub(in crate::app) const MESSAGE: &str =
     "Rent a machine for this workspace. Show me the card with the type, the place and the price first.";
-/// The hover text of the button while no workspace is active, and while the
-/// orchestrator of the active workspace works.
+/// The hover text of the button while the dock shows the front desk, while no
+/// workspace is active, and while the orchestrator of that workspace works.
+pub(in crate::app) const FRONT_DESK: &str = "Open a work item first";
 pub(in crate::app) const NO_WORKSPACE: &str = "Open a workspace first";
 pub(in crate::app) const BUSY: &str = "The orchestrator works";
 /// The height of the button, the room at each side of the section that it keeps,
@@ -45,6 +49,8 @@ const LABEL_SIZE: f32 = 12.5;
 pub(in crate::app) enum RentMachine {
     /// A press sends the message to the orchestrator of the active workspace.
     Ready,
+    /// The dock shows the front desk, so no workspace is the subject of a press.
+    FrontDesk,
     /// No workspace is active, so there is no orchestrator to ask.
     NoWorkspace,
     /// The orchestrator of the active workspace runs a turn.
@@ -63,6 +69,7 @@ impl RentMachine {
     pub(in crate::app) const fn disabled_hover(self) -> Option<&'static str> {
         match self {
             Self::Ready => None,
+            Self::FrontDesk => Some(FRONT_DESK),
             Self::NoWorkspace => Some(NO_WORKSPACE),
             Self::Busy => Some(BUSY),
         }
@@ -81,9 +88,12 @@ impl HorizonApp {
         }
     }
 
-    /// What the button does in this frame: the conversation of the active
-    /// workspace is the one that a press speaks to.
+    /// What the button does in this frame: the conversation that the dock shows is
+    /// the one that a press speaks to, and a machine belongs to one work item.
     fn rent_machine_state(&self) -> RentMachine {
+        if self.orchestrator_dock.front_desk().shows(&self.board) {
+            return RentMachine::FrontDesk;
+        }
         let Some(local_id) = self
             .board
             .active_workspace
@@ -98,10 +108,10 @@ impl HorizonApp {
         RentMachine::Ready
     }
 
-    /// The press: one message to the orchestrator of the active workspace, which
+    /// The press: one message to the conversation that the dock shows, which
     /// starts its program when it has none.
     pub(super) fn rent_a_machine(&mut self, ctx: &egui::Context) {
-        self.say_to_active_orchestrator(ctx, MESSAGE);
+        self.say_to_shown_orchestrator(ctx, MESSAGE);
     }
 }
 
@@ -147,13 +157,16 @@ fn render(ui: &mut Ui, state: RentMachine) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUSY, LABEL, MESSAGE, NO_WORKSPACE, RentMachine};
+    use super::{BUSY, FRONT_DESK, LABEL, MESSAGE, NO_WORKSPACE, RentMachine};
 
     #[test]
     fn only_a_window_with_an_idle_orchestrator_takes_a_press() {
         assert!(RentMachine::Ready.enabled());
         assert_eq!(RentMachine::Ready.disabled_hover(), None);
 
+        assert!(!RentMachine::FrontDesk.enabled());
+        assert_eq!(RentMachine::FrontDesk.disabled_hover(), Some(FRONT_DESK));
+        assert_eq!(FRONT_DESK, "Open a work item first");
         assert!(!RentMachine::NoWorkspace.enabled());
         assert_eq!(RentMachine::NoWorkspace.disabled_hover(), Some(NO_WORKSPACE));
         assert!(!RentMachine::Busy.enabled());
