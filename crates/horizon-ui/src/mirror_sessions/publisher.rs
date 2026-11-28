@@ -394,19 +394,27 @@ pub fn device_name(host: &str) -> String {
 /// The name of this computer, as its system writes it.
 #[must_use]
 pub fn host_name() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .ok()
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok().filter(|name| !name.is_empty()))
-        .unwrap_or_else(|| "this-computer".to_owned())
+    // The system call answers on every Unix. A read of `/proc` answered on Linux
+    // alone, and a run on macOS gave every Mac the name `this-computer`.
+    let node = rustix::system::uname().nodename().to_string_lossy().into_owned();
+    first_label(&node).unwrap_or_else(|| "this-computer".to_owned())
+}
+
+/// The first label of the name of a computer: `studio` of `studio.local`. `None`
+/// for a name that holds no label.
+fn first_label(node: &str) -> Option<String> {
+    node.trim()
+        .split('.')
+        .next()
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use horizon_core::session_mirror::MirrorEntry;
 
-    use super::{address_of, device_name, host_name, is_refusal, next_entries};
+    use super::{address_of, device_name, first_label, host_name, is_refusal, next_entries};
 
     fn person(text: &str) -> MirrorEntry {
         MirrorEntry::Person { text: text.to_owned() }
@@ -469,5 +477,9 @@ mod tests {
         assert!(is_refusal("not_logged_in: the token is gone"));
         assert!(!is_refusal("bad_frame: the frame is not one of this protocol"));
         assert!(!host_name().is_empty());
+        assert_eq!(first_label("Made-Up-Studio.local\n").as_deref(), Some("Made-Up-Studio"));
+        assert_eq!(first_label("desk").as_deref(), Some("desk"));
+        assert_eq!(first_label(" ").as_deref(), None);
+        assert_eq!(first_label(".local").as_deref(), None);
     }
 }

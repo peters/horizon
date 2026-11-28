@@ -24,8 +24,11 @@ use crate::app::orchestrator_dock::session::Phase;
 use crate::app::orchestrator_dock::tests::chat::{self, child_of, entries_of, state_of, stubborn};
 use crate::app::orchestrator_dock::tests::frame::{Drawn, Window, texts};
 use crate::app::orchestrator_dock::tests::storage::{
-    Harness, board_state, child_of as stubborn_child, stand_in, stubborn_stand_in, wait_for_path, wait_until_no_process,
+    Harness, board_state, child_of as stubborn_child, stand_in, stubborn_stand_in, wait_for_path,
 };
+// A test waits for the end of a process only where `/proc` names it.
+#[cfg(target_os = "linux")]
+use crate::app::orchestrator_dock::tests::storage::wait_until_no_process;
 use crate::app::orchestrator_dock::{FRONT_DESK, OrchestratorDock};
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::command_registry::CommandId;
@@ -566,11 +569,14 @@ fn the_front_desk_runs_in_the_folder_that_the_worker_makes() {
     });
 
     let directory = front_desk_directory();
+    // The program names its directory with every link resolved, and the folder of
+    // a test stands behind a link on macOS (`/var` is `/private/var`), so the two
+    // paths are compared in that form.
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let reported = std::fs::read_to_string(&evidence.cwd).expect("the directory of the stand-in");
     assert_eq!(
-        std::fs::read_to_string(&evidence.cwd)
-            .expect("the directory of the stand-in")
-            .trim(),
-        directory.display().to_string(),
+        resolved(Path::new(reported.trim())),
+        resolved(&directory),
         "the front desk runs in the folder of its own of this Horizon home"
     );
     assert!(

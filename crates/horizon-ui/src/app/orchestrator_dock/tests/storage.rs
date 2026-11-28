@@ -245,6 +245,7 @@ pub(super) fn child_of(pid: &Path) -> u32 {
 
 /// Whether a program of `pid` still runs. Signal 0 reads the process table and
 /// sends nothing to the process.
+#[cfg(target_os = "linux")]
 fn program_runs(pid: u32) -> bool {
     std::process::Command::new("kill")
         .arg("-0")

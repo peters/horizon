@@ -11,11 +11,15 @@ use horizon_core::agent_bridge::Entry;
 
 use crate::app::orchestrator_dock::session::Phase;
 use crate::app::orchestrator_dock::tests::chat::{
-    WIDE, answering, child_of, entries_of, exit_status, send, stand_in, stand_in_named, state_of, stubborn,
-    wait_until_no_process, window_of,
+    WIDE, answering, child_of, entries_of, exit_status, send, stand_in, stand_in_named, state_of, stubborn, window_of,
 };
+// A test waits for the end of a process only where `/proc` names it.
+#[cfg(target_os = "linux")]
+use crate::app::orchestrator_dock::tests::chat::wait_until_no_process;
 use crate::app::orchestrator_dock::tests::frame::Window;
-use crate::app::test_support::{editor_workspace_state, program_runs};
+use crate::app::test_support::editor_workspace_state;
+#[cfg(target_os = "linux")]
+use crate::app::test_support::program_runs;
 
 #[test]
 fn the_end_of_horizon_leaves_no_child_of_a_conversation() {
