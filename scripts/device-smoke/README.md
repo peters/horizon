@@ -278,6 +278,53 @@ keeps the value in an argument, so give it only a value that may appear there,
 such as the client id or the tag of a test. `--secret-row ID=VALUE` writes a
 `credential/<reference>` row. A plain start refuses both secret options.
 
+### The workers of an orchestrator
+
+`scripts/device-smoke/orchestrator_standin.py` is also the program of a worker of
+an orchestrator. Its mode `--worker` prints one line, reads the task that Horizon
+types into the panel, and calls `worker_report` with the text `hello from the
+worker`. The report reaches the orchestrator of the workspace, and the
+orchestrator answers with the text of that report.
+
+A worker panel comes from a preset of an agent kind that runs this file with
+`--worker`. Write the presets file, so the fixture replaces the New Workspace
+menu of its private home. The first preset is the one that a turn of the
+orchestrator that holds `start a worker` asks for, and each preset of the file is
+a row of the chip `Workers`:
+
+```json
+[{"name": "Gemini", "kind": "gemini",
+  "command": "<repo>/scripts/device-smoke/orchestrator_standin.py", "args": ["--worker"]},
+ {"name": "Pi", "kind": "pi",
+  "command": "<repo>/scripts/device-smoke/orchestrator_standin.py", "args": ["--worker"]},
+ {"name": "Codex", "kind": "codex",
+  "command": "<repo>/scripts/device-smoke/orchestrator_standin.py", "args": ["--worker"]}]
+```
+
+The kind `gemini` is the first preset of this file, because a panel of that kind
+carries no session badge: the titlebar of a panel of 520 points holds the badge of
+the mark `opened by worker of the orchestrator` and no second badge beside it. A
+preset of the kind `claude`, `codex` or `pi` opens a worker whose mark a narrow
+titlebar drops, and the panel of that worker is the same panel.
+
+```bash
+HORIZON_ORCHESTRATOR_DOCK=1 \
+HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py \
+  scripts/device-smoke/serve.py --horizon target/debug/horizon --state /var/tmp/workers-1 \
+  --native-view --presets workers-presets.json
+```
+
+A turn of the orchestrator that holds `start a worker` asks Horizon for a worker
+of the first agent preset of the settings. A program that the chip `Workers` of
+the composer does not hold starts nothing, and the conversation of the workspace
+draws the row with the controls `Start`, `Always for this work item` and `Not now`.
+A press on `Start` opens the panel of the worker, which reports as it is told.
+
+The option `--panels` opens the same file as a panel with `--worker` and no
+preset, but a panel that the person opened is no worker: its report answers
+`caller_unavailable`, and the panel prints that refusal. The procedure is
+[the workers of an orchestrator](../../docs/testing/procedures/orchestrator-workers.md).
+
 ### An agent that shows the attention states
 
 `scripts/device-smoke/agent_attention_standin.py` is the program of an agent

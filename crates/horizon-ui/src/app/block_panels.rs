@@ -88,9 +88,10 @@ impl AgentPanels {
         opened.push(now);
     }
 
-    /// Keeps the one line that `owner` asked Horizon to type into the panel at
-    /// `panel`.
-    fn hold_prompt(&mut self, panel: PanelId, line: &str, now: Instant) {
+    /// Keeps one line that Horizon types into the panel at `panel` once its
+    /// program has drawn: the prompt of a request, the task of a worker and each
+    /// message to a worker take this one path.
+    pub(in crate::app) fn hold_line(&mut self, panel: PanelId, line: &str, now: Instant) {
         self.prompts.push(PendingPrompt {
             panel,
             line: line.to_owned(),
@@ -214,7 +215,7 @@ impl HorizonApp {
     /// The names of the presets of the settings, each alias as `alias (name)`, for
     /// the answer of an unknown preset. It lists names only: a command of a preset
     /// is never in an answer.
-    fn preset_names(&self) -> Vec<String> {
+    pub(super) fn preset_names(&self) -> Vec<String> {
         self.template_config
             .presets
             .iter()
@@ -272,7 +273,7 @@ impl HorizonApp {
         }
         self.agent_opens.panels.record(owner, now);
         if let Some(line) = text.prompt {
-            self.agent_opens.panels.hold_prompt(id, line, now);
+            self.agent_opens.panels.hold_line(id, line, now);
             ctx.request_repaint();
         }
         self.mark_runtime_dirty();
@@ -325,7 +326,7 @@ impl HorizonApp {
 /// The kind of a preset as the settings store it, such as `claude` or `shell`, for
 /// the answer of `presets`. It is the stored token and not a display name, so an
 /// agent compares it with the kind that its own panel reports.
-fn preset_kind_name(kind: PanelKind) -> String {
+pub(super) fn preset_kind_name(kind: PanelKind) -> String {
     match serde_json::to_value(kind) {
         Ok(serde_json::Value::String(name)) => name,
         _ => kind.display_name().to_ascii_lowercase(),

@@ -242,6 +242,50 @@ class OrchestratorStandinTests(unittest.TestCase):
         records = run(['what waits'], actor='horizon:orchestrator/8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e')
         self.assertEqual(texts_of(records), ['You said: what waits'])
 
+    def test_a_turn_of_a_worker_answers_the_line_of_a_press_and_the_report(self):
+        orchestrator = 'horizon:orchestrator/8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e'
+        records = run(['The person started the worker of request r-1.'], actor=orchestrator)
+        self.assertEqual(texts_of(records),
+                         ['You said: The person started the worker of request r-1.', 'The worker runs.'])
+
+        # The report is one turn whose first line names the worker and whose text is
+        # under it, so the answer repeats the text alone.
+        report = 'Report of your worker Codex (p-1):\nthe redirect is fixed'
+        self.assertEqual(texts_of(run([report], actor=orchestrator)),
+                         ['You said: ' + report, 'I read the report: the redirect is fixed'])
+
+        # A turn that asks for a worker names the task, and without a program of
+        # Horizon it starts nothing.
+        records = run(['start a worker please'], actor=orchestrator)
+        texts = texts_of(records)
+        self.assertEqual(texts[0], 'You said: start a worker please')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, texts[1])
+        self.assertEqual(orchestrator_standin.WORKER_TASK, 'Say hello and report.')
+        self.assertEqual(orchestrator_standin.WORKER_ASKED_TEXT, 'I asked for a worker.')
+
+    def test_a_worker_turn_reaches_the_operations_of_the_worker_of_the_presets(self):
+        # The list of the presets and the start of a worker reach the MCP server of
+        # this Horizon, which these tests do not start: the program names the refusal
+        # instead of a worker.
+        records = run(['start a worker'], horizon_program='/nonexistent/horizon')
+        texts = texts_of(records)
+        self.assertEqual(len(texts), 2, 'the answer of the person and the notice of the start')
+        self.assertIn('The stand-in started no worker', texts[1])
+        self.assertEqual(orchestrator_standin.AGENT_KINDS[0], 'claude', 'a preset of an agent kind is a worker')
+
+    def test_the_worker_mode_reports_its_one_text_and_ends(self):
+        answer = subprocess.run([str(SCRIPT), orchestrator_standin.WORKER_MODE_ARGUMENT],
+                                input='Say hello and report.\n', text=True, capture_output=True,
+                                timeout=60,
+                                env={**os.environ, orchestrator_standin.EXECUTABLE_ENV: '',
+                                     'PYTHONDONTWRITEBYTECODE': '1'})
+        self.assertEqual(answer.returncode, 0)
+        lines = answer.stdout.splitlines()
+        self.assertEqual(lines[0], orchestrator_standin.WORKER_MODE_LINE)
+        self.assertEqual(lines[1], 'The worker read: Say hello and report.')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, lines[2])
+        self.assertEqual(orchestrator_standin.WORKER_REPORT_TEXT, 'hello from the worker')
+
     def test_the_fixture_names_the_copy_of_the_program_in_its_state_folder(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder)

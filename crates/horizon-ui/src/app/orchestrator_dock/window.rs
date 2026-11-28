@@ -15,6 +15,7 @@ use std::sync::Arc;
 use egui::{Rect, Stroke, Ui, pos2};
 use horizon_core::agent_bridge::MAX_TEXT_BYTES;
 
+use crate::app::block_requests::workers::WorkerAnswer;
 use crate::app::settings::settings_panel_default_width;
 use crate::app::util::viewport_local_rect;
 use crate::app::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
@@ -26,6 +27,7 @@ use horizon_core::workspace_list::Orchestrator;
 use super::layout::{dock_fits, dock_rect, dock_width};
 use super::proposal::{self, Choice};
 use super::session::{Said, Session, TOO_LONG_NOTICE};
+use super::worker_rows;
 use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list, mirror};
 
 /// The most characters of the name of a work item in a notice of the front desk.
@@ -109,6 +111,10 @@ impl HorizonApp {
         // The worker wakes this window when an outcome is ready, so a start or a
         // stop applies without input.
         self.orchestrator_dock.worker.wake_with(ui.ctx());
+        // The chip of the workers names the agent programs of the settings that this
+        // computer has, and the search of them reads folders: the coordination worker
+        // runs it once for this run.
+        self.refresh_worker_programs();
         let board = &self.board;
         let dock = &mut self.orchestrator_dock;
         // The conversation of this frame: the front desk, or the workspace of the
@@ -128,9 +134,17 @@ impl HorizonApp {
         let mut asked = composer::Asked::Nothing;
         let mut picked = None;
         let mut pressed: Option<list::Press> = None;
+        // The chip of the workers of this conversation, built before the frame draws
+        // so that the head of the composer knows the value that the field takes.
+        let mut workers_chip = (!shows_front_desk).then(|| dock.workers_chip(&local_id, &self.template_config.presets));
+        let workers_value = workers_chip
+            .as_ref()
+            .map_or(super::workers_menu::NONE, super::workers_menu::WorkersChip::value)
+            .to_owned();
         let mut back = false;
         // The reference rows of this frame read the state of the workspaces that the
-        // front desk started, and the proposals that came from a file.
+        // front desk started, the proposals that came from a file and the rows of the
+        // workers.
         let refs = list::Refs::build(board, dock, &local_id);
         egui::Panel::right(DOCK_PANEL_ID)
             .exact_size(rect.width())
@@ -161,13 +175,13 @@ impl HorizonApp {
                 // so they are worked out first and the list takes the room between
                 // them. A part that drew top down would move the parts under it.
                 let header_height = header::height(ui, content.width(), &form, state);
-                let composer = composer::parts(ui, content, dock.draft(&local_id), composer_form);
+                let composer = composer::parts(ui, content, dock.draft(&local_id), composer_form, &workers_value);
                 let parts = layout::parts(content, header_height, composer.rect.height());
                 back = header::render(ui, parts.header, &form, state);
                 #[cfg(test)]
                 dock.set_last_header(parts.header, &form);
                 let draft = dock.drafts.entry(local_id.clone()).or_default();
-                asked = composer::render(ui, &composer, draft, true, busy, composer_form);
+                asked = composer::render(ui, &composer, draft, true, busy, composer_form, workers_chip.as_mut());
                 match snapshot {
                     Some(snapshot) if !snapshot.entries.is_empty() => {
                         pressed = list::render(
@@ -194,24 +208,69 @@ impl HorizonApp {
             ui.ctx()
                 .memory_mut(|memory| memory.request_focus(egui::Id::unique(composer::FIELD_ID)));
         }
-        match pressed {
-            // A press on the reference row of a card brings that card into view, as
-            // the row of the sidebar does. The row of a card that left the board
-            // takes no press, so no press names a panel that is gone.
-            Some(list::Press::Card(panel)) => {
-                if let Some(id) = self.board.panel_id_by_local_id(&panel) {
-                    self.reveal_selected_panel(ui.ctx(), id);
-                }
-            }
-            Some(list::Press::WorkItem(work_item)) => self.show_work_item(&work_item),
-            Some(list::Press::Proposal { id, choice }) => self.press_proposal(ui.ctx(), &id, choice),
-            None => {}
-        }
+        self.apply_dock_presses(ui.ctx(), &local_id, pressed, workers_chip.as_ref());
         match asked {
             composer::Asked::Send => self.send_orchestrator_message(ui.ctx(), &local_id),
             composer::Asked::Stop => self.stop_orchestrator_conversation(&local_id),
             composer::Asked::Nothing => {}
         }
+    }
+
+    /// Applies what the person pressed in one frame of the dock: a row of the list,
+    /// which shows a panel, a workspace or a request for a worker, and a row of the
+    /// chip of the workers, which adds or removes one program.
+    fn apply_dock_presses(
+        &mut self,
+        ctx: &egui::Context,
+        local_id: &str,
+        pressed: Option<list::Press>,
+        workers_chip: Option<&super::workers_menu::WorkersChip>,
+    ) {
+        match pressed {
+            // A press on the reference row of a card or of a worker brings that panel
+            // into view, as the row of the sidebar does. A row whose panel left the
+            // board takes no press, so no press names a panel that is gone.
+            Some(list::Press::Card(panel)) => {
+                if let Some(id) = self.board.panel_id_by_local_id(&panel) {
+                    self.reveal_selected_panel(ctx, id);
+                }
+            }
+            Some(list::Press::WorkItem(work_item)) => self.show_work_item(&work_item),
+            Some(list::Press::Proposal { id, choice }) => self.press_proposal(ctx, &id, choice),
+            Some(list::Press::WorkerAsk { id, choice }) => {
+                let answer = match choice {
+                    worker_rows::Choice::Start => WorkerAnswer::Start,
+                    worker_rows::Choice::Always => WorkerAnswer::Always,
+                    worker_rows::Choice::NotNow => WorkerAnswer::NotNow,
+                };
+                self.press_worker_ask(ctx, local_id, &id, answer);
+            }
+            None => {}
+        }
+        // The record of the conversation keeps the program that the person added to
+        // the chip or removed from it.
+        if let Some(chip) = workers_chip
+            && let Some(index) = chip.toggled()
+            && let Some(row) = chip.rows().get(index)
+        {
+            self.orchestrator_dock.toggle_worker_program(local_id, &row.program);
+            self.mark_runtime_dirty();
+            ctx.request_repaint();
+        }
+    }
+
+    /// Asks the coordination worker which agent programs of the settings this
+    /// computer has, once for this run, as the group `Agents` of the sidebar does.
+    /// The answer reaches the chip of the workers of every conversation.
+    fn refresh_worker_programs(&mut self) {
+        if !self.orchestrator_dock.ask_worker_programs() {
+            return;
+        }
+        let presets = self.template_config.presets.clone();
+        self.browser_create_host.io.then(
+            move || super::workers_menu::search(&presets),
+            |app, missing| app.orchestrator_dock.adopt_worker_programs(missing),
+        );
     }
 
     /// Reads every bridge of the dock, and applies its events to the conversation
@@ -231,8 +290,11 @@ impl HorizonApp {
         }
         self.orchestrator_dock.poll_worker();
         // A line of Horizon that waited for the end of a turn goes out on this pass,
-        // so the program reads it as the first line of its next turn.
+        // so the program reads it as the first line of its next turn. A report of a
+        // worker takes the same queue, so it goes out after the line of the wake and
+        // keeps the order of the reports.
         self.orchestrator_dock.flush_system_messages();
+        self.orchestrator_dock.flush_worker_reports();
         // The check of the folders of a proposal runs on the worker, and the work
         // items of a proposal start on the frame that reads its answer.
         self.apply_proposal_start(ctx);
@@ -255,6 +317,14 @@ impl HorizonApp {
         // A workspace that closes takes its conversation with it: no program of
         // the dock speaks for a workspace that the board no longer holds.
         self.forget_workspaces_the_board_left();
+        // A worker whose panel left the board leaves the record of its conversation,
+        // and a conversation that left takes its chip and its workers with it.
+        let board = &self.board;
+        self.orchestrator_dock.retain_worker_conversations(|local_id| {
+            local_id == FRONT_DESK || board.workspace_id_by_local_id(local_id).is_some()
+        });
+        self.orchestrator_dock
+            .retain_worker_panels(|panel| board.panel_id_by_local_id(panel).is_some());
         let program = self.orchestrator_dock.program_name().to_owned();
         self.orchestrator_dock.restore_conversations(&self.board);
         if self

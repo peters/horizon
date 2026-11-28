@@ -50,6 +50,9 @@ mod text;
 mod window;
 mod work_items;
 mod worker;
+mod worker_rows;
+mod workers;
+mod workers_menu;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -64,6 +67,8 @@ pub(in crate::app) use self::front_desk::FRONT_DESK;
 use self::front_desk::FrontDesk;
 use self::programs::Program;
 use self::session::{Session, Start};
+use self::workers::WorkerBook;
+pub(in crate::app) use self::workers::WorkerRecord;
 use super::HorizonApp;
 
 /// The line that `horizon_core::agent_bridge` writes into a conversation for a
@@ -147,6 +152,10 @@ pub(in crate::app) struct OrchestratorDock {
     /// the dock read it. A change of it is one notice in the conversation of the
     /// front desk.
     work_item_states: std::collections::HashMap<String, horizon_core::workspace_list::Orchestrator>,
+    /// The workers of every conversation: the panels that its orchestrator started,
+    /// the last report of each, and the programs that the chip of its composer
+    /// holds.
+    workers: WorkerBook,
     /// The turns and the bridges of each conversation as the last pass read them,
     /// so the start and the end of a turn tell the sidebar to read its rows again.
     turn_watch: Vec<(String, bool, bool, usize)>,
@@ -211,6 +220,7 @@ impl OrchestratorDock {
             #[cfg(test)]
             last_header: None,
             proposal_start: None,
+            workers: WorkerBook::default(),
             work_item_states: std::collections::HashMap::new(),
             turn_watch: Vec::new(),
             #[cfg(test)]

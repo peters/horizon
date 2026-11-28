@@ -39,6 +39,12 @@ pub const MAX_PROPOSAL_ITEMS: usize = 6;
 /// The most characters of the name of a work item that its reference row keeps.
 pub const MAX_WORK_ITEM_NAME_CHARS: usize = 80;
 
+/// The most characters of the first line of a worker task that the entries of the
+/// conversation keep.
+pub const MAX_WORKER_TASK_CHARS: usize = 120;
+/// The most characters of the name of the preset of a worker.
+pub const MAX_WORKER_PROGRAM_CHARS: usize = 80;
+
 /// The link of one bridge, as the person sees it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Link {
@@ -72,6 +78,21 @@ pub enum ProposalState {
     Declined,
     /// A newer proposal took the place of this one while it was open.
     Replaced,
+}
+
+/// The state of one request of an orchestrator for a worker that the chip
+/// `Workers` of the person does not hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerAskState {
+    /// The person did not decide yet.
+    Open,
+    /// The person started this one worker.
+    Started,
+    /// The person added the program to the chip and started the worker.
+    Always,
+    /// The person did not start the worker.
+    Declined,
 }
 
 /// One item of a proposal: the work item that the person may start.
@@ -137,6 +158,39 @@ pub enum Entry {
     /// that workspace, so the person reads which work item the front desk speaks
     /// about. A work item that left the board reads as a row without a press.
     WorkItem { work_item: String, name: String },
+    /// A reference to one worker that the orchestrator started: the local id of
+    /// the panel of that worker, the name of its preset and the first line of its
+    /// task. The dock draws one row that shows that panel, as the row of a card
+    /// does. A worker whose panel left the board reads as a row without a press.
+    WorkerStarted {
+        panel: String,
+        program: String,
+        task: String,
+    },
+    /// One message that the orchestrator typed into one worker. The dock draws it
+    /// as a bubble of the person side, under the caption `to <program>`.
+    WorkerMessage {
+        panel: String,
+        program: String,
+        text: String,
+    },
+    /// One report of one worker, which the dock draws as a text of the agent under
+    /// the caption `<program> reports`.
+    WorkerReport {
+        panel: String,
+        program: String,
+        text: String,
+    },
+    /// One request of the orchestrator for a worker of a program that the chip
+    /// `Workers` of the person does not hold. The dock draws the name of the
+    /// program, the first line of the task and the controls that start the worker
+    /// or leave it, and nothing starts before the press of the person.
+    WorkerAsk {
+        id: String,
+        program: String,
+        task: String,
+        state: WorkerAskState,
+    },
 }
 
 /// The limit of the account that the program reported.
@@ -402,6 +456,109 @@ impl Conversation {
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
     }
 
+    /// Adds the reference row of the worker `panel`, with the name of its preset
+    /// and the first line of its task. The name and the task are text of a program
+    /// and the name of a preset of the person, so each is cut here.
+    pub fn worker_started(&mut self, panel: &str, program: &str, task: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.push(Entry::WorkerStarted {
+            panel: panel.to_owned(),
+            program: tidy(program, MAX_WORKER_PROGRAM_CHARS),
+            task: task_line(task),
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Appends one message that the orchestrator typed into the worker `panel`.
+    pub fn worker_message(&mut self, panel: &str, program: &str, text: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.push(Entry::WorkerMessage {
+            panel: panel.to_owned(),
+            program: tidy(program, MAX_WORKER_PROGRAM_CHARS),
+            text: cut_bytes(text, MAX_TEXT_BYTES).to_owned(),
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Appends one report of the worker `panel`, as it went to the program.
+    pub fn worker_report(&mut self, panel: &str, program: &str, text: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.push(Entry::WorkerReport {
+            panel: panel.to_owned(),
+            program: tidy(program, MAX_WORKER_PROGRAM_CHARS),
+            text: cut_bytes(text, MAX_TEXT_BYTES).to_owned(),
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Appends one request of the orchestrator for a worker of a program that the
+    /// chip `Workers` does not hold. The person decides on the row that it draws.
+    pub fn worker_ask(&mut self, id: &str, program: &str, task: &str) {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.version += 1;
+        snapshot.entries.push(Entry::WorkerAsk {
+            id: id.to_owned(),
+            program: tidy(program, MAX_WORKER_PROGRAM_CHARS),
+            task: task_line(task),
+            state: WorkerAskState::Open,
+        });
+        Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
+    }
+
+    /// Moves the request `id` of a worker to `state`, and answers whether this
+    /// conversation held it.
+    pub fn worker_ask_state(&mut self, id: &str, state: WorkerAskState) -> bool {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        let Some(entry) = snapshot.entries.iter_mut().find_map(|entry| match entry {
+            Entry::WorkerAsk {
+                id: shown,
+                state: shown_state,
+                ..
+            } if shown == id => Some(shown_state),
+            _ => None,
+        }) else {
+            return false;
+        };
+        *entry = state;
+        snapshot.version += 1;
+        true
+    }
+
+    /// Whether the person answered `Not now` to a request for a worker of
+    /// `program` in this conversation. A later request of the same program then
+    /// asks nothing again.
+    #[must_use]
+    pub fn declined_worker_ask(&self, program: &str) -> bool {
+        self.snapshot.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                Entry::WorkerAsk {
+                    program: shown,
+                    state: WorkerAskState::Declined,
+                    ..
+                } if shown == program
+            )
+        })
+    }
+
+    /// The request `id` of a worker, while it waits for the person: the name of the
+    /// program and the first line of the task.
+    #[must_use]
+    pub fn open_worker_ask(&self, id: &str) -> Option<(String, String)> {
+        self.snapshot.entries.iter().find_map(|entry| match entry {
+            Entry::WorkerAsk {
+                id: shown,
+                program,
+                task,
+                state: WorkerAskState::Open,
+            } if shown == id => Some((program.clone(), task.clone())),
+            _ => None,
+        })
+    }
+
     /// Applies one event of the program.
     pub fn apply(&mut self, event: BridgeEvent) {
         let snapshot = Arc::make_mut(&mut self.snapshot);
@@ -555,6 +712,13 @@ fn settle_tools(snapshot: &mut ConversationSnapshot, failed: bool) {
             *shown = state;
         }
     }
+}
+
+/// The first line of the task of a worker, cut like a summary: the row of a worker
+/// draws one line, and the whole task stays in the panel of the worker.
+fn task_line(task: &str) -> String {
+    let line = task.lines().next().unwrap_or_default();
+    tidy(line, MAX_WORKER_TASK_CHARS)
 }
 
 /// The first line of `text`, cut like a summary, or `None` when it is empty.

@@ -678,6 +678,26 @@ when it names one of those kinds.
   `block_requests/work_items.rs` holds the three operations of the front desk: the
   read of the work items, the proposal that starts nothing, and the message that
   one work item reads with the caption of the front desk.
+  `block_requests/workers.rs` holds the four operations of the workers: the start
+  of one worker from a preset, the read of the workers, the message to one worker
+  and the report of a worker. It opens the panel of a worker through
+  `start_worker`, which takes the path of a preset of the settings and the prompt
+  line of the panel that an agent opened.
+
+- `app::orchestrator_dock::workers` holds the state of the workers of each
+  conversation of the dock: the panel, the preset, the kind, the last report and
+  the two instants of the rate bounds of each worker, the programs that the chip
+  `Workers` holds, and the reports that wait for the end of a turn of the
+  orchestrator. A panel that leaves the board leaves the record on the pass of the
+  dock that reads the board, and the chip is stored with the record of the
+  conversation of its workspace (`OrchestratorConversationState::allowed_workers`).
+  `worker_rows.rs` draws the three entries of the workers and the row of a request
+  for a worker, and it copies neither the bubble of the person nor the box of a
+  proposal: it takes `list::person_row`, `list::agent_row`,
+  `list::reference_row` and the controls of `proposal`. `workers_menu.rs` holds
+  the chip `Workers`, the rows of its menu and the search of the programs of the
+  agent presets of the settings, which is the search of the group `Agents` of the
+  sidebar and runs on the coordination worker once for a run.
 
 - `app::orchestrator_dock`, `app::block_requests` and `app::block_clicks` share
   one rule with the card path: the orchestrator of a workspace is a card caller

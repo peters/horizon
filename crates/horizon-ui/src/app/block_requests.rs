@@ -27,6 +27,7 @@ use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelO
 
 mod caller;
 pub(in crate::app) mod work_items;
+pub(in crate::app) mod workers;
 
 pub(in crate::app) use self::caller::CardCaller;
 pub(super) use self::caller::caller_unavailable;
@@ -263,6 +264,13 @@ impl HorizonApp {
                     Some(caller_unavailable())
                 }
             },
+            // The four operations of the workers are the ones that an orchestrator
+            // of a workspace and its workers reach. The front desk has its own path
+            // above, and a session of a machine is no caller of them.
+            Operation::WorkerStart { program, task } => Some(self.answer_worker_start(program, task, caller, ctx)),
+            Operation::Workers => Some(self.answer_workers(caller)),
+            Operation::WorkerMessage { worker, text } => Some(self.answer_worker_message(worker, text, caller, ctx)),
+            Operation::WorkerReport { text } => Some(self.answer_worker_report(text, caller, ctx)),
             // The three operations of the work items are the ones that the front
             // desk reaches, and its own path above answers them. Every other caller
             // gets the refusal of a caller that cannot ask for what it asks.

@@ -22,7 +22,10 @@ subscription for the work that it does best.
   folder.
 - The titlebar of a worker carries the mark `worker of the orchestrator`, which
   is text of Horizon.
-- An orchestrator has at most 4 workers that run at the same time.
+- An orchestrator has at most 4 workers that run at the same time. A fifth
+  request is `too_many_workers` and starts nothing.
+- The person closes the panel of a worker, and the record of the workers leaves
+  the conversation on the pass of the dock that reads the board.
 
 ## Which programs an orchestrator can start
 
@@ -34,8 +37,18 @@ subscription for the work that it does best.
   conversation shows one row with the name of the program, the first line of
   the task and the controls `Start`, `Always for this work item` and
   `Not now`. `Start` starts this one worker. `Always for this work item` adds
-  the program to the chip and starts the worker. The orchestrator gets one
-  line that tells it what the person pressed.
+  the program to the chip and starts the worker. `Not now` starts nothing. The
+  row then reads `Started`, `Started; <program> is allowed for this work item`
+  or `Not started`, and the orchestrator gets one line that tells it what the
+  person pressed. A row that a restart loaded as open takes no press and reads
+  `Not started`, because the program that asked is gone.
+- A second request of a program that the person did not start is `not_allowed`:
+  one work item asks the person once for each program.
+- The chip reads `not chosen`, the name of one program, or `<N> programs`. A
+  press on it opens a menu with one row for each agent preset of the settings
+  whose program this computer has, with a check mark for each program that the
+  chip holds. A press on a row adds the program or removes it and leaves the
+  menu open. The escape key and a press outside the menu close it.
 
 ## The operations
 
@@ -56,12 +69,20 @@ A worker reaches one operation:
 
 - Horizon types the task into the worker as its first prompt line, and adds one
   constant sentence that tells the worker to report with `worker_report` when
-  the task is done or when it cannot continue.
+  the task is done or when it cannot continue. The whole prompt line is one line
+  of the terminal: each control character of the task becomes a space.
+- The answer of `worker_start` names the local id of the panel of the worker,
+  and `workers` answers the local id, the preset, the kind of the program, the
+  state `working` or `idle`, and the last report of each worker, cut to 400
+  characters.
 - Horizon types a message of the orchestrator into the terminal of the worker
   as one prompt line, as the first prompt line is typed.
 - A report goes to the program of the orchestrator as one turn, through its
-  bridge. A report that arrives while a turn runs waits for the end of that
-  turn.
+  bridge: the first line of the turn is
+  `Report of your worker <program> (<panel id>):` and the text of the report
+  follows on the next line. A report that arrives while a turn runs waits for the
+  end of that turn, in the queue that the wake line of a card uses. Reports keep
+  their order, at most 8 of them wait, and a ninth is `busy`.
 - The conversation of the orchestrator gets one entry for each start, each
   message and each report, so the person reads what the programs said to each
   other.
@@ -74,8 +95,13 @@ A worker reaches one operation:
 | A task, a message, a report | 4,000 characters |
 | Messages to one worker | 1 in 10 seconds |
 | Reports of one worker | 1 in 10 seconds |
+| Reports of one orchestrator that wait for a turn | 8 |
 
-A request outside a bound is refused whole and changes nothing.
+A request outside a bound is refused whole and changes nothing. The refusal codes
+of these operations are `invalid_request` for a text outside its bound,
+`unknown_preset` for a name that the settings do not hold, `too_many_workers`,
+`not_allowed`, `not_found` for a worker that this orchestrator did not start,
+`too_soon`, `busy` and `caller_unavailable`.
 
 ## Trust boundary
 
@@ -93,7 +119,13 @@ A request outside a bound is refused whole and changes nothing.
   reach: it does not message it and does not read it.
 - A worker reports only to the orchestrator that started it. A panel that the
   person opened is no worker, and its report is refused.
-- The front desk starts no worker.
+- The front desk starts no worker. A panel that the person opened is no worker,
+  so `worker_report` answers `caller_unavailable` in it.
+- The chip of the workers is the choice of the person, and it is stored with the
+  record of the conversation of the workspace. A record of an older build holds
+  no field and loads with an empty chip.
+- The records of the workers are state of the run: a start of Horizon holds no
+  worker until its orchestrator starts one.
 - Not guaranteed: that a worker does what the task says, and that a report is
   true. The person reads the panels.
 

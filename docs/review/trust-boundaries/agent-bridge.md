@@ -159,6 +159,39 @@ whole rule.
   only in the form of a UUID. A state file of an older build holds no such field
   and loads with a new session.
 
+## The workers of an orchestrator are other untrusted programs
+
+An orchestrator starts other agent programs as its workers, sends them messages
+and reads their reports ([the design](../../architecture/orchestrator-workers.md)).
+Each of those programs is another child of this computer, and every rule of this
+page holds for it.
+
+- **The start runs a preset of the person.** Horizon opens the panel of a worker
+  through the path of a preset, as `open_panel` does, so the command, the
+  arguments and the kind are the values that the person saved. The task of the
+  request is one line of text that Horizon types into the terminal of the new
+  panel, with each control character replaced by a space, and one constant
+  sentence that names the operation `worker_report`. Neither is a command line,
+  an argument or an environment of the program.
+- **A report is text of a program.** `worker_report` cuts the report to the bound
+  of one message and adds it to a turn of the conversation of the orchestrator,
+  under the line `Report of your worker <program> (<panel id>):`, which is
+  Horizon's own text. The dock adds the entry of the report to the list with the
+  same cut, and it draws it as plain text under the caption `<program> reports`.
+- **The records of the workers are Horizon's own values.** The list of the workers
+  of one orchestrator holds the local id of a panel, the name of a preset, the kind
+  of its program and the last report, cut to 400 characters. It is state of the
+  run, and it is rebuilt from no file.
+- **The chip of the workers belongs to the person.** The programs of the chip are
+  the names of presets of the settings that the person chose, they are never text
+  of a program, and a program outside the chip starts nothing.
+- **A message is typed, not run.** Each message of the orchestrator takes the one
+  path of a prompt line of a panel that an agent opened, so it arrives as a
+  person's paste and Enter, once, when the program of the worker is at its prompt.
+- **Does not guarantee:** that a worker does what its task says, and that a report
+  is true. The person reads the panels, and the conversation of the orchestrator
+  names each start, each message and each report.
+
 ## What the dock draws
 
 The dock is another reader of the untrusted text of the program, so the same

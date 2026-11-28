@@ -697,3 +697,76 @@ fn a_message_of_the_person_that_the_front_desk_passed_carries_its_mark() {
         "a message that the front desk did not pass writes no field: {json}"
     );
 }
+
+#[test]
+fn the_worker_entries_keep_the_first_line_of_the_task_and_the_whole_report() {
+    let mut conversation = Conversation::new();
+    conversation.worker_started("p-1", "Codex", "Fix the redirect\nthen the test");
+    conversation.worker_message("p-1", "Codex", "one message");
+    conversation.worker_report("p-1", "Codex", "the test passes");
+    assert_eq!(
+        entries(&conversation),
+        vec![
+            Entry::WorkerStarted {
+                panel: "p-1".to_owned(),
+                program: "Codex".to_owned(),
+                task: "Fix the redirect".to_owned()
+            },
+            Entry::WorkerMessage {
+                panel: "p-1".to_owned(),
+                program: "Codex".to_owned(),
+                text: "one message".to_owned()
+            },
+            Entry::WorkerReport {
+                panel: "p-1".to_owned(),
+                program: "Codex".to_owned(),
+                text: "the test passes".to_owned()
+            },
+        ],
+        "one row for the start, one bubble for the message and one text for the report"
+    );
+
+    // The first line of a task is cut, and a program name keeps no control
+    // character: both are text of a program or of the settings.
+    let mut long = Conversation::new();
+    let task = "t".repeat(crate::agent_bridge::MAX_WORKER_TASK_CHARS + 40);
+    long.worker_started("p-1", "Co\ndex", &task);
+    let Some(Entry::WorkerStarted {
+        task: shown, program, ..
+    }) = entries(&long).first().cloned()
+    else {
+        panic!("the row of the worker");
+    };
+    assert_eq!(shown.chars().count(), crate::agent_bridge::MAX_WORKER_TASK_CHARS);
+    assert_eq!(program, "Co dex", "a control character becomes a space");
+}
+
+#[test]
+fn a_request_of_a_worker_waits_for_the_person_and_moves_to_its_answer() {
+    let mut conversation = Conversation::new();
+    conversation.worker_ask("r-1", "Gemini", "Say hello\nand report");
+    assert_eq!(
+        conversation.open_worker_ask("r-1"),
+        Some(("Gemini".to_owned(), "Say hello".to_owned())),
+        "the row names the program and the first line of the task"
+    );
+    assert!(conversation.worker_ask_state("r-1", crate::agent_bridge::WorkerAskState::Started));
+    assert_eq!(
+        conversation.open_worker_ask("r-1"),
+        None,
+        "a row that the person answered waits for nobody"
+    );
+    assert_eq!(
+        entries(&conversation),
+        vec![Entry::WorkerAsk {
+            id: "r-1".to_owned(),
+            program: "Gemini".to_owned(),
+            task: "Say hello".to_owned(),
+            state: crate::agent_bridge::WorkerAskState::Started
+        }]
+    );
+    assert!(
+        !conversation.worker_ask_state("r-2", crate::agent_bridge::WorkerAskState::Declined),
+        "a request that this conversation does not hold changes nothing"
+    );
+}

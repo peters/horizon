@@ -59,6 +59,12 @@ pub struct OrchestratorConversationState {
     /// The name of the file of the program that named the session, such as
     /// `claude`. A session of another program is not resumed.
     pub program: String,
+    /// The programs that the chip `Workers` of this conversation holds: the names
+    /// of the presets that the person lets this orchestrator start as workers. A
+    /// new conversation holds none, and a record of an older build holds no field
+    /// and loads with an empty set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_workers: Vec<String>,
 }
 
 fn deserialize_workspace_layout<'de, D>(deserializer: D) -> std::result::Result<Option<WorkspaceLayout>, D::Error>
@@ -566,6 +572,7 @@ mod tests {
             orchestrator: Some(OrchestratorConversationState {
                 session_id: Some("session-1".to_owned()),
                 program: "claude".to_owned(),
+                allowed_workers: Vec::new(),
             }),
             ..workspace
         };
@@ -580,11 +587,40 @@ mod tests {
         let record = OrchestratorConversationState {
             session_id: None,
             program: "claude".to_owned(),
+            allowed_workers: Vec::new(),
         };
         let yaml = serde_yaml::to_string(&record).expect("the record has a stored form");
         assert!(!yaml.contains("session_id"), "no session is written: {yaml}");
         let loaded: OrchestratorConversationState = serde_yaml::from_str(&yaml).expect("the record loads");
         assert_eq!(loaded, record);
+    }
+
+    #[test]
+    fn the_workers_that_the_person_allowed_survive_the_file_and_an_old_record_holds_none() {
+        let record = OrchestratorConversationState {
+            session_id: None,
+            program: "claude".to_owned(),
+            allowed_workers: vec!["Codex".to_owned(), "Pi".to_owned()],
+        };
+        let yaml = serde_yaml::to_string(&record).expect("the record has a stored form");
+        assert!(
+            yaml.contains("allowed_workers"),
+            "the chip of the workers is written: {yaml}"
+        );
+        let loaded: OrchestratorConversationState = serde_yaml::from_str(&yaml).expect("the record loads");
+        assert_eq!(loaded.allowed_workers, record.allowed_workers);
+
+        // A record of a build that knew no workers holds no field, and it loads
+        // with no program that the orchestrator may start.
+        let older = "program: claude\n";
+        let loaded: OrchestratorConversationState = serde_yaml::from_str(older).expect("the older record loads");
+        assert_eq!(loaded.allowed_workers, Vec::<String>::new());
+        assert!(
+            !serde_yaml::to_string(&loaded)
+                .expect("the record")
+                .contains("allowed_workers"),
+            "a conversation without a program writes no field"
+        );
     }
 
     #[test]

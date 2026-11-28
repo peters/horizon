@@ -7,6 +7,7 @@ use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_preset;
 use horizon_browser_control::manifest::block_proposal;
 use horizon_browser_control::manifest::block_terminal;
+use horizon_browser_control::manifest::block_workers;
 
 use super::BrowserController;
 
@@ -44,6 +45,9 @@ impl BrowserController {
             return Ok(refusal);
         }
         if let Some(refusal) = refused_panel(&operation) {
+            return Ok(refusal);
+        }
+        if let Some(refusal) = refused_worker(&operation) {
             return Ok(refusal);
         }
         // A `next_click` holds its request open for the wait it asks for, so
@@ -98,7 +102,11 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::ServerLinkRequest { .. }
         | Operation::BrowserHostRequest { .. }
         | Operation::WorkItems
-        | Operation::WorkItemMessage { .. } => {
+        | Operation::WorkItemMessage { .. }
+        | Operation::WorkerStart { .. }
+        | Operation::Workers
+        | Operation::WorkerMessage { .. }
+        | Operation::WorkerReport { .. } => {
             return None;
         }
         Operation::WorkItemPropose { items } => {
@@ -201,6 +209,10 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         | Operation::WorkItems
         | Operation::WorkItemPropose { .. }
         | Operation::WorkItemMessage { .. }
+        | Operation::WorkerStart { .. }
+        | Operation::Workers
+        | Operation::WorkerMessage { .. }
+        | Operation::WorkerReport { .. }
         | Operation::MachineKeys => {
             return None;
         }
@@ -229,6 +241,22 @@ fn refused_panel(operation: &Operation) -> Option<Outcome> {
     block_preset::check_name(preset)
         .and_then(|_| block_preset::check_directory(directory))
         .and_then(|_| prompt.as_deref().map_or(Ok(""), block_preset::check_prompt))
+        .err()
+        .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
+}
+
+/// The task, the message and the report of one worker operation, checked before
+/// the queue holds them: each is text of a program that becomes one line of a
+/// terminal or one turn of a conversation, so a text outside its bound is refused
+/// at once and no request file is written.
+fn refused_worker(operation: &Operation) -> Option<Outcome> {
+    let checked = match operation {
+        Operation::WorkerStart { task, .. } => block_workers::check_task(task),
+        Operation::WorkerMessage { text, .. } => block_workers::check_message(text),
+        Operation::WorkerReport { text } => block_workers::check_report(text),
+        _ => return None,
+    };
+    checked
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }
@@ -267,6 +295,37 @@ mod tests {
             )))),
             "invalid_document",
             "a text that is no document is still refused"
+        );
+    }
+
+    #[test]
+    fn a_worker_text_outside_its_bound_is_refused_before_the_queue_holds_it() {
+        let start = |task: &str| Operation::WorkerStart {
+            program: "Codex".into(),
+            task: task.into(),
+        };
+        assert!(refused_worker(&start("fix it")).is_none());
+        assert_eq!(
+            code(refused_worker(&start(" "))),
+            "invalid_request",
+            "an empty task starts no worker"
+        );
+        let long = "t".repeat(block_workers::MAX_WORKER_TEXT_CHARS + 1);
+        assert_eq!(code(refused_worker(&start(&long))), "invalid_request");
+        assert_eq!(
+            code(refused_worker(&Operation::WorkerMessage {
+                worker: "panel".into(),
+                text: String::new(),
+            })),
+            "invalid_request"
+        );
+        assert_eq!(
+            code(refused_worker(&Operation::WorkerReport { text: long })),
+            "invalid_request"
+        );
+        assert!(
+            refused_worker(&Operation::Workers).is_none(),
+            "the read of the workers takes no text"
         );
     }
 }

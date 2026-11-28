@@ -1648,6 +1648,40 @@ hides it, whatever the setting says. No other value of the variable is a switch.
     `Not started` or `Replaced by a newer proposal`. A proposal that a restart
     loaded as open reads `Not started` and takes no press, because the program
     that proposed it is gone.
+- An entry of a worker that the orchestrator started is one reference row of the
+  form and the size of a card row, with the glyph of a card, the name of the
+  preset of that worker at 12.5 Medium `FG` on one line with an ellipsis, and the
+  word `worker` at the right end at 11 Regular `FG_DIM`. A pointer over the row
+  outlines it in `ACCENT` and shows the pointing hand, and a press brings the
+  panel of the worker into view. A row whose panel is gone has no fill, an
+  outline of `BORDER_SUBTLE`, its name in `FG_DIM` and `closed` at its right end,
+  and a press on it does nothing.
+- An entry of a message that the orchestrator sent to a worker is a bubble of the
+  person side, with the caption `to <program>` above it: 10.5 Regular `FG_DIM`,
+  right aligned with the right edge of the bubble, 2 points above it.
+- An entry of a report of a worker is a text of the agent with its bar, under the
+  caption `<program> reports`: 10.5 Regular `FG_DIM` at the left edge of the list,
+  2 points above the text.
+- An entry of a request for a worker that the chip of the programs does not hold is
+  one box, indented 13 points like a tool row, at the full width of the list minus
+  those 13 points. The box has radius 12, 12 points of padding, a fill of
+  `alpha(ACCENT, 18)` and a 1 px outline of `alpha(ACCENT, 115)`.
+  - The caption `The orchestrator wants to start a worker` at 11 Regular `FG_DIM`
+    stands at the top padding.
+  - 8 points under it stands the name of the program at 12.5 Semibold `FG` on one
+    line with an ellipsis, and under it the first line of the task at 11.5 Regular
+    `FG_SOFT` in at most 2 lines.
+  - 10 points under the task stand the three controls while the person did not
+    decide: `Start`, `Always for this work item` and `Not now`, of the size and the
+    form of the controls of a proposal. Each is 28 points high at radius 8 with 12
+    points of horizontal padding and a label at 12 Semibold, 8 points of air stand
+    between two of them, and they wrap to a second row when they do not fit.
+    `Start` has an `ACCENT` fill with its label in `BG`, and the other two have a
+    `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and their label in `FG`.
+  - A request that the person decided draws no control: 10 points under the task
+    stands one line at 11.5 Regular `FG_DIM`, which reads `Started`,
+    `Started; <program> is allowed for this work item` or `Not started`. A request
+    that a restart loaded as open reads `Not started` and takes no press.
 - A message of the person that the front desk passed carries the caption
   `via the front desk` above its bubble: 10.5 Regular `FG_DIM`, right aligned with
   the right edge of the bubble, 2 points above it.
@@ -1686,16 +1720,30 @@ hides it, whatever the setting says. No other value of the variable is a switch.
   the control sends it. A draft of white space only sends nothing. While the
   conversation is busy a press stops the program of that conversation; the field
   keeps the keys, and Enter then sends nothing.
-- The three read-only chips are under the field of a workspace, left aligned and
-  8 points apart. The front desk draws no chip and keeps no room for one.
-  They wrap to the next row when the dock is too narrow for them. A chip has
-  radius 8, a `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and a padding of
-  10 by 5 points. Its label line is 10.5 `FG_DIM` and its value line is 12.5 `FG`.
-  A chevron of 5 points in `FG_DIM` stands 6 points right of the value, because a
-  later part makes the chips a choice. The chips are read-only in this part, and
-  the hover text of each of them is `Choice comes later`. The rows are
-  `Orchestrator` / `Claude Code`, `Workers` / `not chosen` and `Place` / `this
-  computer`.
+- The three chips are under the field of a workspace, left aligned and 8 points
+  apart. The front desk draws no chip and keeps no room for one. They wrap to the
+  next row when the dock is too narrow for them. A chip has radius 8, a
+  `PANEL_BG_ALT` fill, a 1 px `BORDER_SUBTLE` outline and a padding of 10 by 5
+  points. Its label line is 10.5 `FG_DIM` and its value line is 12.5 `FG`. A
+  chevron of 5 points in `FG_DIM` stands 6 points right of the value. The rows are
+  `Orchestrator` / `Claude Code`, `Workers` / the programs of that conversation and
+  `Place` / `this computer`. `Orchestrator` and `Place` are read-only in this part,
+  and the hover text of each of them is `Choice comes later`.
+- The chip `Workers` is a control of the person. Its value reads `not chosen`
+  while the conversation holds no program, the name of the one program that it
+  holds, and `<N> programs` while it holds more than one. A pointer over the chip
+  shows the pointing hand, and its hover text is
+  `The programs that this orchestrator may start`. A press opens the menu of the
+  programs under the chip, in the form of the menu of a list with check marks of
+  the sidebar: 160 points wide at least, one row for each agent preset of the
+  settings whose program this computer has, each row at 12 `FG_SOFT` with the
+  check mark `✓` and a space in front of a program that the chip holds. A press on
+  a row adds that program to the chip or removes it, and the menu stays open, so
+  the person chooses two programs with two presses. The escape key and a press
+  outside the menu and the chip close it. The menu reads the programs of the
+  settings and no file: the search of the programs of a run reads the folders of
+  the `PATH` on the coordination worker one time, and it is the search that the
+  group `Agents` of the sidebar uses.
 - The start and the stop of a bridge run on the worker of the dock, a thread named
   `orchestrator-dock`, and never on the frame. The worker is separate from the
   coordination worker of the browser jobs, so a stop never delays a browser job.

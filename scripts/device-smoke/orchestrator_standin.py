@@ -32,6 +32,15 @@ the press of the person waits in the queue of the card until a later turn holds
 the wake line that Horizon sends to the orchestrator of the workspace. That turn
 reads the one press with a short wait, and prints `Woken, you pressed <id>`.
 
+A turn whose text holds a worker asks for one: `start a worker` starts the first
+agent preset that `presets` answers with the worker operation of `block_panel`,
+`started the worker` answers the line that Horizon sends after a press, and a
+line that holds `Report of your worker` answers with the text after its first
+line. The same file has a second mode for a WORKER panel: `--worker` prints that
+it reports and calls `worker_report` with one text, so a procedure reads the
+report of a worker without a real agent program. The fixture opens that panel
+with `--panels`, whose entry names this file and `--worker`.
+
 A turn whose text holds `question` draws a card titled `Cold start` that holds one
 callout with two answers and keeps one `next_click` open for it. A press of the
 person updates that card to a finished document without a callout, and the turn
@@ -109,6 +118,26 @@ PROPOSAL_ITEMS = (
 PROPOSED_TEXT = 'Two work items are ready to start.'
 # The answer of the turn that Horizon sends after the person starts them.
 STARTED_TEXT = 'Both are started. I tell you when one needs you.'
+# The first words of the turn that the orchestrator sends to a worker, and of the
+# turn that Horizon sends back to the orchestrator when that worker reports. The
+# second one is the line of `block_requests/workers.rs` of the window.
+REPORT_LINE_PREFIX = 'Report of your worker '
+# The task of the worker that a `start a worker` turn asks for, and the words that
+# the answer of the request and the words of the press hold.
+WORKER_TASK = 'Say hello and report.'
+WORKER_ASKED_TEXT = 'I asked for a worker.'
+WORKER_STARTED_TEXT = 'The worker runs.'
+WORKER_REPORT_PREFIX = 'I read the report: '
+# The text that the worker mode of this file reports, and the line that it prints
+# before it.
+WORKER_MODE_ARGUMENT = '--worker'
+WORKER_REPORT_TEXT = 'hello from the worker'
+WORKER_MODE_LINE = 'The worker reports.'
+# The kinds of preset that start an agent program, as the settings store them. A
+# preset of one of these kinds is a worker.
+AGENT_KINDS = ('claude', 'codex', 'pi', 'gemini', 'open_code', 'kilo_code', 'grok')
+# How long the worker mode of this file waits for the report to be answered.
+WORKER_REPORT_TIMEOUT_SECONDS = 60.0
 # The first words of the one line that Horizon sends to an orchestrator when the
 # person presses a button of its card and no `next_click` waits. It is a part of
 # `WAKE_LINE` of `crates/horizon-core/src/block_panel/wake.rs`, and a test of this
@@ -441,6 +470,63 @@ def work_item_tool(command, operation, timeout):
         client.close()
 
 
+def worker_preset(command):
+    """The first agent preset that `presets` answers, with the kind of a program.
+
+    A preset of an agent kind starts an agent program, which is a worker. The
+    stand-in reads the list, so the name is the name of the person's settings and
+    not a name that this file keeps.
+    """
+    answer = work_item_tool(command, {'operation': 'presets'}, CARD_TIMEOUT_SECONDS)
+    for preset in answer.get('presets') or []:
+        if isinstance(preset, dict) and isinstance(preset.get('name'), str) and preset.get('kind') in AGENT_KINDS:
+            return preset['name']
+    return ''
+
+
+def worker_turn(session, number, words):
+    """One turn of an orchestrator about a worker: the start, the line of a press,
+    or the report of a worker that came back.
+
+    The start asks for the first agent preset of the settings with one task. A
+    program that the chip `Workers` does not hold starts nothing, and Horizon
+    answers that the person decides: the stand-in says which of the two answers
+    it read.
+    """
+    if words.startswith(REPORT_LINE_PREFIX):
+        # The first line names the program and the panel of the worker, and the
+        # report is under it.
+        _, _, report = words.partition('\n')
+        text(session, f'msg-{number}-report', WORKER_REPORT_PREFIX + report.strip())
+        return True
+    if 'started the worker' in words:
+        text(session, f'msg-{number}-started-worker', WORKER_STARTED_TEXT)
+        return True
+    if 'start a worker' not in words:
+        return False
+    command = mcp_command()
+    if not command:
+        text(session, f'msg-{number}-worker',
+             f'The stand-in starts no worker: {EXECUTABLE_ENV} names no program of Horizon.')
+        return True
+    try:
+        program = worker_preset(command)
+        if not program:
+            text(session, f'msg-{number}-worker', 'The stand-in starts no worker: the settings hold no agent preset.')
+            return True
+        answer = work_item_tool(command, {'operation': 'worker_start', 'program': program,
+                                          'task': WORKER_TASK}, CARD_TIMEOUT_SECONDS)
+    except Fatal as refusal:
+        text(session, f'msg-{number}-worker', f'The stand-in started no worker: {one_line(str(refusal))}')
+        return True
+    worker = answer.get('worker')
+    if isinstance(worker, str) and worker:
+        text(session, f'msg-{number}-worker', f'{WORKER_ASKED_TEXT} It runs as {program} in the panel {worker}.')
+    else:
+        text(session, f'msg-{number}-worker', WORKER_ASKED_TEXT)
+    return True
+
+
 def front_desk_turn(session, number, words):
     """One turn of the front desk: the work items that the person may start, the
     line that names their press, or the state of the work items.
@@ -508,6 +594,8 @@ def answer(session, number, words):
         # of the person: this turn reads the one press that woke the program and
         # draws nothing and calls nothing else.
         wake_turn(session, number)
+    elif worker_turn(session, number, words):
+        pass
     else:
         if TURN_WORDS['question'] in words:
             question_turn(session, number)
@@ -523,7 +611,41 @@ def answer(session, number, words):
     result(session, f'You said: {words}', int((time.monotonic() - started) * 1000) + DURATION_MS)
 
 
+def worker_main():
+    """The mode of a WORKER panel: it reads its task, reports one text and ends.
+
+    The fixture opens this file as a panel of an agent kind with `--worker`, and
+    Horizon types the task of the worker into it as its first prompt line. The
+    panel then reports that one text through the `worker_report` operation of
+    this Horizon, so a procedure reads the report of a worker without a real agent
+    program. The line before the report is text of the terminal, not a line of the
+    agent format.
+    """
+    sys.stdout.write(WORKER_MODE_LINE + '\n')
+    sys.stdout.flush()
+    task = sys.stdin.readline().strip()
+    sys.stdout.write(f'The worker read: {task}\n')
+    sys.stdout.flush()
+    command = mcp_command()
+    if not command:
+        sys.stdout.write(f'The worker reports nothing: {EXECUTABLE_ENV} names no program of Horizon.\n')
+        sys.stdout.flush()
+        return 0
+    try:
+        answer_of_report = work_item_tool(
+            command, {'operation': 'worker_report', 'text': WORKER_REPORT_TEXT}, WORKER_REPORT_TIMEOUT_SECONDS)
+    except Fatal as refusal:
+        sys.stdout.write(f'The worker reported nothing: {one_line(str(refusal))}\n')
+        sys.stdout.flush()
+        return 0
+    sys.stdout.write(f'The worker reported: {answer_of_report.get("status")}\n')
+    sys.stdout.flush()
+    return 0
+
+
 def main():
+    if WORKER_MODE_ARGUMENT in sys.argv[1:]:
+        return worker_main()
     session = str(uuid.uuid4())
     number = 0
     for request in sys.stdin:

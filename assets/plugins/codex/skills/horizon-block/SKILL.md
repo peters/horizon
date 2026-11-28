@@ -22,7 +22,8 @@ workspace, which [has no panel](#when-you-are-the-orchestrator-of-a-workspace).
 `machine_set`, `machine_delete`, `machines`, `secret_names`, `machine_key`,
 `machine_keys`, `delete_machine_key`, `server_status`, `browser_host_status`,
 `server_link_request`, `browser_host_request`, `work_items`,
-`work_item_propose` and `work_item_message`.
+`work_item_propose`, `work_item_message`, `worker_start`, `workers`,
+`worker_message` and `worker_report`.
 
 The three work item operations belong to the front desk, the conversation of the
 dock that belongs to no workspace: `work_items` reads the state of the work
@@ -31,6 +32,13 @@ person, and `work_item_message` passes one message of the person to one work
 item. Every other caller gets `caller_unavailable` for them, and the front desk
 gets `caller_unavailable` for every other operation of this tool. The skill
 `horizon-front-desk` holds the rules of that caller.
+
+The four worker operations belong to the workers of one orchestrator:
+`worker_start` starts another agent program as a worker, `workers` reads the
+workers of this orchestrator, `worker_message` types a message into one of them,
+and `worker_report` is the operation of the worker itself. [The workers of an
+orchestrator](#the-workers-of-an-orchestrator) states the rules, and [Report as a
+worker](#report-as-a-worker) states the one thing that a worker does.
 
 ## When you are the orchestrator of a workspace
 
@@ -63,6 +71,103 @@ program ends, the same actor answers `caller_unavailable`.
   caller. `machine_set`, `machine_delete`, `machines`, `machine_key`,
   `machine_keys`, `delete_machine_key`, `presets`, `secret_names`,
   `server_status` and `browser_host_status` work as they do for an agent panel.
+
+### The workers of an orchestrator
+
+A worker is another agent program as a panel of your workspace. Each program signs
+in with its own account, so a worker runs on another subscription than yours.
+Horizon starts a worker from a preset of the person's settings, and the person
+chooses which programs you may start: the chip `Workers` of the composer holds
+them.
+
+```json
+{"operation": "worker_start", "program": "<a preset of the settings>",
+ "task": "Fix issue 1987 in this folder. Done means the test of the redirect passes."}
+```
+
+- `program` is the name or the alias of a preset of an agent kind, exactly as
+  `open_panel` takes it. Horizon takes the command, the arguments and the kind from
+  that preset, so you name no command, no argument and no folder. The folder of a
+  worker is the folder of the workspace. A name that this Horizon does not keep is
+  `unknown_preset`.
+- `task` is one to 4 000 characters. Horizon types it into the new panel as one
+  line, with each control character replaced by a space, and it adds the sentence
+  that tells the worker to report with `worker_report`. The worker therefore knows
+  how to answer you.
+- A program that the chip holds starts at once. The answer is `worker_started` with
+  the `worker` id of its panel and the `program`.
+- A program that the chip does not hold starts nothing. The answer is
+  `worker_asked`: the person reads one row with `Start`, `Always for this work
+  item` and `Not now`, and you get one line that says what they pressed. `Always
+  for this work item` also adds the program to the chip.
+- At most 4 workers of one orchestrator run at the same time. A fifth start is
+  `too_many_workers`, and the person closes a panel before one more starts.
+
+`workers` answers the workers of this orchestrator, in the order of their start:
+
+```json
+{"operation": "workers"}
+```
+
+The answer holds `{worker, program, kind, state, last_report?}` for each of them.
+`worker` is the local id of the panel of the worker and the value that
+`worker_message` takes, `kind` is the kind of its program, `state` is `working` or
+`idle`, and `last_report` is the last text that the worker reported, cut to 400
+characters. It is a read: it reads no file and no process.
+
+`worker_message` types one message into the terminal of one worker, as the first
+prompt line of that worker was typed:
+
+```json
+{"operation": "worker_message", "worker": "<a worker of the answer of workers>",
+ "text": "Start with the redirect; the test is in tests/redirect.rs."}
+```
+
+A worker that this orchestrator did not start is `not_found`, and a second message
+to the same worker within ten seconds is `too_soon`. One message to one worker
+every ten seconds is the bound.
+
+When to start a worker, and when to do the work yourself:
+
+- Start a worker for each independent part of the task, when the parts do not wait
+  for each other. Two workers on one file or one branch collide, and the person
+  reads two panels that disagree.
+- Do the work yourself when the task is one thing that you can finish in one turn,
+  and when it needs the cards, the pages or the terminals that only your own
+  workspace holds.
+- Give each worker one task that says what done means, in the words of the person:
+  `Done means the test of the redirect passes` is a task, and `Fix the redirect` is
+  a hope.
+- Read `workers` before you start another worker of the same program: the panel of
+  a worker that ended stays, and its last report tells you what it did.
+- Answer a report. A report arrives as one turn of your conversation with the first
+  line `Report of your worker <program> (<panel id>):`. Read it, and then either
+  message the worker with `worker_message` or tell the person what the worker did.
+- Never ask a worker for a secret: no token, no password and no private key. The
+  task, each message and each report are text that the person can read, and one
+  program passes them to another.
+
+### Report as a worker
+
+You are a worker when the person, or an orchestrator, started your panel as one:
+your first prompt line holds the task and the sentence that names the operation
+`worker_report`. Then:
+
+- Report once, when the task is done or when you cannot continue, with one text:
+  what you did, what you did not do, and what the person must read.
+- `worker_report` carries one text of 1 to 4 000 characters. It goes to the
+  orchestrator that started you, and to no other program. The report is text: it
+  becomes one turn of that conversation, and the person reads it in the
+  conversation and in your panel.
+- The report waits while the orchestrator runs a turn, and at most 8 reports wait.
+  A ninth report is `busy`: send it again when the answer of the next turn is in.
+  One report of one worker every ten seconds is the bound.
+- A panel that the person opened is no worker: `worker_report` answers
+  `caller_unavailable` there.
+
+```json
+{"operation": "worker_report", "text": "The redirect is fixed and the test passes. I did not touch the login page."}
+```
 
 ## One card for one job
 

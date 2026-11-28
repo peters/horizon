@@ -44,7 +44,8 @@ mod worker;
 
 pub use codec::{ClaudeCodec, LineCodec, LineShape};
 pub use conversation::{
-    Conversation, ConversationSnapshot, Entry, LimitNote, Link, ProposalItem, ProposalState, ToolState,
+    Conversation, ConversationSnapshot, Entry, LimitNote, Link, MAX_WORKER_PROGRAM_CHARS, MAX_WORKER_TASK_CHARS,
+    ProposalItem, ProposalState, ToolState, WorkerAskState,
 };
 pub use event::{BridgeEvent, DropReason};
 pub use program::{

@@ -426,6 +426,27 @@ mod tests {
                 work_item: "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d".to_owned(),
                 name: "Fix login redirect".to_owned(),
             },
+            Entry::WorkerStarted {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                task: "Fix the redirect".to_owned(),
+            },
+            Entry::WorkerMessage {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                text: "start with the test".to_owned(),
+            },
+            Entry::WorkerReport {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                text: "the redirect is fixed and the test passes".to_owned(),
+            },
+            Entry::WorkerAsk {
+                id: "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d".to_owned(),
+                program: "Pi".to_owned(),
+                task: "Say hello and report".to_owned(),
+                state: crate::agent_bridge::WorkerAskState::Always,
+            },
         ]
     }
 
@@ -456,6 +477,45 @@ mod tests {
         let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
         assert_eq!(loaded, rows, "the proposal, its rows and the caption survive a restart");
         assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn the_entries_of_the_workers_survive_the_file() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let path = path(folder.path());
+        let rows = vec![
+            Entry::WorkerStarted {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                task: "Fix the redirect".to_owned(),
+            },
+            Entry::WorkerMessage {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                text: "start with the test".to_owned(),
+            },
+            Entry::WorkerReport {
+                panel: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f".to_owned(),
+                program: "Codex".to_owned(),
+                text: "the redirect is fixed".to_owned(),
+            },
+            Entry::WorkerAsk {
+                id: "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d".to_owned(),
+                program: "Pi".to_owned(),
+                task: "Say hello and report".to_owned(),
+                state: crate::agent_bridge::WorkerAskState::Declined,
+            },
+        ];
+        append(&path, &rows).expect("the entries are written");
+
+        let (loaded, dropped) = load(&path, MAX_ENTRIES).expect("the entries are read");
+
+        assert_eq!(loaded, rows, "the rows of the workers survive a restart");
+        assert_eq!(dropped, 0);
+        let text = std::fs::read_to_string(&path).expect("the file");
+        for kind in ["worker_started", "worker_message", "worker_report", "worker_ask"] {
+            assert!(text.contains(kind), "the stored line names its kind {kind}: {text}");
+        }
     }
 
     #[test]

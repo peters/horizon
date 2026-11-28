@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-control/src/manifest/block_proposal.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/app/sidebar/inbox.rs,crates/horizon-ui/src/app/sidebar/inbox/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-control/src/manifest/block_proposal.rs,crates/horizon-browser-control/src/manifest/block_workers.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/app/sidebar/inbox.rs,crates/horizon-ui/src/app/sidebar/inbox/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -611,6 +611,66 @@ faithfully. One program reads the words of the person and writes the items, and
 it can read the text of another work item and pass a message to it. The caption
 says that the front desk passed the message; it does not say that the message is
 true.
+
+## An orchestrator starts workers, and a worker reports to it
+
+An orchestrator of a workspace reaches four more operations of `block_panel`:
+`worker_start`, `workers`, `worker_message`, and, from the panel of a worker,
+`worker_report`. A worker is another agent program as a panel of the workspace of
+the orchestrator. Each program signs in with its own account, so the orchestration
+spans several subscriptions of the person. The design is
+[the workers of an orchestrator](../../architecture/orchestrator-workers.md).
+
+**What is untrusted.** The task of a start, each message to a worker and each
+report of a worker are text of a program. The name of a program is a name of the
+settings of the person.
+
+**What the change guarantees.**
+
+- The host checks each text before the request reaches the dock: one to 4 000
+  characters, and no empty text. A refusal names the field and the bound, and no
+  request file is written for it.
+- `worker_start` names a preset of the settings, by its name or alias, and only a
+  preset of an agent kind is a worker. Horizon takes the command, the arguments
+  and the kind from that preset, and the folder of the worker is the folder of the
+  workspace. The request holds no command, no argument and no folder, so no field
+  of it becomes a program, an option or a path.
+- `worker_start`, `workers` and `worker_message` accept the actor of an
+  orchestrator of this board alone, and only while the dock runs the program of
+  that workspace. The front desk, a session of a machine and a panel that the
+  person opened answer `caller_unavailable` for all four.
+- `worker_report` accepts the actor of an agent panel that this Horizon started as
+  a worker of an orchestrator whose program runs now. The report reaches that
+  orchestrator and no other program; a panel that the person opened is no worker
+  and its report is `caller_unavailable`. A worker of another orchestrator is
+  `not_found` to `worker_message`, so one orchestrator reads and messages only its
+  own workers.
+- Horizon types the task and each message into the terminal of a worker as one
+  line, with each control character replaced by a space, through the one path that
+  types the prompt line of a panel that an agent opened. No text of them is a
+  command line, an argument or an environment.
+- A report becomes one turn of the program of the orchestrator, whose first line
+  is Horizon's own: `Report of your worker <program> (<panel id>):`. The text of
+  the report follows it as text. At most 8 reports wait for the end of a turn and
+  a ninth is `busy`.
+- The chip `Workers` of the composer holds the programs that the person lets this
+  orchestrator start, and a program outside it starts nothing. The person changes
+  the chip with a press, and the set is stored with the record of the conversation
+  of the workspace. A second request of a program that the person did not start is
+  `not_allowed`.
+- The panel of a worker is a panel of the workspace: the person sees it, types in
+  it and closes it, and its titlebar carries the mark `worker of the orchestrator`,
+  which is text of Horizon.
+- The records of the workers are state of the run, and the answer of `workers`
+  holds the local id of a panel, the name of a preset, the kind of a program, its
+  state and the last report cut to 400 characters. It reads no file and no
+  process.
+
+**What it does not guarantee.** That a worker does what its task says, and that a
+report is true. Horizon proves that the line reached the terminal of a panel of a
+preset that the person saved, and that the report reached the program of the
+orchestrator. One program reads the text of another, which is the purpose of the
+feature: the person must not pass a secret through a task, a message or a report.
 
 ## An agent reads names, and no value
 

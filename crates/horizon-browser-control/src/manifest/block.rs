@@ -402,6 +402,49 @@ pub enum Operation {
         /// The message of the person, 1 byte to the bound of one message.
         text: String,
     },
+    /// Start one worker of this orchestrator: an agent panel of this workspace,
+    /// opened from a preset of the person's settings with one task as its first
+    /// prompt line. Horizon takes the command, the arguments and the kind from the
+    /// preset, and the folder of the worker is the folder of the workspace, so this
+    /// request names no command, no argument and no folder. Only a preset of an
+    /// agent kind is a worker. A program that the chip `Workers` of the person does
+    /// not hold starts nothing and answers that the person decides; a fifth worker
+    /// at the same time is `too_many_workers`.
+    WorkerStart {
+        /// The name or the alias of a preset of the settings, exactly, as
+        /// `open_panel` takes it. A name that this Horizon does not keep is
+        /// `unknown_preset`, and the answer lists the names of the presets.
+        program: String,
+        /// What the worker must do, 1 to 4 000 characters. Horizon types it into
+        /// the new panel as one line, followed by the sentence that tells the
+        /// worker to report with `worker_report`.
+        task: String,
+    },
+    /// The workers of this orchestrator: the id, the program, the kind, the state
+    /// and the last report of each. It is a read of the state that a frame already
+    /// holds: no file and no process.
+    Workers,
+    /// Type one message into the terminal of one worker of this orchestrator, as
+    /// the first prompt line of that worker is typed. A worker that this
+    /// orchestrator did not start is `not_found`, and a second message to the same
+    /// worker within ten seconds is `too_soon`.
+    WorkerMessage {
+        /// The local id of the panel of the worker, as `worker_start` and `workers`
+        /// report it.
+        worker: String,
+        /// The message of the orchestrator, 1 to 4 000 characters.
+        text: String,
+    },
+    /// Report from a worker to the orchestrator that started it: one turn of that
+    /// program, with the words `Report of your worker` in front of the text. Only
+    /// an agent panel that Horizon started as a worker of this orchestrator reaches
+    /// it, and the report goes to that orchestrator alone. A report that arrives
+    /// while the orchestrator runs a turn waits for the end of that turn, and a
+    /// ninth waiting report is `busy`.
+    WorkerReport {
+        /// What the worker did and did not do, 1 to 4 000 characters.
+        text: String,
+    },
 }
 
 /// One item of one `work_item_propose` request.
@@ -847,6 +890,39 @@ pub enum Outcome {
     /// one work item.
     WorkItemMessage {
         work_item: String,
+    },
+    /// One worker that Horizon started from a preset of the settings, with the
+    /// local id of its panel.
+    WorkerStarted {
+        worker: String,
+        program: String,
+    },
+    /// One request for a worker of a program that the chip `Workers` of the person
+    /// does not hold. Nothing started: the conversation of the orchestrator shows
+    /// one row that the person decides, and one line follows the press.
+    WorkerAsked {
+        request: String,
+        program: String,
+        /// The words of Horizon that the program reads: the person decides, and one
+        /// line follows when they do.
+        text: String,
+    },
+    /// The workers of this orchestrator, in the order of their start. An entry is
+    /// the local id of the panel of the worker, the name of its preset, the kind of
+    /// its program, its state, and its last report.
+    Workers {
+        workers: Vec<super::block_workers::WorkerSummary>,
+    },
+    /// One message that Horizon typed into the terminal of one worker.
+    WorkerMessage {
+        worker: String,
+        program: String,
+    },
+    /// One report of a worker that Horizon passed to the orchestrator of that
+    /// worker.
+    WorkerReported {
+        worker: String,
+        program: String,
     },
     Failed {
         code: String,
@@ -1329,6 +1405,116 @@ mod tests {
     }
 
     #[test]
+    fn the_four_worker_operations_read_as_the_operation_that_a_caller_sends() {
+        let start = serde_json::json!({
+            "operation": "worker_start",
+            "program": "Codex",
+            "task": "Fix the redirect. Done means the test passes."
+        });
+        let Operation::WorkerStart { program, task } = serde_json::from_value::<BlockPanelInput>(start)
+            .expect("the start operation")
+            .into_operation()
+        else {
+            panic!("the start operation");
+        };
+        assert_eq!(program, "Codex");
+        assert_eq!(task, "Fix the redirect. Done means the test passes.");
+        super::super::block_workers::check_task(&task).expect("the task of this start passes");
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({
+                "operation": "worker_start", "program": "Codex", "task": "do it", "directory": "/tmp"
+            }))
+            .is_err(),
+            "a worker_start takes no folder and no command"
+        );
+
+        // The fields of the three other operations are flat text alone, so a
+        // program that sends every value as a string reaches all of them.
+        let message = serde_json::json!({"operation": "worker_message", "worker": "panel-1", "text": "next"});
+        let Operation::WorkerMessage { worker, text } = serde_json::from_value::<BlockPanelInput>(message)
+            .expect("the message operation")
+            .into_operation()
+        else {
+            panic!("the message operation");
+        };
+        assert_eq!((worker.as_str(), text.as_str()), ("panel-1", "next"));
+        let report = serde_json::json!({"operation": "worker_report", "text": "done"});
+        let Operation::WorkerReport { text } = serde_json::from_value::<BlockPanelInput>(report)
+            .expect("the report operation")
+            .into_operation()
+        else {
+            panic!("the report operation");
+        };
+        assert_eq!(text, "done");
+        let read = serde_json::from_value::<BlockPanelInput>(serde_json::json!({"operation": "workers"}))
+            .expect("the read operation")
+            .into_operation();
+        assert_eq!(read, Operation::Workers);
+        assert!(!read.is_card(), "the workers of an orchestrator are no card operation");
+
+        let schema = serde_json::to_string(&schemars::schema_for!(BlockPanelInput)).expect("schema");
+        for operation in ["worker_start", "workers", "worker_message", "worker_report"] {
+            assert!(schema.contains(operation), "the schema describes {operation}");
+        }
+        let summary = serde_json::to_string(&schemars::schema_for!(super::super::block_workers::WorkerSummary))
+            .expect("the schema of one worker");
+        assert!(
+            summary.contains("last_report"),
+            "the schema describes one worker: {summary}"
+        );
+    }
+
+    #[test]
+    fn the_answers_of_the_worker_operations_name_their_fields() {
+        let started = serde_json::to_value(Outcome::WorkerStarted {
+            worker: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+            program: "Codex".into(),
+        })
+        .expect("serialize");
+        assert_eq!(started["status"], serde_json::json!("worker_started"));
+        assert_eq!(started["program"], serde_json::json!("Codex"));
+
+        let asked = serde_json::to_value(Outcome::WorkerAsked {
+            request: "3f7c1d9e".into(),
+            program: "Gemini".into(),
+            text: "The person decides. You get one message when they do.".into(),
+        })
+        .expect("serialize");
+        assert_eq!(asked["status"], serde_json::json!("worker_asked"));
+        assert_eq!(asked["request"], serde_json::json!("3f7c1d9e"));
+
+        let workers = serde_json::to_value(Outcome::Workers {
+            workers: vec![super::super::block_workers::WorkerSummary {
+                worker: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+                program: "Codex".into(),
+                kind: "codex".into(),
+                state: "working".into(),
+                last_report: Some("the test passes".into()),
+            }],
+        })
+        .expect("serialize");
+        assert_eq!(workers["status"], serde_json::json!("workers"));
+        assert_eq!(workers["workers"][0]["state"], serde_json::json!("working"));
+        assert_eq!(
+            workers["workers"][0]["last_report"],
+            serde_json::json!("the test passes")
+        );
+
+        let sent = serde_json::to_value(Outcome::WorkerMessage {
+            worker: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+            program: "Codex".into(),
+        })
+        .expect("serialize");
+        assert_eq!(sent["status"], serde_json::json!("worker_message"));
+        let reported = serde_json::to_value(Outcome::WorkerReported {
+            worker: "8f14e45f-ceea-4a67-9f0b-3a1f2b3c4d5e".into(),
+            program: "Codex".into(),
+        })
+        .expect("serialize");
+        assert_eq!(reported["status"], serde_json::json!("worker_reported"));
+    }
+
+    #[test]
     fn a_closed_card_names_whether_its_owner_closed_it_and_which_panel_did() {
         let owned = serde_json::to_value(Outcome::Closed {
             panel_id: "card".into(),
@@ -1502,6 +1688,10 @@ mod tests {
                 Operation::WorkItems => "work_items",
                 Operation::WorkItemPropose { .. } => "work_item_propose",
                 Operation::WorkItemMessage { .. } => "work_item_message",
+                Operation::WorkerStart { .. } => "worker_start",
+                Operation::Workers => "workers",
+                Operation::WorkerMessage { .. } => "worker_message",
+                Operation::WorkerReport { .. } => "worker_report",
                 Operation::MachineKeys => "machine_keys",
                 Operation::DeleteMachineKey { .. } => "delete_machine_key",
                 Operation::ServerLinkRequest { .. } => "server_link_request",

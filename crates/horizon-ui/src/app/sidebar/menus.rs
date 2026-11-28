@@ -20,6 +20,32 @@ enum CloseAllChoice {
     AskFirst,
 }
 
+/// The check mark of one row of a menu of a list of choices.
+pub(in crate::app) const CHECK_MARK: &str = "\u{2713}";
+
+/// One row of a menu of a list with check marks: the check mark of the current
+/// entry and its label, in the plain style of a menu row. It answers whether the
+/// person pressed it. A menu of programs that the person chooses two of takes this
+/// one form.
+pub(in crate::app) fn checked_row(ui: &mut egui::Ui, label: &str, current: bool, gone: bool) -> bool {
+    // The check mark is Horizon's character, and a menu is open only while the
+    // person reads it, so the line is made then.
+    let text = if current {
+        format!("{CHECK_MARK} {label}")
+    } else {
+        label.to_owned()
+    };
+    let color = if gone { theme::FG_DIM() } else { theme::FG_SOFT() };
+    let mut row = ui.add_enabled(
+        !gone,
+        Button::new(egui::RichText::new(text).size(12.0).color(color)).frame(false),
+    );
+    if gone {
+        row = row.on_disabled_hover_text("This machine is not in Horizon's machine list anymore.");
+    }
+    row.clicked()
+}
+
 /// The Place section of a workspace menu: the check mark of the current place,
 /// the machines of the list, and the reason of a machine that is gone. Returns
 /// the place the person chose.
@@ -28,22 +54,7 @@ fn show_place_menu(ui: &mut egui::Ui, entries: &[PlaceEntry]) -> Option<horizon_
         .on_hover_text("A new terminal of this workspace opens there. The panels that are open stay where they are.");
     let mut chosen = None;
     for entry in entries {
-        // The check mark is Horizon's character, and a menu is open only while
-        // the person reads it, so the line is made then.
-        let label = if entry.current {
-            format!("\u{2713} {}", entry.label)
-        } else {
-            entry.label.clone()
-        };
-        let color = if entry.gone { theme::FG_DIM() } else { theme::FG_SOFT() };
-        let mut row = ui.add_enabled(
-            !entry.gone,
-            Button::new(egui::RichText::new(label).size(12.0).color(color)).frame(false),
-        );
-        if entry.gone {
-            row = row.on_disabled_hover_text("This machine is not in Horizon's machine list anymore.");
-        }
-        if row.clicked() {
+        if checked_row(ui, &entry.label, entry.current, entry.gone) {
             chosen = Some(entry.place.clone());
         }
     }

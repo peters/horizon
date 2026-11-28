@@ -46,6 +46,7 @@ pub mod block_machines;
 pub mod block_preset;
 pub mod block_proposal;
 pub mod block_terminal;
+pub mod block_workers;
 mod capture;
 mod close;
 mod create;

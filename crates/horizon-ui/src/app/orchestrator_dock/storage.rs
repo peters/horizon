@@ -156,7 +156,11 @@ fn settled(entry: &Entry, busy: bool) -> bool {
         | Entry::Notice { .. }
         | Entry::Card { .. }
         | Entry::Proposal { .. }
-        | Entry::WorkItem { .. } => true,
+        | Entry::WorkItem { .. }
+        | Entry::WorkerStarted { .. }
+        | Entry::WorkerMessage { .. }
+        | Entry::WorkerReport { .. }
+        | Entry::WorkerAsk { .. } => true,
         Entry::Tool { state, .. } => *state != ToolState::Running,
         Entry::Agent { .. } => !busy,
     }
@@ -227,6 +231,9 @@ impl OrchestratorDock {
                 continue;
             }
             let session = super::session::Session::restored(record.session_id, &record.program, &program);
+            // The chip of the workers is the choice of the person, so the record of
+            // the conversation brings it back with the session.
+            self.set_workers_allowed(&local_id, record.allowed_workers);
             self.sessions.insert(local_id.clone(), session);
             let loaded_id = local_id.clone();
             let handed = self.worker.then(
@@ -278,7 +285,8 @@ impl OrchestratorDock {
         }
         let mut wanted: Vec<(String, Option<OrchestratorConversationState>)> = Vec::new();
         for (local_id, session) in &self.sessions {
-            wanted.push((local_id.clone(), session.record(program)));
+            let allowed = self.workers_allowed(local_id).to_vec();
+            wanted.push((local_id.clone(), session.record(program, &allowed)));
         }
         let mut changed = false;
         for (local_id, record) in wanted {

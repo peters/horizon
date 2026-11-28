@@ -117,11 +117,16 @@ const CHIP_CHEVRON_STROKE: f32 = 1.0;
 const CHIP_HOVER: &str = "Choice comes later";
 /// The air between two chips, and between two rows of them.
 const CHIP_GAP: f32 = 8.0;
-const CHIPS: [(&str, &str); 3] = [
-    ("Orchestrator", "Claude Code"),
-    ("Workers", "not chosen"),
-    ("Place", "this computer"),
-];
+/// The label of each chip, in order. The value of the chip `Workers` is the value
+/// of the conversation, so it comes from [`super::workers_menu::WorkersChip`].
+const CHIP_LABELS: [&str; 3] = ["Orchestrator", "Workers", "Place"];
+/// The values of the two chips that this part keeps.
+const CHIP_ORCHESTRATOR: &str = "Claude Code";
+const CHIP_PLACE: &str = "this computer";
+/// The index of the chip that the person chooses the workers with.
+const WORKERS_CHIP: usize = 1;
+/// The id of that chip, which a test names to read whether it holds the pointer.
+pub(super) const WORKERS_CHIP_ID: &str = "orchestrator_dock_chip_workers";
 
 /// What the person asked for with the field and its control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,11 +149,17 @@ pub(in crate::app) struct Parts {
     pub(super) chips: Rect,
 }
 
+/// The values of the three chips of one form, with the value of the chip of the
+/// workers of this conversation.
+fn chip_values(workers: &str) -> [&str; 3] {
+    [CHIP_ORCHESTRATOR, workers, CHIP_PLACE]
+}
+
 /// The room under the field that the chips of `form` take, with the air above
 /// them, or nothing for a form without chips.
-fn chips_room(ui: &Ui, form: Form, inner_width: f32) -> f32 {
+fn chips_room(ui: &Ui, form: Form, inner_width: f32, workers: &str) -> f32 {
     if form.chips {
-        ROW_GAP + chips_height(ui, inner_width)
+        ROW_GAP + chips_height(ui, inner_width, workers)
     } else {
         0.0
     }
@@ -158,12 +169,13 @@ fn chips_room(ui: &Ui, form: Form, inner_width: f32) -> f32 {
 /// the rows of the draft and the rows of the chips of `form`. A dock that is
 /// shorter than that gives the composer the room that it has, so no part leaves
 /// the dock.
-pub(super) fn parts(ui: &Ui, content: Rect, draft: &str, form: Form) -> Parts {
+pub(super) fn parts(ui: &Ui, content: Rect, draft: &str, form: Form, workers: &str) -> Parts {
     let inner_width = (content.width() - 2.0 * PADDING_X).max(0.0);
     let field_width = inner_width.max(1.0);
     let field_height = field_height(ui, draft, field_width);
-    let height = (LINE_HEIGHT + PADDING_TOP + field_height + chips_room(ui, form, inner_width) + PADDING_BOTTOM)
-        .min(content.height());
+    let height =
+        (LINE_HEIGHT + PADDING_TOP + field_height + chips_room(ui, form, inner_width, workers) + PADDING_BOTTOM)
+            .min(content.height());
     let rect = Rect::from_min_max(pos2(content.min.x, content.max.y - height), content.max);
     let field_top = rect.min.y + LINE_HEIGHT + PADDING_TOP;
     let field = Rect::from_min_size(pos2(rect.min.x + PADDING_X, field_top), vec2(field_width, field_height));
@@ -194,7 +206,15 @@ pub(super) fn parts(ui: &Ui, content: Rect, draft: &str, form: Form) -> Parts {
 
 /// Draws the composer of `form` that [`parts`] worked out, with its line above it,
 /// and answers what the person asked for.
-pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bool, busy: bool, form: Form) -> Asked {
+pub(super) fn render(
+    ui: &mut Ui,
+    parts: &Parts,
+    draft: &mut String,
+    enabled: bool,
+    busy: bool,
+    form: Form,
+    workers: Option<&mut super::workers_menu::WorkersChip>,
+) -> Asked {
     ui.painter().hline(
         parts.rect.x_range(),
         parts.rect.min.y,
@@ -204,7 +224,7 @@ pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bo
     let sent = field(ui, parts.field, draft, enabled, enabled && !busy, form.hint);
     let control = control(ui, parts.send, can_send, enabled, busy);
     if form.chips {
-        chips(ui, parts.chips);
+        chips(ui, parts.chips, workers);
     }
     // A press on the control does what the glyph of the control shows: it stops
     // the turn that runs, and otherwise it sends the draft.
@@ -381,11 +401,18 @@ struct Chip {
     chevron: Pos2,
 }
 
-/// The three read-only chips of this part, left to right in `rect`: what the
-/// orchestrator is, how many workers it has, and where it runs. A dock that is
-/// too narrow for three of them puts the next chip on the row under it.
-fn chips(ui: &Ui, rect: Rect) {
-    for (index, chip) in chip_rects(ui, rect).into_iter().enumerate() {
+/// The three chips of this part, left to right in `rect`: what the orchestrator
+/// is, which programs it may start as workers, and where it runs. A dock that is
+/// too narrow for three of them puts the next chip on the row under it. The chip of
+/// the workers is a control: a press opens the menu of the programs.
+fn chips(ui: &mut Ui, rect: Rect, workers: Option<&mut super::workers_menu::WorkersChip>) {
+    let mut workers = workers;
+    let value = match &workers {
+        Some(chip) => chip.value().to_owned(),
+        None => super::workers_menu::NONE.to_owned(),
+    };
+    let values = chip_values(&value);
+    for (index, chip) in chip_rects(ui, rect, &values).into_iter().enumerate() {
         let painter = ui.painter();
         painter.rect_filled(chip.rect, CHIP_RADIUS, theme::PANEL_BG_ALT());
         painter.rect_stroke(
@@ -400,6 +427,12 @@ fn chips(ui: &Ui, rect: Rect) {
         painter.galley(pos2(left, top), chip.label, theme::FG_DIM());
         painter.galley(pos2(left, top + label_height + CHIP_LINE_GAP), chip.value, theme::FG());
         chevron(painter, chip.chevron);
+        if index == WORKERS_CHIP
+            && let Some(chip_control) = workers.as_mut()
+        {
+            chip_control.control(ui, chip.rect);
+            continue;
+        }
         let response = ui.interact(chip.rect, Id::unique(("orchestrator_dock_chip", index)), Sense::hover());
         let _ = response.on_hover_text(CHIP_HOVER);
     }
@@ -424,19 +457,20 @@ fn chevron(painter: &egui::Painter, at: Pos2) {
 
 /// The height of the rows of the chips of a composer that is `inner_width`
 /// points wide.
-fn chips_height(ui: &Ui, inner_width: f32) -> f32 {
-    chip_rects(ui, Rect::from_min_size(Pos2::ZERO, vec2(inner_width, 0.0)))
+fn chips_height(ui: &Ui, inner_width: f32, workers: &str) -> f32 {
+    let values = chip_values(workers);
+    chip_rects(ui, Rect::from_min_size(Pos2::ZERO, vec2(inner_width, 0.0)), &values)
         .last()
         .map_or(0.0, |chip| chip.rect.max.y)
 }
 
 /// The rectangle of each chip inside `rect`, in the order of [`CHIPS`].
-fn chip_rects(ui: &Ui, rect: Rect) -> Vec<Chip> {
+fn chip_rects(ui: &Ui, rect: Rect, values: &[&str; 3]) -> Vec<Chip> {
     let max_text = (rect.width() - 2.0 * CHIP_PADDING_X).max(1.0);
-    let mut chips = Vec::with_capacity(CHIPS.len());
+    let mut chips = Vec::with_capacity(CHIP_LABELS.len());
     let (mut left, mut top) = (rect.min.x, rect.min.y);
     let mut row_height = 0.0_f32;
-    for (label, value) in CHIPS {
+    for (label, value) in CHIP_LABELS.iter().zip(values) {
         let label = text::line(ui, label, CHIP_LABEL_SIZE, Weight::Regular, theme::FG_DIM(), max_text);
         let value_max = (max_text - CHIP_CHEVRON_GAP - CHIP_CHEVRON).max(1.0);
         let value = text::line(ui, value, CHIP_VALUE_SIZE, Weight::Regular, theme::FG(), value_max);

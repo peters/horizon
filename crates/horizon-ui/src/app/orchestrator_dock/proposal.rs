@@ -66,7 +66,7 @@ pub(super) const BUTTON_GAP: f32 = 8.0;
 pub(super) const BUTTON_HEIGHT: f32 = 28.0;
 const BUTTON_RADIUS: u8 = 8;
 pub(super) const BUTTON_PADDING: f32 = 12.0;
-const BUTTON_SIZE: f32 = 12.0;
+pub(super) const BUTTON_SIZE: f32 = 12.0;
 /// The rows of the task that the row draws.
 const TASK_ROWS: usize = 2;
 const TASK_LINE_HEIGHT: f32 = 1.45;
@@ -213,7 +213,10 @@ pub(super) fn render(
         (state, _) => state_line(state),
     };
     let state_line = line.map(|line| text::line(ui, line, STATE_SIZE, Weight::Regular, theme::FG_DIM(), inner));
-    let height = row_height(&caption, &items, state_line.as_ref());
+    // The controls wrap into rows of the width of the row, so their height comes
+    // from the same rule that draws them.
+    let (controls_height, _) = control_boxes(0.0, 0.0, inner, &controls);
+    let height = row_height(&caption, &items, state_line.as_ref(), controls_height);
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let rect = Rect::from_min_size(pos2(row.min.x + CARD_INDENT, row.min.y), vec2(row_width, height));
     draw_box(ui.painter(), rect);
@@ -221,12 +224,12 @@ pub(super) fn render(
     if state_line.is_some() {
         return None;
     }
-    draw_controls(ui, rect, id, &controls)
+    draw_controls(ui, rect, id, &controls, controls_height)
 }
 
 /// The box of one proposal: the accent fill and the accent outline of a row that
-/// the person can decide.
-fn draw_box(painter: &egui::Painter, rect: Rect) {
+/// the person can decide. The row of a request for a worker takes the same box.
+pub(super) fn draw_box(painter: &egui::Painter, rect: Rect) {
     painter.rect(
         rect,
         RADIUS,
@@ -268,29 +271,71 @@ fn draw_text(
 }
 
 /// The two controls of a proposal that the person did not decide, and the control
-/// that the person pressed.
-fn draw_controls(ui: &mut Ui, rect: Rect, id: &str, controls: &[std::sync::Arc<egui::Galley>]) -> Option<Choice> {
+/// that the person pressed. The last row of controls stands at the bottom padding
+/// of the row.
+fn draw_controls(
+    ui: &mut Ui,
+    rect: Rect,
+    id: &str,
+    controls: &[std::sync::Arc<egui::Galley>],
+    height: f32,
+) -> Option<Choice> {
+    let left = rect.min.x + PADDING;
+    let width = rect.width() - 2.0 * PADDING;
+    let top = rect.max.y - PADDING - height;
+    let (_, boxes) = control_boxes(left, top, width, controls);
+    paint_controls(ui, &boxes, controls, ("orchestrator_dock_proposal", id), true)
+        .map(|index| if index == 0 { Choice::Start } else { Choice::Decline })
+}
+
+/// The box of each control of one row of the conversation: the galleys in order,
+/// from `left` and `top`, with [`BUTTON_GAP`] between two of them and a new row
+/// when one does not fit in `width` points. It answers the height of the rows and
+/// the box of each control.
+pub(super) fn control_boxes(
+    left: f32,
+    top: f32,
+    width: f32,
+    galleys: &[std::sync::Arc<egui::Galley>],
+) -> (f32, Vec<Rect>) {
+    let mut boxes = Vec::with_capacity(galleys.len());
+    let (mut x, mut y, mut row_height) = (left, top, 0.0_f32);
+    for galley in galleys {
+        let control = galley.size().x + 2.0 * BUTTON_PADDING;
+        if x > left && x + control > left + width {
+            x = left;
+            y += row_height + BUTTON_GAP;
+            row_height = 0.0;
+        }
+        boxes.push(Rect::from_min_size(pos2(x, y), vec2(control, BUTTON_HEIGHT)));
+        x += control + BUTTON_GAP;
+        row_height = row_height.max(BUTTON_HEIGHT);
+    }
+    let height = boxes.last().map_or(0.0, |last| last.max.y - top);
+    (height, boxes)
+}
+
+/// Draws the controls of `boxes` with the label of each galley, and answers the
+/// control that the person pressed. The control at index 0 carries the accent
+/// while `accent_first` holds, and every other control the plain panel.
+pub(super) fn paint_controls(
+    ui: &mut Ui,
+    boxes: &[Rect],
+    galleys: &[std::sync::Arc<egui::Galley>],
+    id: (&str, &str),
+    accent_first: bool,
+) -> Option<usize> {
     let mut pressed = None;
-    let mut x = rect.min.x + PADDING;
-    let top = rect.max.y - PADDING - BUTTON_HEIGHT;
-    for (index, galley) in controls.iter().enumerate() {
-        let area = Rect::from_min_size(
-            pos2(x, top),
-            vec2(galley.size().x + 2.0 * BUTTON_PADDING, BUTTON_HEIGHT),
-        );
-        let response = ui.interact(
-            area,
-            ui.make_persistent_id(("orchestrator_dock_proposal", id, index)),
-            Sense::click(),
-        );
+    for (index, (area, galley)) in boxes.iter().zip(galleys).enumerate() {
+        let response = ui.interact(*area, ui.make_persistent_id((id.0, id.1, index)), Sense::click());
         let hovered = response.hovered();
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        let (fill, outline, color) = button_colors(index, hovered);
+        let (fill, outline, color) = button_colors(accent_first && index == 0, hovered);
         let painter = ui.painter();
         painter.rect(
-            area,
+            *area,
             BUTTON_RADIUS,
             fill,
             Stroke::new(1.0_f32, outline),
@@ -305,19 +350,16 @@ fn draw_controls(ui: &mut Ui, rect: Rect, id: &str, controls: &[std::sync::Arc<e
             color,
         );
         if response.clicked() {
-            pressed = Some(if index == 0 { Choice::Start } else { Choice::Decline });
+            pressed = Some(index);
         }
-        x = area.max.x + BUTTON_GAP;
     }
     pressed
 }
 
-/// The fill, the outline and the label colour of the control at `index`: the
-/// control that starts the proposal carries the accent, and the other one the
-/// plain panel.
-fn button_colors(index: usize, hovered: bool) -> (Color32, Color32, Color32) {
-    let index_0 = index == 0;
-    if index_0 {
+/// The fill, the outline and the label colour of one control: a control that
+/// carries the accent, and one of the plain panel.
+fn button_colors(accent: bool, hovered: bool) -> (Color32, Color32, Color32) {
+    if accent {
         let fill = if hovered {
             theme::alpha(theme::ACCENT(), 220)
         } else {
@@ -340,6 +382,7 @@ fn row_height(
     caption: &std::sync::Arc<egui::Galley>,
     items: &[ItemGalleys],
     state_line: Option<&std::sync::Arc<egui::Galley>>,
+    controls_height: f32,
 ) -> f32 {
     let mut height = 2.0 * PADDING + caption.size().y + ITEM_GAP;
     for item in items {
@@ -347,7 +390,7 @@ fn row_height(
     }
     match state_line {
         Some(line) => height + line.size().y,
-        None => height + CONTROLS_GAP + BUTTON_HEIGHT,
+        None => height + CONTROLS_GAP + controls_height,
     }
 }
 

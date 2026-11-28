@@ -18,7 +18,7 @@
 
 use egui::{Align, Label, Mesh, Rangef, Rect, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use egui::{Color32, CursorIcon};
-use horizon_core::agent_bridge::{Entry, ProposalState, ToolState};
+use horizon_core::agent_bridge::{Entry, ProposalState, ToolState, WorkerAskState};
 
 use crate::app::sidebar::rows::paint_workspace_tile;
 use crate::loading_spinner;
@@ -30,16 +30,20 @@ use super::OrchestratorDock;
 use super::markdown;
 use super::proposal;
 use super::text;
+use super::worker_rows;
 
 /// What a press on one row of the list asks the frame to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Press {
-    /// Bring the card of this reference row into view.
+    /// Bring the panel of this reference row into view: a card of the program, or
+    /// the panel of one of its workers.
     Card(String),
     /// Show the workspace of this work item, and make it the active one.
     WorkItem(String),
     /// Start the work items of this proposal, or leave them.
     Proposal { id: String, choice: proposal::Choice },
+    /// Start one worker that a request asked for, or leave it.
+    WorkerAsk { id: String, choice: worker_rows::Choice },
 }
 
 /// The facts that the reference rows of the list read of the board and of the
@@ -48,8 +52,8 @@ pub(super) enum Press {
 pub(super) struct Refs {
     /// The reference row of each work item of the conversation.
     work_items: Vec<WorkItemRow>,
-    /// The proposals that the conversation loaded from its file: the program that
-    /// proposed them is gone, so they take no press.
+    /// The proposals and the requests for a worker that the conversation loaded
+    /// from its file: the program that asked is gone, so they take no press.
     loaded: Vec<String>,
 }
 
@@ -92,6 +96,13 @@ impl Refs {
                 Entry::Proposal { id, state, .. } if *state == ProposalState::Open && index < loaded => {
                     refs.loaded.push(id.clone());
                 }
+                Entry::WorkerAsk {
+                    id,
+                    state: WorkerAskState::Open,
+                    ..
+                } if index < loaded => {
+                    refs.loaded.push(id.clone());
+                }
                 _ => {}
             }
         }
@@ -103,7 +114,8 @@ impl Refs {
         self.work_items.iter().find(|row| row.work_item == work_item)
     }
 
-    /// Whether the conversation loaded the proposal `id` from its file.
+    /// Whether the conversation loaded the proposal `id`, or the request `id` of a
+    /// worker, from its file.
     fn loaded_open(&self, id: &str) -> bool {
         self.loaded.iter().any(|held| held == id)
     }
@@ -177,9 +189,9 @@ pub(super) const CARD_GAP_AFTER_GLYPH: f32 = 10.0;
 const CARD_TITLE_SIZE: f32 = 12.5;
 const CARD_STATE_SIZE: f32 = 11.0;
 /// The right end of a row whose card stands on the canvas.
-const CARD_STATE: &str = "on the canvas";
-/// The right end of a row whose card left the board.
-const CARD_STATE_CLOSED: &str = "closed";
+pub(super) const CARD_STATE: &str = "on the canvas";
+/// The right end of a row whose panel left the board.
+pub(super) const CARD_STATE_CLOSED: &str = "closed";
 
 /// The side of the mark of the workspace of a work item.
 const WORK_ITEM_TILE: f32 = 20.0;
@@ -282,7 +294,10 @@ fn gap(previous: Option<&Entry>, entry: &Entry) -> f32 {
 
 /// Whether `entry` takes the row of a reference to a card or to a work item.
 fn is_reference(entry: &Entry) -> bool {
-    matches!(entry, Entry::Card { .. } | Entry::WorkItem { .. })
+    matches!(
+        entry,
+        Entry::Card { .. } | Entry::WorkItem { .. } | Entry::WorkerStarted { .. }
+    )
 }
 
 /// The text of the notice of the entries that one frame does not draw.
@@ -301,11 +316,12 @@ fn entry_row(
 ) -> Option<Press> {
     match entry {
         Entry::Person { text, via_front_desk } => {
-            person_row(ui, text, *via_front_desk, width);
+            let caption = via_front_desk.then_some(VIA_FRONT_DESK);
+            person_row(ui, text, caption, VIA_SIZE, width);
             None
         }
         Entry::Agent { text, .. } => {
-            agent_row(ui, text, width);
+            agent_row(ui, text, None, VIA_SIZE, width);
             None
         }
         Entry::Tool {
@@ -323,7 +339,20 @@ fn entry_row(
             None
         }
         Entry::Card { panel, title } => {
-            card_row(ui, panel, title, width, card_present(panel)).then(|| Press::Card(panel.clone()))
+            let state = if card_present(panel) {
+                CARD_STATE
+            } else {
+                CARD_STATE_CLOSED
+            };
+            reference_row(
+                ui,
+                ("orchestrator_dock_card", panel),
+                title,
+                state,
+                width,
+                card_present(panel),
+            )
+            .then(|| Press::Card(panel.clone()))
         }
         Entry::WorkItem { work_item, .. } => {
             if let Some(row) = refs.work_item(work_item) {
@@ -337,6 +366,24 @@ fn entry_row(
         }
         Entry::Proposal { id, items, state } => proposal::render(ui, id, items, *state, width, refs.loaded_open(id))
             .map(|choice| Press::Proposal { id: id.clone(), choice }),
+        Entry::WorkerStarted { panel, program, .. } => {
+            worker_rows::started_row(ui, panel, program, width, card_present(panel)).then(|| Press::Card(panel.clone()))
+        }
+        Entry::WorkerMessage { program, text, .. } => {
+            worker_rows::message_row(ui, program, text, width);
+            None
+        }
+        Entry::WorkerReport { program, text, .. } => {
+            worker_rows::report_row(ui, program, text, width);
+            None
+        }
+        Entry::WorkerAsk {
+            id,
+            program,
+            task,
+            state,
+        } => worker_rows::ask_row(ui, id, program, task, *state, width, refs.loaded_open(id))
+            .map(|choice| Press::WorkerAsk { id: id.clone(), choice }),
     }
 }
 
@@ -431,20 +478,28 @@ fn missing_work_item_row(ui: &mut Ui, width: f32) {
     let _ = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
 }
 
-/// One reference row of a card that the program drew: the glyph of a card, its
-/// heading and where the card stands, with a fill and an outline of the accent.
-/// A card that the board no longer holds reads dim and takes no press.
-fn card_row(ui: &mut Ui, panel: &str, title: &str, width: f32, present: bool) -> bool {
+/// One reference row of a panel that the program drew: the glyph of a panel, the
+/// heading of the row and a state word at its right end, with a fill and an
+/// outline of the accent. A panel that the board no longer holds reads dim and
+/// takes no press. The row of a card and the row of a worker take this one form.
+pub(super) fn reference_row(
+    ui: &mut Ui,
+    id: (&'static str, &str),
+    title: &str,
+    state_text: &str,
+    width: f32,
+    present: bool,
+) -> bool {
     let row_width = (width * CARD_SHARE).min(width - CARD_INDENT).max(1.0);
     let (row, _) = ui.allocate_exact_size(vec2(width, CARD_HEIGHT), Sense::hover());
     let rect = Rect::from_min_size(pos2(row.min.x + CARD_INDENT, row.min.y), vec2(row_width, row.height()));
+    let persistent_id = ui.make_persistent_id((id.0, id.1));
     let sense = if present { Sense::click() } else { Sense::hover() };
-    let response = ui.interact(rect, ui.make_persistent_id(("orchestrator_dock_card", panel)), sense);
+    let response = ui.interact(rect, persistent_id, sense);
     let hovered = present && response.hovered();
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    let state_text = if present { CARD_STATE } else { CARD_STATE_CLOSED };
     let state_galley = text::line(
         ui,
         state_text,
@@ -506,7 +561,7 @@ fn card_row(ui: &mut Ui, panel: &str, title: &str, width: f32, present: bool) ->
 
 /// One message of the person: a bubble at the right of the list, with the caption
 /// of the front desk above it when the front desk passed the message.
-fn person_row(ui: &mut Ui, text: &str, via_front_desk: bool, width: f32) {
+pub(super) fn person_row(ui: &mut Ui, text: &str, caption: Option<&str>, caption_size: f32, width: f32) {
     let text_width = (width * PERSON_SHARE - 2.0 * BUBBLE_PADDING_X).max(1.0);
     let galley = text::paragraph(
         ui,
@@ -521,8 +576,7 @@ fn person_row(ui: &mut Ui, text: &str, via_front_desk: bool, width: f32) {
         galley.size().x + 2.0 * BUBBLE_PADDING_X,
         galley.size().y + 2.0 * BUBBLE_PADDING_Y,
     );
-    let caption =
-        via_front_desk.then(|| text::line(ui, VIA_FRONT_DESK, VIA_SIZE, Weight::Regular, theme::FG_DIM(), width));
+    let caption = caption.map(|caption| text::line(ui, caption, caption_size, Weight::Regular, theme::FG_DIM(), width));
     let caption_height = caption.as_ref().map_or(0.0, |caption| caption.size().y + VIA_GAP);
     let (row, _) = ui.allocate_exact_size(vec2(width, bubble.y + caption_height), Sense::hover());
     let rect = Rect::from_min_size(pos2(row.max.x - bubble.x, row.min.y + caption_height), bubble);
@@ -549,18 +603,26 @@ fn person_row(ui: &mut Ui, text: &str, via_front_desk: bool, width: f32) {
 /// beside it, selectable, as plain text. The bar runs the full height of the text
 /// and steps from the accent at its top to the mauve of the workspace accents at
 /// its bottom.
-fn agent_row(ui: &mut Ui, text: &str, width: f32) {
+pub(super) fn agent_row(ui: &mut Ui, text: &str, caption: Option<&str>, caption_size: f32, width: f32) {
     let indent = AGENT_BAR_WIDTH + AGENT_GAP;
     let text_width = (width * AGENT_SHARE - indent).max(1.0);
     // The marks of Markdown are drawn, not shown: an agent writes them every day.
     let job = markdown::job(text, BODY_SIZE, AGENT_LINE_HEIGHT, theme::FG(), text_width);
-    let height = ui.painter().layout_job(job.clone()).size().y;
+    let text_height = ui.painter().layout_job(job.clone()).size().y;
+    // A caption stands above the text of the agent, at the left edge of the list.
+    let caption = caption.map(|caption| text::line(ui, caption, caption_size, Weight::Regular, theme::FG_DIM(), width));
+    let caption_height = caption.as_ref().map_or(0.0, |caption| caption.size().y + VIA_GAP);
+    let height = text_height + caption_height;
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    if let Some(caption) = caption {
+        ui.painter().galley(row.min, caption, theme::FG_DIM());
+    }
+    let top = row.min.y + caption_height;
     agent_bar(
         ui.painter(),
-        Rect::from_min_size(row.min, vec2(AGENT_BAR_WIDTH, height)),
+        Rect::from_min_size(pos2(row.min.x, top), vec2(AGENT_BAR_WIDTH, text_height)),
     );
-    let text_rect = Rect::from_min_size(pos2(row.min.x + indent, row.min.y), vec2(text_width, height));
+    let text_rect = Rect::from_min_size(pos2(row.min.x + indent, top), vec2(text_width, text_height));
     let mut text_ui = ui.new_child(
         UiBuilder::new()
             .max_rect(text_rect)

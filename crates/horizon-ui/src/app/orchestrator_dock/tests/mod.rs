@@ -13,3 +13,4 @@ mod proposal;
 mod rows;
 mod storage;
 mod switch;
+mod workers;

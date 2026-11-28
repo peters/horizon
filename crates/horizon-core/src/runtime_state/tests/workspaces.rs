@@ -334,6 +334,7 @@ fn a_conversation_record_survives_the_round_trip_through_the_board() {
     let record = OrchestratorConversationState {
         session_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
         program: "claude".to_string(),
+        allowed_workers: Vec::new(),
     };
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {

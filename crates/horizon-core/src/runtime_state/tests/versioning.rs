@@ -221,6 +221,7 @@ fn a_state_file_without_a_front_desk_loads_and_keeps_the_record_of_one() {
         front_desk: Some(OrchestratorConversationState {
             session_id: Some("00000000-0000-4000-8000-000000000001".to_owned()),
             program: "claude".to_owned(),
+            allowed_workers: Vec::new(),
         }),
         ..RuntimeState::default()
     };

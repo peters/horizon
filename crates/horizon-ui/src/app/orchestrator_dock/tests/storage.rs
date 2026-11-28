@@ -207,6 +207,7 @@ fn board_state_with_record(program: &str) -> RuntimeState {
     state.workspaces[0].orchestrator = Some(OrchestratorConversationState {
         session_id: Some(STORED_SESSION.to_owned()),
         program: program.to_owned(),
+        allowed_workers: Vec::new(),
     });
     state
 }

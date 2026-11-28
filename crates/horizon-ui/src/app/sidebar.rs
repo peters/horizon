@@ -7,7 +7,7 @@ mod front_desk_row;
 pub(in crate::app) mod inbox;
 mod list;
 pub(in crate::app) mod machines;
-mod menus;
+pub(in crate::app) mod menus;
 mod mirror_rows;
 mod new_workspace;
 mod panel_rows;

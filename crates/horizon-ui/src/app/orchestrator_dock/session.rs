@@ -161,10 +161,13 @@ impl Session {
 
     /// The record that the runtime state of this workspace keeps, or `None`
     /// when this conversation has nothing to resume and no file.
-    pub(super) fn record(&self, program: &str) -> Option<OrchestratorConversationState> {
-        (self.storage.keeps() || self.resume_id.is_some()).then(|| OrchestratorConversationState {
-            session_id: self.resume_id.clone(),
-            program: program.to_owned(),
+    pub(super) fn record(&self, program: &str, allowed_workers: &[String]) -> Option<OrchestratorConversationState> {
+        (self.storage.keeps() || self.resume_id.is_some() || !allowed_workers.is_empty()).then(|| {
+            OrchestratorConversationState {
+                session_id: self.resume_id.clone(),
+                program: program.to_owned(),
+                allowed_workers: allowed_workers.to_vec(),
+            }
         })
     }
 
@@ -354,6 +357,45 @@ impl Session {
         self.conversation.work_item_row(work_item, name);
     }
 
+    /// Adds the reference row of the worker `panel` to this conversation.
+    pub(super) fn worker_started(&mut self, panel: &str, program: &str, task: &str) {
+        self.conversation.worker_started(panel, program, task);
+    }
+
+    /// Adds one message that the orchestrator typed into the worker `panel`.
+    pub(super) fn worker_message(&mut self, panel: &str, program: &str, text: &str) {
+        self.conversation.worker_message(panel, program, text);
+    }
+
+    /// Adds one report of the worker `panel`, as it went to the program.
+    pub(super) fn worker_report(&mut self, panel: &str, program: &str, text: &str) {
+        self.conversation.worker_report(panel, program, text);
+    }
+
+    /// Adds one request of the orchestrator for a worker that the chip does not
+    /// hold.
+    pub(super) fn worker_ask(&mut self, id: &str, program: &str, task: &str) {
+        self.conversation.worker_ask(id, program, task);
+    }
+
+    /// Moves the request `id` of a worker to `state`, and answers whether this
+    /// conversation held it.
+    pub(super) fn set_worker_ask_state(&mut self, id: &str, state: horizon_core::agent_bridge::WorkerAskState) -> bool {
+        self.conversation.worker_ask_state(id, state)
+    }
+
+    /// Whether the person answered `Not now` to a request for a worker of
+    /// `program` in this conversation.
+    pub(super) fn declined_worker_ask(&self, program: &str) -> bool {
+        self.conversation.declined_worker_ask(program)
+    }
+
+    /// The program and the first line of the task of the request `id`, while it
+    /// waits for the person.
+    pub(super) fn open_worker_ask(&self, id: &str) -> Option<(String, String)> {
+        self.conversation.open_worker_ask(id)
+    }
+
     /// The last text of the program of this conversation, cut to `max` characters
     /// and without a control character, or `None` when it said nothing yet.
     pub(super) fn last_text(&self, max: usize) -> Option<String> {
@@ -368,6 +410,20 @@ impl Session {
             .take(max)
             .collect();
         (!cut.trim().is_empty()).then_some(cut)
+    }
+
+    /// Whether this conversation can take a line of Horizon now: its program runs,
+    /// no turn of it runs, and no earlier line of Horizon waits.
+    pub(super) fn takes_a_system_line(&self) -> bool {
+        !self.busy() && self.has_bridge() && self.system_waiting.is_empty()
+    }
+
+    /// Sends one line of Horizon into the bridge of this conversation now, and
+    /// answers whether the program took it. The caller has asked
+    /// [`Self::takes_a_system_line`]. The line is no message of the person, so it
+    /// adds no [`Entry::Person`].
+    pub(super) fn send_system_line(&mut self, line: &str) -> bool {
+        self.send_system_now(line)
     }
 
     /// Sends one line of Horizon to the program of this conversation as a turn of
