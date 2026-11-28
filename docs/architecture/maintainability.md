@@ -608,34 +608,31 @@ when it names one of those kinds.
   the send or stop control and the three chips, and it takes the plain Enter
   while the field holds the keys. `session.rs` is the conversation of one
   workspace: its entries, its bridge, the messages that wait for that bridge, the
-  generation that makes a late start stale, the three notices of Horizon and the
-  state of the header. `orchestrator_dock.rs` keeps the state of the run and
-  queues each start and each stop on the coordination worker of
-  `app::browser_host_io`. `text.rs` lays the text of the dock out. The switch of
-  this part is the setting `features.orchestrator_dock`, which the window reads on
-  every frame, and the environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns
-  the dock on as well for the fixture of the smoke test. The palette turns the
-  dock of one run over and writes no setting. The program of a conversation is
-  `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and nothing of the dock is saved.
-  The dock draws no galley and no string while the switch is off, and the `Agents`
-  group of the sidebar draws none either. `say_to_active_orchestrator` is the one
-  send of a message that the person did not type: the button
-  `+ Rent a machine` of the sidebar calls it, and it takes the four steps of the
-  send of the composer.
   generation that makes a late start stale, the notices of Horizon, the state of
-  the header and the bookkeeping of the stored file of a conversation.
-  `storage.rs` is the stored side: the folder that a saved session names, the
-  load of a stored conversation, the record of its session in the board, one
-  write for each conversation that holds settled entries, the delete of a
-  workspace that goes, and the outcome of each job. `orchestrator_dock.rs` keeps
-  the state of the run and queues each start and each stop on the worker of the
-  dock, a thread of its own, named `orchestrator-dock`, and separate from the
-  coordination worker of `app::browser_host_io`. `text.rs` lays the text of the
-  dock out. The switch of this part is the environment variable
-  `HORIZON_ORCHESTRATOR_DOCK`, the program of a conversation is
+  the header and the bookkeeping of the stored file of a conversation. The frame
+  builds no `ProgramSpec`: the job of the worker builds it, because the identity
+  of a workspace reads the file system. `storage.rs` is the stored side: the
+  folder that a saved session names, the load of a stored conversation, the
+  record of its session in the board, one write for each conversation that holds
+  settled entries, the delete of a workspace that goes, and the outcome of each
+  job. `orchestrator_dock.rs` keeps the state of the run and queues each start
+  and each stop on the worker of the dock, a thread of its own, named
+  `orchestrator-dock`, and separate from the coordination worker of
+  `app::browser_host_io`. `worker.rs` runs those jobs and answers whether a
+  worker took one, and `programs.rs` records the identity of each program whose
+  stop is owed, so the close of Horizon can end it. `text.rs` lays the text of
+  the dock out. The switch of this part is the setting
+  `features.orchestrator_dock`, which the window reads on every frame, and the
+  environment variable `HORIZON_ORCHESTRATOR_DOCK=1` turns the dock on as well
+  for the fixture of the smoke test. The palette turns the dock of one run over
+  and writes no setting. The program of a conversation is
   `HORIZON_ORCHESTRATOR_PROGRAM` or `claude`, and the conversation of a saved
-  session lives on disk (`crates/horizon-core/src/agent_bridge/store.rs`). The
-  dock draws no galley and no string while the switch is off.
+  session lives on disk (`crates/horizon-core/src/agent_bridge/store.rs`).
+  `say_to_orchestrator` is the one send of a message, which the composer and the
+  button `+ Rent a machine` of the sidebar both call; the button reaches it
+  through `say_to_active_orchestrator`, which names the workspace. The dock draws
+  no galley and no string while the switch is off, and the `Agents` group of the
+  sidebar draws none either.
 
 - `app::block_requests` claims the card requests of the agents, applies them on
   the frame and answers them on the coordination worker. `block_requests.rs`

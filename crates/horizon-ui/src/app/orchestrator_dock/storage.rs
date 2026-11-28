@@ -159,13 +159,17 @@ impl OrchestratorDock {
     /// that this app opened, or `None` while nothing is saved. A session switch
     /// or a start without a saved session forgets the conversations of the board
     /// that goes; their files stay in the folder of their own session.
+    ///
+    /// Every bridge of those conversations goes to the worker for its stop, as it
+    /// does on every other path that loses a workspace: a drop of a bridge only
+    /// closes its input, and the program would outlive the board that it speaks
+    /// for.
     pub(in crate::app) fn set_storage(&mut self, root: Option<PathBuf>) {
         if self.storage == root {
             return;
         }
         self.storage = root;
-        self.sessions.clear();
-        self.drafts.clear();
+        self.stop_and_clear();
     }
 
     /// The path of the conversation of `local_id`, or `None` while the dock
@@ -206,7 +210,8 @@ impl OrchestratorDock {
             let session = super::session::Session::restored(record.session_id, &record.program, &program);
             self.sessions.insert(workspace.local_id.clone(), session);
             let local_id = workspace.local_id.clone();
-            self.worker.then(
+            let loaded_id = local_id.clone();
+            let handed = self.worker.then(
                 move || {
                     let loaded = store::load(&path, MAX_ENTRIES);
                     if let Err(error) = store::compact(&path) {
@@ -214,8 +219,14 @@ impl OrchestratorDock {
                     }
                     loaded
                 },
-                move |dock, outcome| dock.apply_loaded(&local_id, outcome),
+                move |dock, outcome| dock.apply_loaded(&loaded_id, outcome),
             );
+            if !handed {
+                // No worker took the load, so the stored entries stay in their
+                // file and this conversation writes nothing this run, as a load
+                // that failed does.
+                self.apply_loaded(&local_id, None);
+            }
         }
     }
 
@@ -297,10 +308,16 @@ impl OrchestratorDock {
             if let Some(session) = self.sessions.get_mut(&local_id) {
                 session.append_queued(count);
             }
-            self.worker.then(
+            let writer_id = local_id.clone();
+            let handed = self.worker.then(
                 move || store::append(&path, &entries).map_err(|error| error.to_string()),
-                move |dock, outcome| dock.apply_appended(&local_id, outcome),
+                move |dock, outcome| dock.apply_appended(&writer_id, outcome),
             );
+            if !handed {
+                // No worker took the write, so its entries reached no file: this
+                // conversation stops writing for this run, as a failed write does.
+                self.apply_appended(&local_id, None);
+            }
         }
     }
 
@@ -328,7 +345,9 @@ impl OrchestratorDock {
         let Some(path) = self.conversation_path(local_id) else {
             return;
         };
-        self.worker.write(move || {
+        // A delete that no worker took leaves the file where it is, which is the
+        // state of a delete that failed.
+        let _ = self.worker.write(move || {
             if let Err(error) = store::remove(&path) {
                 tracing::warn!(%error, "failed to remove a stored conversation");
             }

@@ -7,10 +7,10 @@
 //! conversation while the program runs.
 //!
 //! The start of a bridge starts a process, so it never runs on the frame: the
-//! frame queues it on the coordination worker of
-//! [`super::super::browser_host_io`] and keeps its `generation`. A result of an
-//! earlier generation is stale, because the person stopped the conversation or
-//! closed its workspace while the start ran, and the result is then stopped
+//! frame queues it on the worker of the dock, a thread of its own named
+//! `orchestrator-dock` ([`super::worker`]), and keeps its `generation`. A result
+//! of an earlier generation is stale, because the person stopped the conversation
+//! or closed its workspace while the start ran, and the result is then stopped
 //! instead of kept. [`Bridge::stop`] can wait, so it runs on that worker too.
 //!
 //! Every text of the program is untrusted. It enters the conversation only as
@@ -38,6 +38,10 @@ pub(super) const STOPPED_NOTICE: &str = "Stopped by you";
 pub(super) const START_FAILURE: &str = "Claude Code did not start";
 /// The notice of an account that reached the limit of its plan and uses overage.
 pub(super) const LIMIT_NOTICE: &str = "Claude Code reports that the plan limit is reached. Extra usage is in use.";
+/// The notice of one message that the field holds and the program cannot take.
+pub(super) const TOO_LONG_NOTICE: &str = "The message is too long to send. Shorten it.";
+/// The notice of a message that the program of a conversation took no.
+pub(super) const UNSENT_NOTICE: &str = "The message was not sent to the program. Send it again.";
 /// The notice of a stored session that the program did not continue.
 pub(super) const RESUME_FAILURE_NOTICE: &str =
     "The earlier session could not continue. A new one starts with your next message.";
@@ -47,7 +51,7 @@ pub(super) const RESUME_FAILURE_NOTICE: &str =
 pub(super) enum Phase {
     /// No bridge ran for this workspace yet.
     NotConnected,
-    /// The start of a bridge waits on the coordination worker.
+    /// The start of a bridge waits on the worker of the dock.
     Starting,
     /// A bridge runs for this workspace.
     Running,
@@ -78,6 +82,18 @@ impl Phase {
 pub(super) struct Start {
     pub(super) generation: u64,
     pub(super) session: SessionChoice,
+}
+
+/// What the frame does after the person sent one message.
+#[derive(Debug)]
+pub(super) enum Said {
+    /// The bridge of this conversation took the message.
+    Taken,
+    /// No bridge runs for this workspace, so the message waits for a start.
+    Start,
+    /// The bridge that ran took no message: it goes to the worker for its stop,
+    /// and a new bridge carries what waits.
+    StartAfter(Bridge),
 }
 
 /// The conversation of one workspace.
@@ -181,7 +197,7 @@ impl Session {
         self.bridge.is_some()
     }
 
-    /// Whether the start of a bridge waits on the coordination worker.
+    /// Whether the start of a bridge waits on the worker of the dock.
     pub(super) fn is_starting(&self) -> bool {
         self.phase == Phase::Starting
     }
@@ -202,21 +218,31 @@ impl Session {
         self.snapshot().cost_usd_total
     }
 
-    /// Adds one message of the person. The answer says whether a bridge must
-    /// start first: then the message waits for it.
-    pub(super) fn say(&mut self, text: &str) -> bool {
+    /// Adds one line of Horizon to this conversation, such as the notice of a
+    /// message that the program cannot take. The turn of the conversation does not
+    /// change.
+    pub(super) fn notice(&mut self, text: &str) {
+        self.conversation.notice(text);
+    }
+
+    /// Adds one message of the person, and sends it to the bridge of this
+    /// conversation when one runs. The answer names what the frame does next.
+    pub(super) fn say(&mut self, text: &str) -> Said {
         self.conversation.person_said(text);
         let Some(bridge) = self.bridge.take() else {
             self.waiting.push(text.to_owned());
-            return true;
+            return Said::Start;
         };
         if bridge.send(text.to_owned()).is_ok() {
             self.bridge = Some(bridge);
-            return false;
+            Said::Taken
+        } else {
+            // The program of this conversation took no message. It ends on the
+            // worker, because a bridge that runs is never dropped, and the words
+            // of Horizon name the message that did not reach it.
+            self.conversation.notice(UNSENT_NOTICE);
+            Said::StartAfter(bridge)
         }
-        // The program ended before this message: a new bridge carries it.
-        self.waiting.push(text.to_owned());
-        true
     }
 
     /// Takes the request of one start, and makes every start in flight stale.
@@ -251,18 +277,15 @@ impl Session {
         }
         match outcome {
             Some(Ok(bridge)) => {
+                // A live bridge is never replaced by a second start of one
+                // workspace: the bridge that runs keeps the conversation, and the
+                // bridge of this start goes back to the caller for its stop.
+                if self.bridge.is_some() {
+                    return Some(bridge);
+                }
                 self.bridge = Some(bridge);
                 self.phase = Phase::Running;
-                let waiting = std::mem::take(&mut self.waiting);
-                for text in waiting {
-                    if self.bridge.as_ref().is_some_and(|bridge| bridge.send(text).is_err()) {
-                        // The program ended before this message reached it. Its
-                        // events still hold the end of the program, and a poll of
-                        // a later frame reads them and names why it ended, so the
-                        // bridge stays until then.
-                        break;
-                    }
-                }
+                self.send_waiting();
                 None
             }
             Some(Err(error)) => {
@@ -272,6 +295,22 @@ impl Session {
             None => {
                 self.fail("the start did not answer");
                 None
+            }
+        }
+    }
+
+    /// Sends the messages that waited to the bridge of this conversation.
+    fn send_waiting(&mut self) {
+        for text in std::mem::take(&mut self.waiting) {
+            let Some(bridge) = self.bridge.as_ref() else {
+                return;
+            };
+            if bridge.send(text).is_err() {
+                // The program ended before this message reached it. Its events
+                // still hold the end of the program, and a poll of a later frame
+                // reads them and names why it ended, so the bridge stays until
+                // then.
+                return;
             }
         }
     }
@@ -288,6 +327,11 @@ impl Session {
             cost_usd: None,
         });
         self.conversation.notice(&format!("{START_FAILURE}: {detail}"));
+        if self.resume_watch {
+            // The stored session of this start did not continue either, so no
+            // later start resumes it: the next message starts a new session.
+            self.forget_resumed_session();
+        }
     }
 
     /// Reads every event of the bridge of this conversation. It never waits.
@@ -389,6 +433,9 @@ impl Session {
 /// program has the Horizon MCP server and the Horizon skills and draws cards in
 /// its own workspace. A local id that the actor form does not accept gives no
 /// identity, and the program then draws no card.
+///
+/// The frame never calls this function: the identity reads the file system, so
+/// the job of [`super::worker`] builds the specification of a start.
 pub(super) fn program_spec(
     program: &std::path::Path,
     cwd: &std::path::Path,
@@ -421,7 +468,7 @@ fn failure_detail(error: &horizon_core::agent_bridge::BridgeError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, Session, Start, program_spec};
+    use super::{Phase, Said, Session, Start, program_spec};
     use horizon_core::agent_bridge::{Bridge, Entry, SessionChoice};
 
     /// A workspace local id of the form that `new_local_id` makes.
@@ -528,9 +575,119 @@ while IFS= read -r line; do :; done
         assert!(!snapshot.busy, "the turn of that message ended with the failure");
         assert_eq!(session.phase(), Phase::Ended);
         // The next message asks for one more start, and no message waits twice.
-        assert!(session.say("bravo"));
+        assert!(matches!(session.say("bravo"), Said::Start));
         let again = session.begin_start();
         assert_eq!(again.generation, start.generation + 1);
+    }
+
+    #[test]
+    fn a_start_that_could_not_continue_the_session_starts_a_new_one_next_time() {
+        // A conversation that a restart brought back, with the session of its
+        // earlier run.
+        let mut session = Session::new();
+        session.resume_id = Some("00000000-0000-4000-8000-000000000001".to_owned());
+        session.say("alpha");
+        let start = session.begin_start();
+        assert_eq!(
+            start.session,
+            SessionChoice::Resume("00000000-0000-4000-8000-000000000001".to_owned()),
+            "the first start of the restored conversation resumes its session"
+        );
+        let error = failed_start(&start);
+        assert!(session.adopt(start.generation, Some(Err(error))).is_none());
+
+        // One notice names why the session did not continue, and the next message
+        // starts a new session.
+        let snapshot = session.snapshot();
+        assert_eq!(
+            snapshot.entries.last(),
+            Some(&Entry::Notice {
+                text: super::RESUME_FAILURE_NOTICE.to_owned()
+            }),
+            "the notice of the stored session follows the notice of the start"
+        );
+        let next = session.begin_start();
+        assert!(
+            matches!(next.session, SessionChoice::New(_)),
+            "the next start names a new session: {:?}",
+            next.session
+        );
+    }
+
+    #[test]
+    fn a_message_that_the_program_did_not_take_names_it_and_stops_that_bridge() {
+        let folder = tempfile::tempdir().expect("a folder for the stand-in");
+        let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
+            .expect("the stand-in program of the test");
+        let mut session = Session::new();
+        session.say("alpha");
+        let start = session.begin_start();
+        let bridge = Bridge::start(
+            program_spec(&program, folder.path(), start.session.clone(), WORKSPACE),
+            super::codec(),
+            std::sync::Arc::new(|| {}),
+        )
+        .expect("the stand-in program starts");
+        assert!(session.adopt(start.generation, Some(Ok(bridge))).is_none());
+
+        // A text above the bound of one message takes no bridge.
+        let Said::StartAfter(bridge) = session.say(&"x".repeat(horizon_core::agent_bridge::MAX_TEXT_BYTES + 1)) else {
+            panic!("a message that the program does not take hands its bridge back");
+        };
+        assert!(!session.has_bridge(), "that bridge leaves the conversation");
+        assert_eq!(
+            session.snapshot().entries.last(),
+            Some(&Entry::Notice {
+                text: super::UNSENT_NOTICE.to_owned()
+            })
+        );
+        // The bridge that took no message is stopped by its caller, never dropped.
+        bridge.stop();
+        assert!(
+            matches!(session.say("bravo"), Said::Start),
+            "the next message waits for a new bridge"
+        );
+    }
+
+    #[test]
+    fn a_second_start_does_not_replace_a_live_bridge() {
+        let folder = tempfile::tempdir().expect("a folder for the stand-in");
+        let program = horizon_core::stand_in_program_in(folder.path(), "stand-in.sh", SILENT)
+            .expect("the stand-in program of the test");
+        let mut session = Session::new();
+        session.say("alpha");
+        let first = session.begin_start();
+        let bridge = Bridge::start(
+            program_spec(&program, folder.path(), first.session.clone(), WORKSPACE),
+            super::codec(),
+            std::sync::Arc::new(|| {}),
+        )
+        .expect("the stand-in program starts");
+        assert!(session.adopt(first.generation, Some(Ok(bridge))).is_none());
+        assert!(session.has_bridge(), "the program of this workspace runs");
+
+        // A second start answers while a bridge runs: it serves nobody, and the
+        // bridge that runs keeps the conversation.
+        session.say("bravo");
+        let second = session.begin_start();
+        let extra = Bridge::start(
+            program_spec(&program, folder.path(), second.session.clone(), WORKSPACE),
+            super::codec(),
+            std::sync::Arc::new(|| {}),
+        )
+        .expect("the stand-in program starts");
+        let extra = session
+            .adopt(second.generation, Some(Ok(extra)))
+            .expect("the second bridge of a live conversation goes back for its stop");
+        assert!(
+            session.has_bridge(),
+            "the first program still speaks for this workspace"
+        );
+
+        extra.stop();
+        let live = session.stop().expect("the bridge that runs");
+        live.stop();
+        assert!(!session.has_bridge());
     }
 
     #[test]

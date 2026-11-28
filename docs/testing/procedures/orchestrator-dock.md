@@ -29,12 +29,12 @@ gradient bar of an agent text, and the chevron of the three chips.
 - Platforms: Linux, with the local device fixture.
 - The agent program of this procedure is the stand-in
   `scripts/device-smoke/orchestrator_standin.py`. It answers in the line format
-  of Claude Code and it starts no agent program. Section 6.12 uses a program that
+  of Claude Code and it starts no agent program. Section 6.13 uses a program that
   is not there.
-- Tasks OD-17 to OD-19 read the stored conversation. A saved session keeps it in
+- Tasks OD-20 to OD-22 read the stored conversation. A saved session keeps it in
   the folder of that session, so each of those tasks needs the state folder of
-  the fixture and two starts of the candidate. Tasks OD-1 to OD-16 use a start
-  that saves nothing, and such a start writes no conversation.
+  the fixture and two starts of the candidate. Every other task uses a start that
+  saves nothing, and such a start writes no conversation.
 
 ## 3. Safety
 
@@ -64,9 +64,13 @@ gradient bar of an agent text, and the chevron of the three chips.
    ```
 
    The fixture keeps the environment variables of the shell that starts it, and
-   it removes only `HORIZON`, `HORIZON_HOME`, `HORIZON_BROWSER_*` and
-   `HORIZON_WORK_*` (`scripts/device-smoke/sandbox.py`). It gives the candidate
-   the rest of that environment (`scripts/device-smoke/serve.py`). A value of
+   it removes these values (`scripts/device-smoke/sandbox.py`):
+   `HORIZON`, `HORIZON_HOME`, `WAYLAND_DISPLAY`, `DISPLAY`, `CODEX_HOME`,
+   `GROK_HOME`, `PYTHONPATH`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`,
+   `DBUS_STARTER_ADDRESS`, `DBUS_STARTER_BUS_TYPE`, `HORIZON_BROWSER_*` and
+   `HORIZON_WORK_*`. It gives the candidate the rest of that environment
+   (`scripts/device-smoke/serve.py`), and `HORIZON_ORCHESTRATOR_DOCK` and
+   `HORIZON_ORCHESTRATOR_PROGRAM` stay in it. A value of
    `HORIZON_ORCHESTRATOR_PROGRAM` that names the stand-in of the repository is
    replaced by a copy in the state folder of the run, because the sandbox hides a
    checkout under the home of the person.
@@ -129,9 +133,11 @@ gradient bar of an agent text, and the chevron of the three chips.
 
 5. Point at the control, and then at a chip.
 
-   Result: The hover text of the control reads
-   `The orchestrator is not connected yet`. The hover text of the chip reads
-   `Choice comes later`, and the chip does not change.
+   Result: The control of a draft that cannot go out changes to no other colour,
+   and a press on it sends nothing. The hover text of the chip reads
+   `Choice comes later`, and the chip does not change. The hover text of the
+   control of a window that has no workspace reads
+   `The orchestrator is not connected yet`, which step 8 shows.
 
 6. Look at the canvas beside the dock.
 
@@ -221,7 +227,14 @@ gradient bar of an agent text, and the chevron of the three chips.
 
    Result: The field shows `a plan for the first workspace` again.
 
-4. Type five more lines in the field, then five lines again.
+4. Click a terminal panel of the workspace. Then click the padding of the field,
+   four points in from its left inner edge.
+
+   Result: The keys reach the terminal panel after the first click. The field
+   holds the keyboard after the second click, and its outline is the accent
+   colour.
+
+5. Type five more lines in the field, then five lines again.
 
    Result: The field grows one row for each line, and its top edge moves up. The
    control stays at the bottom right of the field, 7 points above its bottom inner
@@ -292,6 +305,11 @@ gradient bar of an agent text, and the chevron of the three chips.
 
    Result: The field is empty. One bubble holds two lines, `one` and `two`, and
    the answer to that message follows it.
+
+5. Type `press the control` and press the control of the composer.
+
+   Result: The field is empty. A bubble with `press the control` stands at the
+   right half of the list, and the answer to it follows.
 
 ### 6.10 OD-9 — A tool call
 
@@ -387,11 +405,12 @@ gradient bar of an agent text, and the chevron of the three chips.
    Result: The dock shows the conversation of the second workspace only. Both
    conversations keep their entries.
 
-4. Send a message in the second workspace, select the first workspace before the
-   answer comes, and wait 5 seconds. Select the second workspace again.
+4. Send the message `a slow question of the second workspace` there, select the
+   first workspace before the answer comes, and wait 5 seconds. Select the second
+   workspace again.
 
-   Result: The answer of the second conversation arrived while the first
-   workspace was active. The dock shows it.
+   Result: The stand-in waits two seconds for a message that holds `slow`, so the
+   answer arrived while the first workspace was active. The dock shows it.
 
 ### 6.15 OD-14 — The end of Horizon leaves no program
 
@@ -412,19 +431,20 @@ gradient bar of an agent text, and the chevron of the three chips.
    Result: No line names the program. Horizon ended every program of the dock
    before it exited.
 
-### 6.15 OD-15 — The orchestrator draws a card on the canvas
+### 6.16 OD-15 — The orchestrator draws a card on the canvas
 
-This task needs a screen that is wide enough for the card and the dock beside the
-panels of the fixture.
+The window of the fixture is 1480 by 900 points at every start, and this task
+needs no other size. The option `--screen 2400x1100` changes the size of the
+isolated desktop only, so the window of the candidate keeps the same canvas.
 
 1. Stop the fixture and start it again with the stand-in, the switch of the dock
-   and a screen of 2400 by 1100 points, and use `--state <evidence>/dock-card`.
+   and the state folder `<evidence>/dock-card`.
 
    ```sh
    HORIZON_ORCHESTRATOR_DOCK=1 \
    HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py \
      python3 scripts/device-smoke/serve.py \
-       --horizon <candidate>/horizon --native-view --screen 2400x1100 \
+       --horizon <candidate>/horizon --native-view \
        --state <evidence>/dock-card
    ```
 
@@ -435,9 +455,10 @@ panels of the fixture.
    Result: The list of the dock shows the bubble `draw a card`, the text
    `You said: draw a card`, and one text that names the id of a new card, such as
    `I drew the card 124cef72-8cb1-483b-9665-ec8cc155c737 in this workspace. Press
-   Go or Cancel and I read it.`. The header reads
-   `Orchestrator · Claude Code · ready`. The sidebar of the workspace lists a row
-   with the mark `CARD` and the name `Plan`.
+   Go or Cancel and I read it.`. The second line of the header reads
+   `Orchestrator · Claude Code on this computer`, and the chip of the header reads
+   `ready`. The sidebar of the workspace lists a row with the mark `CARD` and the
+   name `Plan`.
 
 4. Click the row `Plan` in the sidebar.
 
@@ -453,7 +474,7 @@ panels of the fixture.
    Result: The picture shows the card on the canvas of the workspace of the
    conversation, the chip `Claude listens`, and the two texts of the dock.
 
-### 6.16 OD-16 — A press reaches the orchestrator
+### 6.17 OD-16 — A press reaches the orchestrator
 
 The program of the dock reads a press only through the `next_click` that it keeps
 open, because Horizon types no wake line for an owner without a terminal.
@@ -477,7 +498,7 @@ open, because Horizon types no wake line for an owner without a terminal.
    Result: The dock adds no text, because the program holds no `next_click` any
    more. The press waits in the queue of the card for five minutes.
 
-### 6.17 OD-17 — The setting of Settings turns the dock on
+### 6.18 OD-17 — The setting of Settings turns the dock on
 
 1. Stop the fixture. Start it again with the same arguments, but without
    `HORIZON_ORCHESTRATOR_DOCK=1`, and use `--state <evidence>/dock-setting`.
@@ -521,7 +542,7 @@ open, because Horizon types no wake line for an owner without a terminal.
 
    Result: The window holds no dock.
 
-### 6.18 OD-18 — The group Agents
+### 6.19 OD-18 — The group Agents
 
 1. Start the run of OD-17 step 3, so that the dock is on, and look at the sidebar
    under the section Machines.
@@ -550,7 +571,7 @@ open, because Horizon types no wake line for an owner without a terminal.
    Result: Every row says `looking` with a hollow dot for the first frame of the
    window, and then the four rows say `not found on this computer`.
 
-### 6.19 OD-19 — The button + Rent a machine
+### 6.20 OD-19 — The button + Rent a machine
 
 1. Read the end of the section Machines of the run of OD-18.
 
@@ -586,7 +607,7 @@ open, because Horizon types no wake line for an owner without a terminal.
    section Machines.
 
    Result: The button is gone.
-### 6.17 OD-17 — A restart shows the conversation and continues its session
+### 6.21 OD-20 — A restart shows the conversation and continues its session
 
 This task needs a record of the arguments of the program, because the dock
 passes the stored session id to the program as one argument.
@@ -643,7 +664,7 @@ passes the stored session id to the program as one argument.
 
    Result: The picture shows the entries of both runs in one conversation.
 
-### 6.18 OD-18 — A start that saves nothing stores nothing
+### 6.22 OD-21 — A start that saves nothing stores nothing
 
 1. Start the fixture in a new state folder, without `--saved-session`, and with
    the stand-in as `HORIZON_ORCHESTRATOR_PROGRAM`. Such a start is ephemeral.
@@ -664,9 +685,9 @@ passes the stored session id to the program as one argument.
    Result: The command prints no path. An unsaved start writes no conversation
    file and no record of a session.
 
-### 6.19 OD-19 — A removed workspace removes its conversation
+### 6.23 OD-22 — A removed workspace removes its conversation
 
-1. Do the steps 1 to 3 of OD-17, so that the workspace keeps a conversation.
+1. Do the steps 1 to 3 of OD-20, so that the workspace keeps a conversation.
 
 2. Read the folder of the conversations of the session.
 
@@ -687,6 +708,25 @@ passes the stored session id to the program as one argument.
    session goes whole when the person deletes that saved session, so this file
    leaves nothing behind.
 
+### 6.24 OD-23 — A message above the limit of one turn
+
+1. Write `alpha` in the field of the dock, press Enter, and wait for the answer.
+
+   Result: The list shows the bubble `alpha` and the answer of the stand-in.
+
+2. Copy a text of more than 262144 bytes into the field, such as a log file of
+   the workspace, and press Enter. Do not type the text.
+
+   Result: The field keeps the whole text, so the person shortens it there. The
+   list shows one notice in the middle: `The message is too long to send.
+   Shorten it.` The entry of step 1 stays, no bubble of the person follows it,
+   and the state chip of the header does not change.
+
+3. Empty the field, write `bravo`, and press Enter.
+
+   Result: The bubble `bravo` and its answer follow the entries of step 1. The
+   notice of step 2 stays above them.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.
@@ -697,7 +737,12 @@ passes the stored session id to the program as one argument.
   under the field.
 - The control shows the accent form only while a draft can go out. It shows the
   grey form while the draft is empty or there is no workspace, and the stop form
-  while a turn runs.
+  while a turn runs. A press on the accent form sends the draft, and a press on
+  the stop form stops the turn.
+- The field takes the keyboard from a click anywhere inside its frame, and the
+  control inside the field keeps the presses of its own rectangle.
+- A message of more than 262144 bytes stays in the field, and one notice names
+  the limit.
 - The empty state draws the title, the two sentences and the two example rows. A
   click on a row fills an empty draft and sends nothing.
 - The header draws the state in a chip at its right edge, and the cost left of the
@@ -757,6 +802,8 @@ passes the stored session id to the program as one argument.
 - A workspace that is removed takes its conversation file with it, and the delete
   of a saved session takes the folder of its conversations with the rest of the
   session folder.
+- A workspace whose last panel closes takes its conversation with it, and no
+  program of that conversation runs after the close.
 
 ## 8. Cleanup
 

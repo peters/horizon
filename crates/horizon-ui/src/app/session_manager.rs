@@ -296,6 +296,13 @@ impl HorizonApp {
         // The board that this switch leaves runs the programs of its holders: a
         // holder ends the program of its panel with the frame that a close sends.
         self.board.close_held_programs();
+        // The conversations of the dock speak for the workspaces of this board:
+        // their programs end on the worker of the dock, as the held programs of
+        // the board do, and the next board brings its own conversations.
+        self.orchestrator_dock.stop_and_clear();
+        // The conversations of the dock speak for the workspaces of this board:
+        // their programs end on the worker of the dock, as the held programs of
+        // the board do, and the next board brings its own conversations.
         self.pending_session_switch = Some(PendingSessionSwitch {
             shutdown_progress: self.board.begin_async_shutdown(),
             target: Some(session.clone()),

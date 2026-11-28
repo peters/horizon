@@ -8,6 +8,17 @@ use crate::loading_spinner;
 const MAX_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const FORCED_BROWSER_SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
+/// The words under the spinner of a close: the panels that the exit waits for and
+/// the programs of the dock whose stop still runs.
+fn shutdown_detail(completed: usize, total: usize, stops: usize) -> String {
+    let panels = format!("{completed} / {total} panels shut down");
+    match stops {
+        0 => panels,
+        1 => format!("{panels}, 1 agent program is still stopping"),
+        stops => format!("{panels}, {stops} agent programs are still stopping"),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BrowserShutdownOutcome {
     Pending,
@@ -40,8 +51,8 @@ impl HorizonApp {
         // A card socket of a machine session serves no frame and no worker: a
         // stop ends its loop, removes its socket and joins its thread.
         self.node_cards.stop_all();
-        // Every conversation of the dock ends its program on the coordination
-        // worker, which the frames of this exit wait for within their bound.
+        // Every conversation of the dock ends its program on the worker of the
+        // dock, which the frames of this exit wait for within their bound.
         self.stop_orchestrator_bridges();
         let mut progress = self
             .pending_session_switch
@@ -101,6 +112,13 @@ impl HorizonApp {
         if self.session_saves_hold_exit() {
             return;
         }
+        // A stop of the dock ends an agent program on its own worker, and these
+        // frames hold until it drained its stops within the bound of one stop for
+        // each. A bound that passes ends every program that its stop did not
+        // reach, so no program of a conversation outlives Horizon.
+        if self.orchestrator_dock.stops_hold_exit() {
+            return;
+        }
         // A draft that a frame just set aside reaches the file on a worker thread. The
         // frames of the exit wait for that write, within the shutdown limit.
         self.abandon_device_reveals("Horizon is exiting");
@@ -122,22 +140,26 @@ impl HorizonApp {
         };
         let completed = progress.panels_completed();
         let total = progress.panel_count();
+        // A stop of the dock ends an agent program on its own worker, and the
+        // frames of this pass wait for it as they wait for a terminal.
+        let stops = self.orchestrator_dock.stops_pending();
+        let detail = shutdown_detail(completed, total, stops);
 
         egui::CentralPanel::default().show(ui, |ui| {
             if self.saved_session_deletion_is_running() {
                 loading_spinner::show_with_detail(
                     ui,
                     egui::Id::unique("shutdown_deletion"),
-                    "Closing Horizon…",
-                    "Finishing saved conversation deletion safely…",
+                    "Closing Horizon\u{2026}",
+                    "Finishing saved conversation deletion safely\u{2026}",
                 );
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
-            } else if total > 0 {
+            } else if total > 0 || stops > 0 {
                 loading_spinner::show_with_detail(
                     ui,
                     egui::Id::unique("shutdown_spinner"),
                     "Closing Horizon\u{2026}",
-                    &format!("{completed} / {total} panels shut down"),
+                    &detail,
                 );
             } else {
                 loading_spinner::show(

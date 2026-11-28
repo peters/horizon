@@ -29,6 +29,9 @@ pub(super) struct Worker {
     /// The context that a finished job wakes, so its outcome applies without
     /// input.
     wake: std::sync::Arc<std::sync::OnceLock<egui::Context>>,
+    /// Whether a test says that no thread of the dock starts.
+    #[cfg(test)]
+    without_thread: bool,
 }
 
 impl Default for Worker {
@@ -40,6 +43,8 @@ impl Default for Worker {
             finish,
             finished,
             wake: std::sync::Arc::default(),
+            #[cfg(test)]
+            without_thread: false,
         }
     }
 }
@@ -53,24 +58,44 @@ impl Worker {
     /// Does `work` on the worker, after every job asked for before it, and
     /// answers `apply` on a later frame with its outcome, or with `None` when
     /// the work panicked, so the UI always learns that the work ended.
+    ///
+    /// The answer says whether a worker took the job. A job that no worker took
+    /// runs nowhere, so the caller applies the failure itself rather than leave
+    /// its state waiting for an answer that never comes.
+    #[must_use]
     pub(super) fn then<T: Send + 'static>(
         &mut self,
         work: impl FnOnce() -> T + Send + 'static,
         apply: impl FnOnce(&mut super::OrchestratorDock, Option<T>) + Send + 'static,
-    ) {
+    ) -> bool {
         self.submit(Box::new(move || {
             let outcome = settle(work);
             Some(Box::new(move |dock: &mut super::OrchestratorDock| apply(dock, outcome)) as Apply)
-        }));
+        }))
     }
 
     /// Does `work` on the worker, after every job asked for before it. Nothing
-    /// waits for it and it answers no outcome.
-    pub(super) fn write(&mut self, work: impl FnOnce() + Send + 'static) {
+    /// waits for it and it answers no outcome. The answer says whether a worker
+    /// took the job.
+    #[must_use]
+    pub(super) fn write(&mut self, work: impl FnOnce() + Send + 'static) -> bool {
         self.submit(Box::new(move || {
             let _ = settle(work);
             None
-        }));
+        }))
+    }
+
+    /// Says that no thread of the dock starts, so a test reads what a job that no
+    /// worker takes does.
+    #[cfg(test)]
+    pub(super) fn hold_no_worker(&mut self) {
+        self.without_thread = true;
+    }
+
+    /// Lets a thread of the dock take the jobs of this worker again.
+    #[cfg(test)]
+    pub(super) fn take_jobs_again(&mut self) {
+        self.without_thread = false;
     }
 
     /// Takes the outcomes of the jobs that finished, in their order. A frame
@@ -89,27 +114,32 @@ impl Worker {
         }
     }
 
-    fn submit(&mut self, mut job: Job) {
+    fn submit(&mut self, mut job: Job) -> bool {
         loop {
             if let Some(jobs) = self.worker() {
                 match jobs.send(job) {
-                    Ok(()) => return,
+                    Ok(()) => return true,
                     Err(returned) => {
                         job = returned.0;
                         self.jobs = None;
                     }
                 }
             } else {
-                // No thread starts now, and a frame must not run the job: it
-                // waits for the next job, which tries a worker again.
+                // No thread starts now, and a frame must not run the job: the
+                // caller applies its failure, and the next job tries a worker
+                // again.
                 tracing::warn!("no worker takes a job of the orchestrator dock");
-                return;
+                return false;
             }
         }
     }
 
     /// The worker that takes the jobs of the dock, started when there is none.
     fn worker(&mut self) -> Option<Sender<Job>> {
+        #[cfg(test)]
+        if self.without_thread {
+            return None;
+        }
         if let Some(jobs) = &self.jobs {
             return Some(jobs.clone());
         }

@@ -37,7 +37,7 @@ use super::text;
 /// The field of the draft, which a test names to read whether it holds the keys.
 pub(super) const FIELD_ID: &str = "orchestrator_dock_draft";
 /// The send control, which a test names to read whether it holds the pointer.
-const SEND_ID: &str = "orchestrator_dock_send";
+pub(super) const SEND_ID: &str = "orchestrator_dock_send";
 /// The line at the top of the composer.
 const LINE_HEIGHT: f32 = 1.0;
 /// The padding of the composer, which the header keeps too.
@@ -51,9 +51,11 @@ const FIELD_TEXT_SIZE: f32 = 13.5;
 const FIELD_MIN_ROWS: usize = 1;
 const FIELD_MAX_ROWS: f32 = 6.0;
 /// The margin of the text in the field: 14 points at its left, 12 above and
-/// below it, and the text ends 8 points before the control.
+/// below it, and 49 at its right, which is the 8 points of air before the
+/// control, the control and the 7 points of air after it.
 const FIELD_MARGIN_X: i8 = 14;
 const FIELD_MARGIN_Y: i8 = 12;
+const FIELD_MARGIN_RIGHT: i8 = 49;
 const FIELD_MIN_HEIGHT: f32 = 48.0;
 const FIELD_RADIUS: u8 = 12;
 pub(super) const FIELD_HINT: &str = "Write to the orchestrator";
@@ -62,8 +64,6 @@ pub(super) const FIELD_HINT: &str = "Write to the orchestrator";
 const SEND_SIDE: f32 = 34.0;
 const SEND_INSET: f32 = 7.0;
 const SEND_RADIUS: u8 = 9;
-/// The air between the text of the field and the control.
-const TEXT_CONTROL_GAP: f32 = 8.0;
 const SEND_GLYPH: &str = "\u{2191}";
 const STOP_GLYPH: &str = "\u{25a0}";
 const CONTROL_GLYPH_SIZE: f32 = 14.0;
@@ -158,9 +158,11 @@ pub(super) fn render(ui: &mut Ui, parts: &Parts, draft: &mut String, enabled: bo
     let sent = field(ui, parts.field, draft, enabled, enabled && !busy);
     let control = control(ui, parts.send, can_send, enabled, busy);
     chips(ui, parts.chips);
-    if control {
+    // A press on the control does what the glyph of the control shows: it stops
+    // the turn that runs, and otherwise it sends the draft.
+    if control && busy {
         Asked::Stop
-    } else if sent {
+    } else if control || sent {
         Asked::Send
     } else {
         Asked::Nothing
@@ -178,10 +180,10 @@ fn field_height(ui: &Ui, draft: &str, width: f32) -> f32 {
     (galley.size().y + 2.0 * margin).clamp(FIELD_MIN_HEIGHT, tallest)
 }
 
-/// The width of the text of the field: the field minus its left margin, the air
-/// before the control, the control and the air after it.
+/// The width of the text of the field: the field minus the margin that the text
+/// keeps at its left and at its right, which holds the control.
 fn text_width(field_width: f32) -> f32 {
-    (field_width - f32::from(FIELD_MARGIN_X) - TEXT_CONTROL_GAP - SEND_SIDE - SEND_INSET).max(1.0)
+    (field_width - f32::from(FIELD_MARGIN_X) - f32::from(FIELD_MARGIN_RIGHT)).max(1.0)
 }
 
 /// The text of `draft` at the width that the field gives it.
@@ -214,33 +216,31 @@ fn field(ui: &mut Ui, rect: Rect, draft: &mut String, enabled: bool, sends: bool
         Stroke::new(1.0_f32, outline),
         StrokeKind::Inside,
     );
-    let text = Rect::from_min_size(
-        pos2(
-            rect.min.x + f32::from(FIELD_MARGIN_X),
-            rect.min.y + f32::from(FIELD_MARGIN_Y),
-        ),
-        vec2(
-            text_width(rect.width()),
-            (rect.height() - 2.0 * f32::from(FIELD_MARGIN_Y)).max(1.0),
-        ),
-    );
     let enter = sends && focused && plain_enter(ui);
+    // The edit covers the whole drawn field, and its inner margin keeps the text
+    // at the padding of the field. A click in that padding therefore gives the
+    // keyboard to the edit, and the control inside the field keeps its own
+    // rectangle, because the dock interacts with it after this edit.
+    let margin = egui::Margin {
+        left: FIELD_MARGIN_X,
+        right: FIELD_MARGIN_RIGHT,
+        top: FIELD_MARGIN_Y,
+        bottom: FIELD_MARGIN_Y,
+    };
     let edit = egui::TextEdit::multiline(&mut *draft)
         .id(Id::unique(FIELD_ID))
         .hint_text(FIELD_HINT)
         .font(FontId::proportional(FIELD_TEXT_SIZE))
         .text_color(theme::FG())
-        .desired_width(text.width())
+        .desired_width(rect.width())
         .desired_rows(FIELD_MIN_ROWS)
         // Shift+Enter makes a new line: the return key of the edit is that one,
         // so the plain Enter reaches the rule of the send.
         .return_key(Some(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter)))
-        // The whole field takes the pointer, so a click anywhere in it gives the
-        // text edit the keyboard.
-        .min_size(text.size())
-        .frame(egui::Frame::NONE);
-    let mut field_ui = ui.new_child(UiBuilder::new().max_rect(text));
-    field_ui.shrink_clip_rect(text);
+        .min_size(rect.size())
+        .frame(egui::Frame::NONE.inner_margin(margin));
+    let mut field_ui = ui.new_child(UiBuilder::new().max_rect(rect));
+    field_ui.shrink_clip_rect(rect);
     if enabled {
         field_ui.add(edit);
     } else {
@@ -420,18 +420,24 @@ fn chip_rects(ui: &Ui, rect: Rect) -> Vec<Chip> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FIELD_MARGIN_X, SEND_INSET, SEND_SIDE, TEXT_CONTROL_GAP, text_width};
+    use super::{FIELD_MARGIN_X, SEND_INSET, SEND_SIDE, text_width};
+
+    /// The air between the text of the field and the control inside it.
+    const TEXT_CONTROL_GAP: f32 = 8.0;
 
     #[test]
     fn the_text_of_the_field_ends_before_the_control_inside_it() {
+        // The numbers of a field of 400 points: 14 points of margin, the text of
+        // 337 points, 8 points of air, the control of 34 points and its 7 points
+        // of inset.
         let field_width = 400.0;
+        assert_eq!(text_width(field_width), 337.0);
         let text_right = f32::from(FIELD_MARGIN_X) + text_width(field_width);
         let control_left = field_width - SEND_INSET - SEND_SIDE;
 
-        assert!(
-            (control_left - text_right - TEXT_CONTROL_GAP).abs() < 0.01,
-            "the text ends at {text_right} and the control starts at {control_left}"
-        );
+        assert_eq!(text_right, 351.0);
+        assert_eq!(control_left, 359.0);
+        assert_eq!(control_left - text_right, TEXT_CONTROL_GAP);
         assert!(control_left - SEND_INSET > 0.0, "the control stands inside the field");
     }
 }

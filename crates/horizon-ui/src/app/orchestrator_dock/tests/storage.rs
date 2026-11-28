@@ -22,7 +22,7 @@ use horizon_core::{
 };
 
 use crate::app::HorizonApp;
-use crate::app::orchestrator_dock::session::{RESUME_FAILURE_NOTICE, Session};
+use crate::app::orchestrator_dock::session::{Phase, RESUME_FAILURE_NOTICE, Session};
 use crate::app::test_support::{app_in, editor_workspace_state, raw_input, run_app_frame_with_input};
 
 /// The window of these tasks: wide enough that the widest dock stands beside the
@@ -54,6 +54,14 @@ const RUNNING_TOOL: &str = r#"printf '%s\n' "$@" > '@ARGS@'
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"@SESSION@"}'
 printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"toolu-1","name":"Bash","input":{"command":"sleep 600"}}]}}'
 while IFS= read -r line; do :; done
+"#;
+
+/// The stand-in of a program that ignores the close of its input and the
+/// termination signal, so only a stop of the dock ends it.
+const STUBBORN: &str = r#"trap '' TERM
+echo $$ > '@PID@'
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"@SESSION@"}'
+while :; do sleep 0.05; done
 "#;
 
 /// The stand-in of a program that ends at once, as a program that does not know
@@ -194,6 +202,50 @@ fn stand_in(folder: &Path, body: &str, args: &Path) -> PathBuf {
         .replace("@ARGS@", &args.display().to_string())
         .replace("@SESSION@", SESSION);
     horizon_core::stand_in_program_in(folder, "stand-in.sh", &body).expect("the stand-in program of the test")
+}
+
+/// The stubborn stand-in of a test, written into `folder`, which writes its own
+/// process id to `pid`.
+fn stubborn_stand_in(folder: &Path, pid: &Path) -> PathBuf {
+    let body = STUBBORN
+        .replace("@PID@", &pid.display().to_string())
+        .replace("@SESSION@", SESSION);
+    horizon_core::stand_in_program_in(folder, "stubborn.sh", &body).expect("the stand-in program of the test")
+}
+
+/// The process id that the stubborn stand-in of a test wrote into `pid`.
+fn child_of(pid: &Path) -> u32 {
+    let deadline = Instant::now() + BOUND;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(pid)
+            && let Ok(child) = text.trim().parse::<u32>()
+        {
+            return child;
+        }
+        assert!(Instant::now() < deadline, "the test waited for the child of a stand-in");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Whether a program of `pid` still runs. Signal 0 reads the process table and
+/// sends nothing to the process.
+fn program_runs(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Waits until the program of `pid` ended, and names what the test waited for.
+#[cfg(target_os = "linux")]
+fn wait_until_no_process(what: &str, pid: u32) {
+    let deadline = Instant::now() + BOUND;
+    while program_runs(pid) {
+        assert!(Instant::now() < deadline, "the test waited for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// The name of the file of the stand-in, which the record of a conversation
@@ -343,7 +395,7 @@ fn the_frame_returns_while_a_load_of_a_stored_conversation_waits() {
     // One job of the worker holds it, as a disk that does not answer does, and
     // the load of the stored conversation waits behind it.
     let (release, released) = mpsc::channel::<()>();
-    harness
+    let _ = harness
         .app
         .orchestrator_dock
         .worker
@@ -352,7 +404,10 @@ fn the_frame_returns_while_a_load_of_a_stored_conversation_waits() {
     harness.frame();
     let took = started.elapsed();
 
-    assert!(took < Duration::from_secs(2), "the frame returned in {took:?}");
+    // A loaded machine can take a second for one frame. A frame that waits for
+    // the worker never returns, because the job of the test holds it until the
+    // release below, so this bound rejects a real wait and no slow machine.
+    assert!(took < Duration::from_secs(10), "the frame returned in {took:?}");
     assert!(
         harness.is_loading(),
         "the load waits on the worker and the frame shows the state that it has"
@@ -471,6 +526,71 @@ fn a_removed_workspace_removes_its_conversation_file() {
         harness.app.forget_orchestrator_conversation(WORKSPACE);
     }
 
+    wait_for_path("the delete of the stored conversation", &stored, |path| !path.exists());
+}
+
+#[test]
+fn a_change_of_the_session_folder_stops_the_programs_of_the_dock() {
+    let home = tempfile::tempdir().expect("a home of the test");
+    let folder = tempfile::tempdir().expect("a folder of the stand-in");
+    let pid = folder.path().join("pid");
+    let program = stubborn_stand_in(folder.path(), &pid);
+    let (mut harness, _session_id) = Harness::saved(home.path(), &program, board_state());
+
+    harness.frame();
+    harness.send("a turn that never ends");
+    let child = child_of(&pid);
+    harness.wait_for("the running state of the conversation", |app| {
+        app.orchestrator_dock
+            .session(WORKSPACE)
+            .is_some_and(|session| session.phase() == Phase::Running)
+    });
+
+    // The session folder of the next board takes the conversations of this one,
+    // and the programs of those conversations end on the worker of the dock.
+    harness.app.orchestrator_dock.set_storage(None);
+
+    assert!(
+        harness.app.orchestrator_dock.session(WORKSPACE).is_none(),
+        "the conversation of the session that goes is forgotten"
+    );
+    assert_eq!(harness.app.orchestrator_dock.running_bridges(), 0);
+    #[cfg(target_os = "linux")]
+    wait_until_no_process("the program of the conversation of the old session", child);
+    let _ = child;
+}
+
+#[test]
+fn a_workspace_that_closes_its_last_panel_removes_its_conversation_file() {
+    let home = tempfile::tempdir().expect("a home of the test");
+    let folder = tempfile::tempdir().expect("a folder of the stand-in");
+    let program = stand_in(folder.path(), ANSWERING, &folder.path().join("args"));
+    let (mut harness, _session_id) = Harness::saved(home.path(), &program, board_state());
+    let stored = harness.stored_path();
+
+    harness.frame();
+    harness.send("alpha");
+    harness.wait_for("the turn in the file of the conversation", |_| {
+        answered(&stored_entries(&stored))
+    });
+    assert!(stored.exists(), "the conversation of the workspace is stored");
+    let panel = harness.app.board.workspaces[0].panels[0];
+
+    {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
+        // The close of the last panel of a workspace takes the workspace with it.
+        harness.app.close_panel(panel);
+    }
+    assert!(
+        harness.app.board.workspace_id_by_local_id(WORKSPACE).is_none(),
+        "the last panel of the workspace closed with it"
+    );
+    harness.frame();
+
+    assert!(
+        harness.app.orchestrator_dock.session(WORKSPACE).is_none(),
+        "the conversation of the closed workspace went"
+    );
     wait_for_path("the delete of the stored conversation", &stored, |path| !path.exists());
 }
 

@@ -75,8 +75,10 @@ const WORKING_SIZE: f32 = 12.0;
 
 /// Draws the entries of `entries` in `body`, between the header and the
 /// composer, with the row of `working` under them while a turn waits for the
-/// first text of the agent.
-pub(super) fn render(ui: &mut Ui, body: Rect, entries: &[Entry], working: bool) {
+/// first text of the agent. `local_id` names the workspace of the conversation:
+/// the place of the list belongs to that workspace, so the scroll of one
+/// conversation never shows in another.
+pub(super) fn render(ui: &mut Ui, body: Rect, local_id: &str, entries: &[Entry], working: bool) {
     let width = (body.width() - 2.0 * LIST_PADDING).max(0.0);
     if width <= 0.0 || body.height() <= 0.0 {
         return;
@@ -88,7 +90,7 @@ pub(super) fn render(ui: &mut Ui, body: Rect, entries: &[Entry], working: bool) 
     let mut area_ui = ui.new_child(UiBuilder::new().max_rect(area));
     area_ui.shrink_clip_rect(area);
     egui::ScrollArea::vertical()
-        .id_salt("orchestrator_dock_list")
+        .id_salt(("orchestrator_dock_list", local_id))
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .show(&mut area_ui, |ui| {

@@ -150,12 +150,20 @@ The dock at the right edge of the root window is the one caller
   program runs, the session id that the program named, and the messages of the
   person that wait for a bridge. A conversation that the dock does not show keeps
   running and keeps its entries.
-- **A message starts the program.** A message of the person appends
-  `Entry::Person` and clears the draft. A workspace without a bridge starts one
-  first: `claude(<directory of the workspace>, SessionChoice::New(<uuid>))`, or
+- **One send path.** `HorizonApp::say_to_orchestrator` is the one send of a
+  message, and the composer and the button `+ Rent a machine` of the sidebar both
+  call it. A message of the person appends `Entry::Person` and clears the draft.
+  A workspace without a bridge starts one first:
+  `claude(<directory of the workspace>, SessionChoice::New(<uuid>))`, or
   `Resume(<session id>)` when an earlier bridge of this run named a session. The
   variable `HORIZON_ORCHESTRATOR_PROGRAM` replaces the path of the program and
   keeps its arguments; the fixture and the tests use it for a stand-in.
+- **A text above `MAX_TEXT_BYTES` is refused before it starts a turn.** The field
+  keeps the text of the person and one notice names the limit, so no program is
+  asked to take a line that it refuses. A send that fails for another reason hands
+  its bridge to the worker for a stop, which names the message that did not
+  reach the program; a bridge that runs is never dropped and never replaced by a
+  second start of the same workspace.
 - **No frame starts a process.** `Bridge::start` and `Bridge::stop` run on one
   worker of the dock, a thread named `orchestrator-dock`
   (`app/orchestrator_dock/worker.rs`). It is separate from the coordination
@@ -175,18 +183,34 @@ The dock at the right edge of the root window is the one caller
   conversation cut it: one line of `MAX_SUMMARY_CHARS` characters. The codec
   accepts an id only in the form of a UUID, and the next start resumes it only in
   that form: any other value starts a new session, so no id of the program is read
-  as another option of the program and none is passed as a word of a shell.
-- **The words of Horizon.** Three notices come from the dock and not from the
+  as another option of the program and none is passed as a word of a shell. A
+  start that resumed a stored session and did not continue it, and a start that
+  failed, forget the id, so the next message starts a new session and one notice
+  names why.
+- **The words of Horizon.** These notices come from the dock and not from the
   program: `Claude Code did not start: <error of the system>`, `Stopped by you`,
-  and `Claude Code reports that the plan limit is reached. Extra usage is in
-  use.` once for each bridge. The header shows the cost of every ended turn from
-  `ConversationSnapshot::cost_usd_total`.
-- **The end.** The close pass queues the stop of every bridge, and the
-  synchronous exit waits for the worker of the dock within the bound of a stop
-  before it ends. Before that wait, the exit queues one last write of each
-  conversation, so the entries that its programs left open reach their files.
-  The worker ends when the app drops it or when that wait closes its queue. No
+  `Claude Code reports that the plan limit is reached. Extra usage is in use.`
+  once for each bridge, `The message is too long to send. Shorten it.`,
+  `The message was not sent to the program. Send it again.`, and
+  `The earlier session could not continue. A new one starts with your next
+  message.` once for each stored session that does not continue. The header shows
+  the cost of every ended turn from `ConversationSnapshot::cost_usd_total`.
+- **The end.** The close pass queues the stop of every bridge. The frames of the
+  close hold the exit until the worker of the dock drained those stops, for at
+  most one `STOP_TIMEOUT` for each queued stop, and the pass under the spinner
+  names each program that still stops. A bound that passes ends every remaining
+  program by the identity that `programs.rs` recorded for it: its process id and
+  the moment that process started, so no signal reaches a later program with the
+  same id. The synchronous exit waits for the worker within the same bound and
+  applies the same rule. Before that wait, the exit queues one last write of each
+  conversation, so the entries that its programs left open reach their files. No
   program of a conversation stays after Horizon ended.
+- **A workspace that goes takes its conversation.** The frame poll stops and
+  forgets every conversation whose workspace the board no longer holds, which is
+  the close of the last panel of a workspace and the cleanup of an empty restored
+  workspace, and it deletes the stored file of that workspace. A session switch
+  stops and clears the whole dock at the moment that the board goes, and the
+  storage of a session that changes folder does the same.
 
 ## Storage
 

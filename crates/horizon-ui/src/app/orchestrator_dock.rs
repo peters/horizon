@@ -29,6 +29,7 @@ mod empty;
 mod header;
 mod layout;
 mod list;
+mod programs;
 mod session;
 mod storage;
 #[cfg(test)]
@@ -40,11 +41,12 @@ mod worker;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::Rect;
-use horizon_core::agent_bridge::{Bridge, BridgeError, ProgramSpec};
+use horizon_core::agent_bridge::{Bridge, BridgeError, STOP_TIMEOUT};
 
+use self::programs::Program;
 use self::session::{Session, Start};
 use super::HorizonApp;
 
@@ -60,9 +62,6 @@ pub(in crate::app) const PROGRAM_SWITCH: &str = "HORIZON_ORCHESTRATOR_PROGRAM";
 const PROGRAM: &str = "claude";
 /// The panel id of the dock, which egui remembers the place of.
 const DOCK_PANEL_ID: &str = "orchestrator_dock";
-/// The room that the exit waits for the worker of the dock: the bound of a stop,
-/// as the exit waits for the coordination worker.
-const WORKER_FLUSH: Duration = Duration::from_secs(2);
 
 /// The state of the dock of this run.
 pub(in crate::app) struct OrchestratorDock {
@@ -94,6 +93,12 @@ pub(in crate::app) struct OrchestratorDock {
     /// The worker that starts and stops the bridges of the conversations, in the
     /// order that the frames ask for them.
     worker: worker::Worker,
+    /// The stops of the bridges that the worker did not finish, and the programs
+    /// whose stop still runs there. The close of Horizon waits for them.
+    stops_pending: usize,
+    programs: Vec<Program>,
+    /// When the close began to wait for those stops, and the bound of that wait.
+    close_wait: Option<(Instant, Duration)>,
     /// The rectangles that the dock worked out in the last frame of a test, which
     /// the tests of the layout read.
     #[cfg(test)]
@@ -145,6 +150,9 @@ impl OrchestratorDock {
             drafts: HashMap::new(),
             storage: None,
             worker: worker::Worker::default(),
+            stops_pending: 0,
+            programs: Vec::new(),
+            close_wait: None,
             #[cfg(test)]
             last_frame: None,
         }
@@ -223,15 +231,16 @@ impl OrchestratorDock {
     }
 
     /// The text of the draft of `local_id`, when it holds more than white space.
-    /// The draft is gone after this answer: the message of the person is the
-    /// conversation's, and the field is empty again.
-    fn take_draft(&mut self, local_id: &str) -> Option<String> {
+    /// The field keeps the writing of the person: the send clears it, and a
+    /// message that goes out from another path leaves it alone.
+    fn draft_text(&self, local_id: &str) -> Option<String> {
         let text = self.drafts.get(local_id)?.trim().to_owned();
-        if text.is_empty() {
-            return None;
-        }
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Empties the field of `local_id`, which a message that went out does.
+    fn clear_draft(&mut self, local_id: &str) {
         self.drafts.remove(local_id);
-        Some(text)
     }
 
     /// The conversation of `local_id`, which a message of the person creates.
@@ -242,6 +251,11 @@ impl OrchestratorDock {
     /// Takes the request of one start of the conversation of `local_id`.
     fn begin_start(&mut self, local_id: &str) -> Option<Start> {
         self.sessions.get_mut(local_id).map(Session::begin_start)
+    }
+
+    /// Whether the start of the conversation of `local_id` waits on the worker.
+    fn is_starting(&self, local_id: &str) -> bool {
+        self.sessions.get(local_id).is_some_and(Session::is_starting)
     }
 
     /// Keeps the bridge of a start that answers `generation`, and answers the
@@ -279,31 +293,142 @@ impl OrchestratorDock {
     }
 
     /// Starts the bridge of the conversation of `local_id` on the worker of the
-    /// dock, and keeps the bridge of the answer to `generation`. A start opens a
-    /// process, so a frame never waits for it.
+    /// dock, and keeps the bridge of the answer to its start. A start opens a
+    /// process, so a frame never waits for it, and the specification of that
+    /// program is built on the worker as well: the identity of a workspace reads
+    /// the file system.
     fn start_bridge(
         &mut self,
-        spec: ProgramSpec,
-        local_id: String,
-        generation: u64,
+        program: PathBuf,
+        directory: PathBuf,
+        local_id: &str,
+        start: Start,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) {
-        self.worker.then(
-            move || Bridge::start(spec, session::codec(), wake),
-            move |dock, outcome| {
-                if let Some(bridge) = dock.adopt(&local_id, generation, outcome) {
-                    // The answer belongs to a start that the person replaced: its
-                    // bridge serves nobody and is stopped here.
-                    dock.worker.write(move || bridge.stop());
-                }
+        let generation = start.generation;
+        let session = start.session;
+        let started_id = local_id.to_owned();
+        let applied_id = local_id.to_owned();
+        let handed = self.worker.then(
+            move || {
+                let spec = session::program_spec(&program, &directory, session, &started_id);
+                Bridge::start(spec, session::codec(), wake)
             },
+            move |dock, outcome| dock.apply_start(&applied_id, generation, outcome),
         );
+        if !handed {
+            // No worker took the start, so no program of this conversation runs:
+            // the person reads the notice that names it, and the next message
+            // tries a start again.
+            self.apply_start(local_id, generation, None);
+        }
+    }
+
+    /// Keeps the bridge of the start that answers `generation`, and answers the
+    /// bridge that the caller stops instead.
+    fn apply_start(&mut self, local_id: &str, generation: u64, outcome: Option<Result<Bridge, BridgeError>>) {
+        if let Some(bridge) = self.adopt(local_id, generation, outcome) {
+            // The answer of a start that the person replaced, or of a second start
+            // of a live conversation, serves nobody: it is stopped here.
+            self.stop_bridge(bridge);
+        }
     }
 
     /// Stops `bridge` on the worker of the dock: a stop closes the input, waits
     /// for the program and ends it, so a frame never runs it.
+    ///
+    /// The identity of the program is recorded here and not in the job of the
+    /// worker, because a job that never runs, from a worker that does not start or
+    /// from a queue that the exit left behind, must still leave the identity of a
+    /// program that the close of Horizon has to end. One stop reads the process
+    /// table once, and no repeated frame path does.
     fn stop_bridge(&mut self, bridge: Bridge) {
-        self.worker.write(move || bridge.stop());
+        let program = Program::record(bridge.pid());
+        let pid = program.pid();
+        self.programs.push(program);
+        self.stops_pending = self.stops_pending.saturating_add(1);
+        let handed = self
+            .worker
+            .then(move || bridge.stop(), move |dock, _stopped| dock.stop_finished(pid));
+        if !handed {
+            // No worker took the stop, so nothing closes the input of that
+            // program: it stays recorded, and the close of Horizon ends it.
+            self.stops_pending = self.stops_pending.saturating_sub(1);
+        }
+    }
+
+    /// Applies the end of the stop of `pid` on the worker: the program of that
+    /// stop ended there, so the close of Horizon has nothing to end for it.
+    fn stop_finished(&mut self, pid: u32) {
+        self.stops_pending = self.stops_pending.saturating_sub(1);
+        self.programs.retain(|program| program.pid() != pid);
+    }
+
+    /// Stops every bridge of the dock on the worker, which the exit calls once.
+    fn stop_all_bridges(&mut self) {
+        let bridges = self.stop_all();
+        for bridge in bridges {
+            self.stop_bridge(bridge);
+        }
+    }
+
+    /// Stops every bridge of the dock on the worker and forgets every
+    /// conversation and draft: the board that they speak for goes, as the programs
+    /// that its panels hold do.
+    pub(in crate::app) fn stop_and_clear(&mut self) {
+        self.stop_all_bridges();
+        self.sessions.clear();
+        self.drafts.clear();
+    }
+
+    /// The stops of the dock that the worker did not finish, which the pass of a
+    /// close shows beside the panels of the terminal.
+    pub(in crate::app) fn stops_pending(&self) -> usize {
+        self.stops_pending
+    }
+
+    /// Whether the pass of a close still waits for a stop of the dock. A stop
+    /// closes the input of its program, waits for it and ends it, so the wait is
+    /// on the worker and never on this thread. Its bound is one stop of a bridge
+    /// for each stop that it waits for; a bound that passes ends every program
+    /// that its stop did not reach, by the identity that the dock recorded.
+    pub(in crate::app) fn stops_hold_exit(&mut self) -> bool {
+        if self.stops_pending == 0 {
+            self.close_wait = None;
+            self.end_remaining_programs(Duration::ZERO);
+            return false;
+        }
+        let bound = self.stop_bound();
+        let (started, bound) = *self.close_wait.get_or_insert((Instant::now(), bound));
+        if started.elapsed() < bound {
+            return true;
+        }
+        tracing::warn!(
+            stops = self.stops_pending,
+            "the exit ends the programs that their stop did not reach"
+        );
+        self.close_wait = None;
+        self.end_remaining_programs(Duration::ZERO);
+        false
+    }
+
+    /// The bound of a wait for the stops of the dock: one stop of a bridge for
+    /// each stop that it waits for.
+    fn stop_bound(&self) -> Duration {
+        let stops = u32::try_from(self.stops_pending.max(1)).unwrap_or(u32::MAX);
+        STOP_TIMEOUT.saturating_mul(stops)
+    }
+
+    /// Ends every program whose stop did not end it, by the identity that the dock
+    /// recorded, so no program of a conversation outlives the exit of Horizon. A
+    /// frame passes no grace, and an exit that already holds its thread passes the
+    /// moment that the termination signal gets before the kill signal.
+    fn end_remaining_programs(&mut self, grace: Duration) {
+        for program in self.programs.drain(..) {
+            if !program.end(grace) {
+                tracing::error!(pid = program.pid(), "a program of a conversation outlives its end");
+            }
+        }
     }
 
     /// Applies, in order, the outcomes of the worker of the dock.
@@ -313,13 +438,19 @@ impl OrchestratorDock {
         }
     }
 
-    /// Closes the worker of the dock for an exit that waits for it within its own
-    /// bound, so no start, stop or write outlives the app. The entries that the
-    /// exit leaves open go to their files first: a tool call that still runs
-    /// reads as interrupted on the next start.
+    /// Closes the worker of the dock for an exit that waits for it, so no start,
+    /// stop or write outlives the app. The wait is one stop of a bridge for each
+    /// stop that it waits for, and a program that its stop did not reach ends by
+    /// the identity that the dock recorded. The entries that the exit leaves open
+    /// go to their files first: a tool call that still runs reads as interrupted
+    /// on the next start.
     pub(in crate::app) fn flush_worker(&mut self) {
         self.flush_conversation_appends();
-        self.worker.flush(WORKER_FLUSH);
+        let bound = self.stop_bound();
+        self.worker.flush(bound);
+        self.stops_pending = 0;
+        self.close_wait = None;
+        self.end_remaining_programs(programs::END_GRACE);
     }
 
     /// Keeps the text of the example that the person clicked in the draft of
@@ -414,59 +545,23 @@ fn dock_switch(value: Option<&str>) -> bool {
 
 impl HorizonApp {
     /// Sends `text` to the orchestrator of the active workspace as the message of
-    /// the person, and starts the program of that conversation first when it has
-    /// none. It is the path of the send of the composer in the four parts that
-    /// the dock keeps: `Session::say` holds the message, `begin_start` names the
-    /// start, `program_spec` builds it, and the worker of the dock runs it. A
-    /// start opens a process, so no part of it runs on the thread of the frame.
+    /// the person. It is the path of the button `+ Rent a machine`, which writes
+    /// no draft: the send itself is [`HorizonApp::say_to_orchestrator`], which the
+    /// composer calls too.
     ///
-    /// It answers whether a message went out: a window without an active
-    /// workspace sends nothing, and neither does one whose orchestrator works.
+    /// It answers whether a message went out: a window without an active workspace
+    /// sends nothing, and neither does one whose orchestrator works.
     pub(in crate::app) fn say_to_active_orchestrator(&mut self, ctx: &egui::Context, text: &str) -> bool {
-        let Some((local_id, directory)) = self
+        let Some(local_id) = self
             .board
             .active_workspace
             .and_then(|id| self.board.workspace(id))
-            .map(|workspace| (workspace.local_id.clone(), program_directory(workspace.cwd.as_deref())))
+            .map(|workspace| workspace.local_id.clone())
         else {
             return false;
         };
-        if self.orchestrator_dock.busy(&local_id) {
-            return false;
-        }
-        let program = self.orchestrator_dock.program.clone();
-        let needs_bridge = {
-            let session = self.orchestrator_dock.session_mut(&local_id);
-            let needs_bridge = session.say(text);
-            needs_bridge && !session.is_starting()
-        };
-        if !needs_bridge {
-            return true;
-        }
-        let Some(request) = self.orchestrator_dock.begin_start(&local_id) else {
-            return false;
-        };
-        let spec = session::program_spec(&program, &directory, request.session.clone(), &local_id);
-        self.orchestrator_dock
-            .start_bridge(spec, local_id, request.generation, repaint_wake(ctx));
-        true
+        self.say_to_orchestrator(ctx, &local_id, text)
     }
-}
-
-/// The directory that the program of a conversation runs in: the directory of
-/// its workspace, or the home of the person when the workspace names none.
-fn program_directory(cwd: Option<&std::path::Path>) -> PathBuf {
-    cwd.map_or_else(
-        || std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from),
-        std::path::Path::to_path_buf,
-    )
-}
-
-/// The wake of a bridge of a conversation that the sidebar started: the next
-/// frame of this window.
-fn repaint_wake(ctx: &egui::Context) -> Arc<dyn Fn() + Send + Sync> {
-    let ctx = ctx.clone();
-    Arc::new(move || ctx.request_repaint())
 }
 
 /// The program of a start: the value of [`PROGRAM_SWITCH`] when it names one, and

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Rect, Stroke, Ui, pos2};
+use horizon_core::agent_bridge::MAX_TEXT_BYTES;
 
 use crate::app::settings::settings_panel_default_width;
 use crate::app::util::viewport_local_rect;
@@ -16,7 +17,7 @@ use crate::app::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 use crate::theme;
 
 use super::layout::{dock_fits, dock_rect, dock_width};
-use super::session::{self, Session};
+use super::session::{Said, Session, TOO_LONG_NOTICE};
 use super::{DOCK_PANEL_ID, composer, empty, header, layout, list};
 
 /// The wake of the bridge of a conversation: the next frame of this window.
@@ -111,6 +112,7 @@ impl HorizonApp {
                     Some(snapshot) if !snapshot.entries.is_empty() => list::render(
                         ui,
                         parts.body,
+                        local_id.unwrap_or_default(),
                         &snapshot.entries,
                         list::waits_for_text(&snapshot.entries, snapshot.busy),
                     ),
@@ -156,6 +158,9 @@ impl HorizonApp {
             session.poll();
         }
         self.orchestrator_dock.poll_worker();
+        // A workspace that closes takes its conversation with it: no program of
+        // the dock speaks for a workspace that the board no longer holds.
+        self.forget_workspaces_the_board_left();
         let program = self.orchestrator_dock.program_name().to_owned();
         self.orchestrator_dock.restore_conversations(&self.board);
         if self
@@ -167,32 +172,77 @@ impl HorizonApp {
         self.orchestrator_dock.queue_conversation_appends();
     }
 
-    /// Sends the draft of the workspace that `local_id` names, and starts the
-    /// bridge of that conversation first when it has none.
-    fn send_orchestrator_message(&mut self, ctx: &egui::Context, local_id: &str) {
-        let Some(text) = self.orchestrator_dock.take_draft(local_id) else {
-            return;
-        };
-        let directory = program_directory(&self.board, local_id);
-        let program = self.orchestrator_dock.program.clone();
-        let needs_bridge = {
-            let session = self.orchestrator_dock.session_mut(local_id);
-            let needs_bridge = session.say(&text);
-            needs_bridge && !session.is_starting()
-        };
-        if !needs_bridge {
-            return;
+    /// Forgets every conversation whose workspace the board no longer holds: its
+    /// program ends on the worker, and its stored conversation leaves the session
+    /// folder. A workspace leaves the board when its last panel closes, and the
+    /// dock of that workspace has no control left to stop it with.
+    fn forget_workspaces_the_board_left(&mut self) {
+        let gone: Vec<String> = self
+            .orchestrator_dock
+            .sessions
+            .keys()
+            .filter(|local_id| self.board.workspace_id_by_local_id(local_id).is_none())
+            .cloned()
+            .collect();
+        for local_id in gone {
+            self.forget_orchestrator_conversation(&local_id);
         }
-        let Some(request) = self.orchestrator_dock.begin_start(local_id) else {
+    }
+
+    /// Sends `text` to the orchestrator of the workspace that `local_id` names, as
+    /// the message of the person, and starts the program of that conversation when
+    /// it has none. It is the one send of the dock: the composer and the button
+    /// `+ Rent a machine` of the sidebar both call it, and no part of it runs a
+    /// process on the thread of the frame.
+    ///
+    /// It answers whether a message went out: a workspace that the board does not
+    /// hold sends nothing, a conversation that works sends nothing, and a text
+    /// above [`MAX_TEXT_BYTES`] bytes sends nothing and keeps the field of the
+    /// person.
+    pub(in crate::app) fn say_to_orchestrator(&mut self, ctx: &egui::Context, local_id: &str, text: &str) -> bool {
+        if self.board.workspace_id_by_local_id(local_id).is_none() || self.orchestrator_dock.busy(local_id) {
+            return false;
+        }
+        if text.len() > MAX_TEXT_BYTES {
+            // The program would refuse that text, so the dock begins no turn: the
+            // field keeps the writing of the person, and one notice names why.
+            self.orchestrator_dock.session_mut(local_id).notice(TOO_LONG_NOTICE);
+            return false;
+        }
+        let directory = program_directory(&self.board, local_id);
+        let said = self.orchestrator_dock.session_mut(local_id).say(text);
+        let (needs_bridge, stopped) = match said {
+            Said::Taken => (false, None),
+            Said::Start => (true, None),
+            // The program of this conversation took no message: it ends on the
+            // worker, and a new program carries what waits.
+            Said::StartAfter(bridge) => (true, Some(bridge)),
+        };
+        if let Some(bridge) = stopped {
+            self.orchestrator_dock.stop_bridge(bridge);
+        }
+        if !needs_bridge || self.orchestrator_dock.is_starting(local_id) {
+            return true;
+        }
+        let Some(start) = self.orchestrator_dock.begin_start(local_id) else {
+            return false;
+        };
+        let program = self.orchestrator_dock.program.clone();
+        self.orchestrator_dock
+            .start_bridge(program, directory, local_id, start, repaint_wake(ctx));
+        true
+    }
+
+    /// Sends the draft of the workspace that `local_id` names, and starts the
+    /// program of that conversation when it has none. A message that does not go
+    /// out keeps the draft, so the person shortens it instead of writing it again.
+    fn send_orchestrator_message(&mut self, ctx: &egui::Context, local_id: &str) {
+        let Some(text) = self.orchestrator_dock.draft_text(local_id) else {
             return;
         };
-        let spec = session::program_spec(&program, &directory, request.session.clone(), local_id);
-        let wake = repaint_wake(ctx);
-        let generation = request.generation;
-        // A start is a process, so it never runs on the thread of this frame, and
-        // it never takes the room of a browser job either.
-        self.orchestrator_dock
-            .start_bridge(spec, local_id.to_owned(), generation, wake);
+        if self.say_to_orchestrator(ctx, local_id, &text) {
+            self.orchestrator_dock.clear_draft(local_id);
+        }
     }
 
     /// Writes `text` in the draft of `local_id` and sends it, as a person who
@@ -212,11 +262,10 @@ impl HorizonApp {
         }
     }
 
-    /// Stops every bridge of the dock, which the exit waits for within its bound.
+    /// Stops every bridge of the dock, and waits for their stops within the bound
+    /// of the exit.
     pub(in crate::app) fn stop_orchestrator_bridges(&mut self) {
-        for bridge in self.orchestrator_dock.stop_all() {
-            self.orchestrator_dock.stop_bridge(bridge);
-        }
+        self.orchestrator_dock.stop_all_bridges();
     }
 
     /// Drops the conversation and the draft of a workspace that closes, stops

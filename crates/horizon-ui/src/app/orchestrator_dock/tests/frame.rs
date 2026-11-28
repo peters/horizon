@@ -6,7 +6,7 @@ use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 use horizon_core::{RuntimeState, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
-use crate::app::orchestrator_dock::composer::{FIELD_HINT, FIELD_ID};
+use crate::app::orchestrator_dock::composer::{self, FIELD_HINT, FIELD_ID};
 use crate::app::orchestrator_dock::header::{NO_WORKSPACE_LINE, PROGRAM_LINE};
 use crate::app::orchestrator_dock::{LastFrame, OrchestratorDock};
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
@@ -149,6 +149,17 @@ pub(super) fn texts(output: &egui::FullOutput) -> Vec<Drawn> {
         walk(&clipped.shape, &mut out);
     }
     out
+}
+
+/// One wheel event of 200 points, as the mouse of a person reports it.
+fn wheel(delta: egui::Vec2) -> Event {
+    Event::MouseWheel {
+        source: egui::MouseWheelSource::Wheel,
+        unit: egui::MouseWheelUnit::Point,
+        delta,
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    }
 }
 
 fn button(pos: Pos2, pressed: bool) -> Event {
@@ -375,6 +386,125 @@ fn the_field_takes_the_keyboard_only_after_a_click() {
     assert!(
         window.ctx.memory(|memory| memory.has_focus(field)),
         "a click in the field gives it the keyboard"
+    );
+}
+
+#[test]
+fn a_click_in_the_padding_of_the_field_takes_the_keyboard_and_the_control_keeps_its_own() {
+    let mut window = Window::new(WIDE, vec![editor_workspace_state("dock-work", [40.0, 40.0])], true);
+    window.focus_workspace("dock-work");
+    let _ = window.frame(Vec::new());
+    let field = egui::Id::unique(FIELD_ID);
+    let parts = parts_of(&window);
+    assert!(!window.ctx.memory(|memory| memory.has_focus(field)));
+
+    // Four points from the left inner edge of the field: inside its frame, and
+    // outside the text of it, which starts 14 points in.
+    let padding = Pos2::new(parts.field.min.x + 4.0, parts.field.center().y);
+    let _ = window.frame(vec![Event::PointerMoved(padding), button(padding, true)]);
+    let _ = window.frame(vec![button(padding, false)]);
+    assert!(
+        window.ctx.memory(|memory| memory.has_focus(field)),
+        "a click in the padding of the field gives it the keyboard"
+    );
+
+    // The control inside the field keeps its own rectangle: a press on its centre
+    // sends the draft that the field holds.
+    window.note_draft("dock-work", "hello there");
+    let _ = window.frame(Vec::new());
+    let parts = parts_of(&window);
+    let at = parts.send.center();
+    let _ = window.frame(vec![Event::PointerMoved(at)]);
+    let control = window
+        .ctx()
+        .read_response(egui::Id::unique(composer::SEND_ID))
+        .expect("the control of the last frame");
+    let hovered = control.hovered();
+    let _ = window.frame(vec![button(at, true)]);
+    let pressed = window
+        .ctx()
+        .read_response(egui::Id::unique(composer::SEND_ID))
+        .is_some_and(|control| control.is_pointer_button_down_on());
+    let _ = window.frame(vec![button(at, false)]);
+    let clicked = window
+        .ctx()
+        .read_response(egui::Id::unique(composer::SEND_ID))
+        .is_some_and(|control| control.clicked());
+    let messages = window.app().orchestrator_dock.person_messages("dock-work");
+    assert!(
+        messages.iter().any(|text| text == "hello there"),
+        "the press on the control reaches the send of the field: messages {messages:?}, draft {:?}, at {at:?} in {:?}, hovered {hovered}, pressed {pressed}, clicked {clicked}",
+        window.app().orchestrator_dock.draft("dock-work"),
+        parts.send
+    );
+}
+
+/// The texts that one frame of the dock draws, from the top down. Two frames of
+/// one conversation draw the same words in the same order while the person
+/// changes nothing.
+fn dock_texts(window: &mut Window) -> Vec<String> {
+    let dock = dock_of(window);
+    let mut drawn: Vec<(f32, String)> = texts(&window.frame(Vec::new()))
+        .into_iter()
+        .filter(|drawn| dock.contains_rect(drawn.rect))
+        .map(|drawn| (drawn.rect.min.y, drawn.text))
+        .collect();
+    drawn.sort_by(|left, right| left.0.total_cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    drawn.into_iter().map(|(_, text)| text).collect()
+}
+
+#[test]
+fn the_scroll_place_of_a_conversation_never_shows_in_another_workspace() {
+    let mut window = Window::new(
+        WIDE,
+        vec![
+            editor_workspace_state("dock-a", [40.0, 40.0]),
+            editor_workspace_state("dock-b", [1000.0, 40.0]),
+        ],
+        true,
+    );
+    // Two conversations that are longer than the list shows at once.
+    for (local_id, count) in [("dock-a", 60_usize), ("dock-b", 40_usize)] {
+        let session = window.app().orchestrator_dock.session_mut(local_id);
+        for index in 0..count {
+            session.notice(&format!("{local_id} note {index}"));
+        }
+    }
+
+    // The first visit of the second workspace shows its list where the dock
+    // gives it, after the list settled at its end.
+    window.focus_workspace("dock-b");
+    let _ = window.frame(Vec::new());
+    let first_visit = dock_texts(&mut window);
+
+    // The person reads the top of the first conversation.
+    window.focus_workspace("dock-a");
+    let _ = window.frame(Vec::new());
+    let body = parts_of(&window).body;
+    let at = body.center();
+    let _ = window.frame(vec![Event::PointerMoved(at)]);
+    for _ in 0..8 {
+        let _ = window.frame(vec![wheel(egui::vec2(0.0, 200.0))]);
+    }
+    // The wheel of egui settles over a few frames, and the list of the second
+    // workspace must not take what is left of it.
+    for _ in 0..12 {
+        let _ = window.frame(Vec::new());
+    }
+    let scrolled = dock_texts(&mut window);
+    assert!(
+        scrolled.iter().any(|text| text == "dock-a note 0"),
+        "the wheel scrolls the first conversation up: {scrolled:?}"
+    );
+
+    // The second visit of the second workspace shows its own list, where its own
+    // place of the scroll stands.
+    window.focus_workspace("dock-b");
+    let _ = window.frame(Vec::new());
+    let second_visit = dock_texts(&mut window);
+    assert_eq!(
+        second_visit, first_visit,
+        "the place of the list of one conversation stays with that workspace"
     );
 }
 

@@ -2,7 +2,11 @@
 //!
 //! A kept window ends nothing: the terminals, the agent programs, the link to a
 //! server and the shared terminals go on, and the board of the session is saved
-//! at the hide. A workspace window of its own closes as it did.
+//! at the hide. The conversations of the orchestrator dock follow that rule: a
+//! close that hides the window keeps their programs, as it keeps the programs of
+//! the panels, and `Quit Horizon` ends them on the worker of the dock before the
+//! exit (`super::lifecycle::shutdown`). A workspace window of its own closes as it
+//! did.
 //!
 //! The window is hidden with [`egui::ViewportCommand::Visible`], which egui-winit
 //! passes to `set_visible` of winit 0.30.13: on X11 that unmaps the window and

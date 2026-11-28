@@ -19,15 +19,15 @@ use horizon_core::agent_bridge::{Entry, ToolState};
 
 use crate::app::HorizonApp;
 use crate::app::orchestrator_dock::composer::FIELD_ID;
-use crate::app::orchestrator_dock::session::{LIMIT_NOTICE, Phase, STOPPED_NOTICE, Session};
+use crate::app::orchestrator_dock::session::{LIMIT_NOTICE, Phase, STOPPED_NOTICE, Session, TOO_LONG_NOTICE};
 use crate::app::orchestrator_dock::tests::frame::{Drawn, Window, texts};
 use crate::app::test_support::editor_workspace_state;
 
 /// The window of these tasks: wide enough that the widest dock stands beside the
 /// canvas.
-const WIDE: [f32; 2] = [2000.0, 1000.0];
+pub(super) const WIDE: [f32; 2] = [2000.0, 1000.0];
 /// The session that every stand-in names.
-const SESSION: &str = "00000000-0000-4000-8000-000000000001";
+pub(super) const SESSION: &str = "00000000-0000-4000-8000-000000000001";
 
 /// The stand-in of an agent that answers each line of the person with one text
 /// and one result, and names the cost of that turn.
@@ -61,14 +61,53 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"@SESSION@"}'
 while IFS= read -r line; do :; done
 "#;
 
+/// The stand-in of a program that ignores the close of its input and the
+/// termination signal: only the kill signal ends it.
+pub(super) const STUBBORN: &str = r#"trap '' TERM
+echo $$ > '@PID@'
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"@SESSION@"}'
+while :; do sleep 0.05; done
+"#;
+
 /// One stand-in program of the dock, written as a program of `folder`.
-fn stand_in(folder: &Path, body: &str) -> PathBuf {
-    horizon_core::stand_in_program_in(folder, "stand-in.sh", body).expect("the stand-in program of the test")
+pub(super) fn stand_in(folder: &Path, body: &str) -> PathBuf {
+    stand_in_named(folder, "stand-in.sh", body)
+}
+
+/// The stand-in program `name` of the dock, written as a program of `folder`, so
+/// one folder holds the programs of two conversations.
+pub(super) fn stand_in_named(folder: &Path, name: &str, body: &str) -> PathBuf {
+    horizon_core::stand_in_program_in(folder, name, body).expect("the stand-in program of the test")
+}
+
+/// The body of the stubborn stand-in of `pid`.
+pub(super) fn stubborn(pid: &Path) -> String {
+    STUBBORN
+        .replace("@PID@", &pid.display().to_string())
+        .replace("@SESSION@", SESSION)
+}
+
+/// The status that the frames of a close ask the process to end with, and the
+/// frames that run until the window asks for it. A test build records the status
+/// where a normal build ends the process.
+pub(super) fn exit_status(window: &mut Window) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = window.app().exit_code {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the close of Horizon never asked for the exit"
+        );
+        let _ = window.frame(Vec::new());
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// The body of a stand-in that answers every line, with `tool` tool calls, an
 /// overage state of `overage` and the cost of `cost` for each turn.
-fn answering(pid: &Path, tool: bool, overage: bool, cost: f64) -> String {
+pub(super) fn answering(pid: &Path, tool: bool, overage: bool, cost: f64) -> String {
     answering_with(pid, if tool { TOOL_CALL } else { "" }, overage, cost)
 }
 
@@ -92,7 +131,7 @@ fn silent(pid: &Path) -> String {
 }
 
 /// A window on one workspace `chat` whose orchestrator runs `program`.
-fn window_of(program: &Path) -> Window {
+pub(super) fn window_of(program: &Path) -> Window {
     let mut window = Window::with_program(WIDE, vec![editor_workspace_state("chat", [40.0, 40.0])], program);
     window.focus_workspace("chat");
     let _ = window.frame(Vec::new());
@@ -109,7 +148,7 @@ fn pointer(pos: Pos2, pressed: bool) -> Event {
 }
 
 /// The entries of the conversation of `local_id`.
-fn entries_of(app: &HorizonApp, local_id: &str) -> Vec<Entry> {
+pub(super) fn entries_of(app: &HorizonApp, local_id: &str) -> Vec<Entry> {
     app.orchestrator_dock
         .session(local_id)
         .map(|session| session.snapshot().entries.clone())
@@ -118,7 +157,7 @@ fn entries_of(app: &HorizonApp, local_id: &str) -> Vec<Entry> {
 
 /// The state of the conversation of `local_id`, which the chip of the header
 /// names.
-fn state_of(app: &HorizonApp, local_id: &str) -> Option<Phase> {
+pub(super) fn state_of(app: &HorizonApp, local_id: &str) -> Option<Phase> {
     app.orchestrator_dock.session(local_id).map(Session::phase)
 }
 
@@ -158,7 +197,7 @@ fn press(window: &mut Window, key: Key, modifiers: Modifiers) {
 }
 
 /// Writes `text` in the field of the dock and sends it with Enter.
-fn send(window: &mut Window, text: &str) {
+pub(super) fn send(window: &mut Window, text: &str) {
     click_field(window);
     type_text(window, text);
     press(window, Key::Enter, Modifiers::NONE);
@@ -180,7 +219,7 @@ fn press_control(window: &mut Window) {
 
 /// Waits until the process `pid` is gone, and names what the test waited for.
 #[cfg(target_os = "linux")]
-fn wait_until_no_process(what: &str, pid: u32) {
+pub(super) fn wait_until_no_process(what: &str, pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Path::new(&format!("/proc/{pid}")).exists() {
         assert!(Instant::now() < deadline, "the test waited for {what}");
@@ -189,7 +228,7 @@ fn wait_until_no_process(what: &str, pid: u32) {
 }
 
 /// The process id that the stand-in of a test wrote into `pid`.
-fn child_of(pid: &Path) -> u32 {
+pub(super) fn child_of(pid: &Path) -> u32 {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(text) = std::fs::read_to_string(pid)
@@ -445,16 +484,16 @@ fn the_frame_returns_at_once_while_the_start_of_the_child_is_held() {
     let program = stand_in(folder.path(), &answering(&pid, false, false, 0.01));
     let mut window = window_of(&program);
 
-    // The coordination worker holds the start until the test releases it.
+    // The worker of the dock holds the start until the test releases it.
     let (release, released) = mpsc::channel::<()>();
     let (started, holding) = mpsc::channel::<()>();
-    window.app().browser_create_host.io.write(move || {
+    let _ = window.app().orchestrator_dock.worker.write(move || {
         let _ = started.send(());
         let _ = released.recv();
     });
     holding
         .recv_timeout(Duration::from_secs(10))
-        .expect("the worker holds the start of the dock");
+        .expect("the worker of the dock holds the start");
     let releasing = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         let _ = release.send(());
@@ -543,7 +582,7 @@ fn a_held_stop_never_holds_a_job_of_the_browser_worker() {
     // The worker of the dock holds the stop until the test releases it.
     let (release, released) = mpsc::channel::<()>();
     let (held, holding) = mpsc::channel::<()>();
-    window.app().orchestrator_dock.worker.write(move || {
+    let _ = window.app().orchestrator_dock.worker.write(move || {
         let _ = held.send(());
         let _ = released.recv();
     });
@@ -642,64 +681,69 @@ fn a_conversation_goes_on_while_another_workspace_is_active() {
 }
 
 #[test]
-fn the_end_of_horizon_leaves_no_child_of_a_conversation() {
+fn an_over_long_message_names_the_limit_and_stays_in_the_field() {
     let folder = tempfile::tempdir().expect("a folder of the test");
     let pid = folder.path().join("pid");
     let program = stand_in(folder.path(), &answering(&pid, false, false, 0.01));
     let mut window = window_of(&program);
+    let text = "x".repeat(horizon_core::agent_bridge::MAX_TEXT_BYTES + 1);
+    window.app().orchestrator_dock.draft_mut("chat").push_str(&text);
 
-    send(&mut window, "hello there");
-    window.wait_for("the answer of the stand-in", |app| {
-        entries_of(app, "chat")
-            .iter()
-            .any(|entry| matches!(entry, Entry::Agent { .. }))
-    });
-    let child = child_of(&pid);
+    // The press of Enter in the field runs this send. The test calls it without a
+    // frame, because that frame would lay out a text of 256 KiB.
+    let ctx = window.ctx().clone();
+    let sent = window.app().say_to_orchestrator(&ctx, "chat", &text);
 
-    {
-        let _frame = horizon_core::ui_thread::FrameScope::enter();
-        window.app().begin_shutdown();
-        window.app().run_exit_cleanup();
-    }
+    assert!(!sent, "a message above the bound does not go out");
     assert_eq!(
-        window.app().orchestrator_dock.running_bridges(),
-        0,
-        "no bridge of the dock outlives the end of Horizon"
+        window.app().orchestrator_dock.draft("chat"),
+        text,
+        "the field keeps the message of the person"
     );
-    #[cfg(target_os = "linux")]
-    wait_until_no_process("the child of the conversation", child);
-    let _ = child;
+    assert_eq!(
+        entries_of(window.app(), "chat"),
+        vec![Entry::Notice {
+            text: TOO_LONG_NOTICE.to_owned()
+        }],
+        "one notice names the limit, and no message went out"
+    );
+    assert_eq!(
+        state_of(window.app(), "chat"),
+        Some(Phase::NotConnected),
+        "no program starts for a message that does not go out"
+    );
 }
 
 #[test]
-fn a_conversation_that_is_forgotten_stops_its_program_and_drops_its_entries() {
+fn a_start_that_finds_no_worker_names_the_failure_and_the_next_message_tries_again() {
     let folder = tempfile::tempdir().expect("a folder of the test");
     let pid = folder.path().join("pid");
     let program = stand_in(folder.path(), &answering(&pid, false, false, 0.01));
     let mut window = window_of(&program);
+    // No thread of the dock takes a job, as a system without the room for one.
+    window.app().orchestrator_dock.worker.hold_no_worker();
 
     send(&mut window, "hello there");
-    window.wait_for("the answer of the stand-in", |app| {
+    window.wait_for("the notice of a start without a worker", |app| {
+        entries_of(app, "chat")
+            .iter()
+            .any(|entry| matches!(entry, Entry::Notice { text } if text.starts_with("Claude Code did not start: ")))
+    });
+    assert_eq!(
+        state_of(window.app(), "chat"),
+        Some(Phase::Ended),
+        "a start that no worker runs does not leave the conversation starting"
+    );
+
+    // A worker starts again, and the next message starts a program.
+    window.app().orchestrator_dock.worker.take_jobs_again();
+    send(&mut window, "and again");
+    window.wait_for("the answer of the second start", |app| {
         entries_of(app, "chat")
             .iter()
             .any(|entry| matches!(entry, Entry::Agent { .. }))
     });
-    let child = child_of(&pid);
-
-    {
-        let _frame = horizon_core::ui_thread::FrameScope::enter();
-        // This is the call of the sidebar on the path that removes a workspace.
-        window.app().forget_orchestrator_conversation("chat");
-    }
-
-    assert!(
-        window.app().orchestrator_dock.session("chat").is_none(),
-        "the conversation and its draft went with the workspace"
-    );
-    assert_eq!(window.app().orchestrator_dock.running_bridges(), 0);
-    #[cfg(target_os = "linux")]
-    wait_until_no_process("the program of the removed workspace", child);
-    let _ = child;
+    assert_eq!(state_of(window.app(), "chat"), Some(Phase::Running));
 }
 
 #[test]
