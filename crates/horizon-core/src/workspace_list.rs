@@ -1,10 +1,11 @@
 //! The workspace list: the attention badge of each workspace of the sidebar and
 //! the one line of facts under its name. The UI reads the same rows.
 //!
-//! The line says what Horizon knows about the workspace: the agents that wait
-//! for the person and the machine that it runs on. It holds no text of the
-//! screen of a panel: such a line is what a program printed, with its prompts
-//! and its control characters, and it is not a statement about the workspace.
+//! The line says what Horizon knows about the workspace: the state of its
+//! orchestrator, the agents that wait for the person and the machine that it runs
+//! on. It holds no text of the screen of a panel: such a line is what a program
+//! printed, with its prompts and its control characters, and it is not a statement
+//! about the workspace.
 use crate::attention::Attention;
 
 /// How many agent panels of a workspace wait for the person.
@@ -35,16 +36,101 @@ impl Waiting {
     }
 }
 
+/// What the dock knows about the turns of the orchestrator of one workspace.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Turn {
+    /// A turn of the program runs now.
+    pub busy: bool,
+    /// How many turns of the conversation ended with a failure, as the
+    /// conversation names each of them in one line. A reader that knows the
+    /// count of an earlier moment tells a turn that failed from one that ended
+    /// well.
+    pub failed: usize,
+}
+
+/// The end of one turn of the orchestrator of a workspace that the person did
+/// not see in the dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnEnd {
+    /// The turn ended without a failure.
+    Done,
+    /// The turn failed.
+    Failed,
+}
+
+/// The state of the orchestrator of a workspace: the one word at the front of
+/// the line of its row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Orchestrator {
+    /// No question waits, no turn runs and no turn ended unseen, so the row says
+    /// no word.
+    #[default]
+    Quiet,
+    /// A card of the workspace asks a question that nobody answered.
+    NeedsYou,
+    /// The last turn of the orchestrator ended with a failure that the person
+    /// did not see.
+    Failed,
+    /// A turn of the orchestrator runs now.
+    Working,
+    /// The last turn of the orchestrator ended well and the person did not see
+    /// it in the dock.
+    Done,
+}
+
+impl Orchestrator {
+    /// The state of a workspace, in the order of weight of one word: a question,
+    /// then a failed turn, then a working turn, then a turn that ended unseen.
+    #[must_use]
+    pub const fn of(questions: usize, turn: Turn, unseen: Option<TurnEnd>) -> Self {
+        if questions > 0 {
+            return Self::NeedsYou;
+        }
+        match unseen {
+            Some(TurnEnd::Failed) => Self::Failed,
+            _ if turn.busy => Self::Working,
+            Some(TurnEnd::Done) => Self::Done,
+            None => Self::Quiet,
+        }
+    }
+
+    /// The one word of the line, or `None` for a workspace that says no word.
+    #[must_use]
+    pub const fn word(self) -> Option<&'static str> {
+        match self {
+            Self::Quiet => None,
+            Self::NeedsYou => Some("Needs you"),
+            Self::Failed => Some("Failed"),
+            Self::Working => Some("Working"),
+            Self::Done => Some("Done"),
+        }
+    }
+
+    /// The state that the row carries, from the heaviest state of its panels: a
+    /// question and a failed turn take the mark of a panel that needs the
+    /// person, a finished turn the mark of a finished panel, and a working turn
+    /// the state of the panels themselves.
+    #[must_use]
+    pub const fn attention(self, panels: Attention) -> Attention {
+        match self {
+            Self::NeedsYou | Self::Failed => Attention::NeedsYou,
+            Self::Done => Attention::Done,
+            Self::Working | Self::Quiet => panels,
+        }
+    }
+}
+
 /// One row of the workspace list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    /// The heaviest attention state of the panels of the workspace.
+    /// The heaviest attention state of the panels of the workspace, or the state
+    /// that its orchestrator shows.
     pub attention: Attention,
     /// How many of its agent panels wait for the person.
     pub waiting: Waiting,
-    /// The line under the name: the count of the agents that wait, then
-    /// `on <machine>`. It is empty for a workspace of this computer where no
-    /// agent waits.
+    /// The line under the name: the word of the orchestrator, then the count of
+    /// the agents that wait and `on <machine>`. It is empty for a workspace of
+    /// this computer where no agent waits and no orchestrator speaks.
     pub line: String,
 }
 
@@ -52,22 +138,28 @@ impl Row {
     /// The row of a workspace that runs on this computer, where no agent waits.
     #[must_use]
     pub fn local(attention: Attention) -> Self {
-        Self::placed(attention, Waiting::default(), None)
+        Self::placed(attention, Waiting::default(), None, Orchestrator::Quiet)
     }
 
     /// The row of a workspace that runs on this computer or on a machine.
     ///
-    /// The count comes first, so a long machine name cannot cut it off the row.
+    /// The word of the orchestrator comes first, then the count, so a long
+    /// machine name cannot cut either of them off the row.
     #[must_use]
-    pub fn placed(attention: Attention, waiting: Waiting, machine: Option<&str>) -> Self {
+    pub fn placed(attention: Attention, waiting: Waiting, machine: Option<&str>, orchestrator: Orchestrator) -> Self {
         let place = machine.map(|machine| format!("on {machine}"));
-        let line = match (waiting.line(), place) {
+        let facts = match (waiting.line(), place) {
             (Some(count), Some(place)) => format!("{count} \u{00B7} {place}"),
             (Some(line), None) | (None, Some(line)) => line,
             (None, None) => String::new(),
         };
+        let line = match (orchestrator.word(), facts.is_empty()) {
+            (Some(word), false) => format!("{word} \u{00B7} {facts}"),
+            (Some(word), true) => word.to_owned(),
+            (None, _) => facts,
+        };
         Self {
-            attention,
+            attention: orchestrator.attention(attention),
             waiting,
             line,
         }
@@ -82,11 +174,14 @@ mod tests {
     fn a_row_says_where_its_workspace_runs_and_nothing_of_a_screen() {
         let none = Waiting::default();
         assert_eq!(
-            Row::placed(Attention::Working, none, Some("build-1")).line,
+            Row::placed(Attention::Working, none, Some("build-1"), Orchestrator::Quiet).line,
             "on build-1",
             "a row says where the workspace lives"
         );
-        assert_eq!(Row::placed(Attention::Working, none, None).line, "");
+        assert_eq!(
+            Row::placed(Attention::Working, none, None, Orchestrator::Quiet).line,
+            ""
+        );
         assert_eq!(Row::local(Attention::Working).line, "");
     }
 
@@ -106,11 +201,77 @@ mod tests {
         );
         assert_eq!(Waiting::default().line(), None);
         let waiting = Waiting { needs_you: 2, done: 0 };
-        assert_eq!(Row::placed(Attention::NeedsYou, waiting, None).line, "2 need you");
         assert_eq!(
-            Row::placed(Attention::Done, waiting, Some("build-1")).line,
+            Row::placed(Attention::NeedsYou, waiting, None, Orchestrator::Quiet).line,
+            "2 need you"
+        );
+        assert_eq!(
+            Row::placed(Attention::Done, waiting, Some("build-1"), Orchestrator::Quiet).line,
             "2 need you \u{00B7} on build-1",
             "a count is never cut off, also when the workspace says where it lives"
         );
+    }
+
+    #[test]
+    fn the_word_of_an_orchestrator_comes_first_in_the_line_of_its_row() {
+        let waiting = Waiting { needs_you: 1, done: 0 };
+        let row = Row::placed(Attention::Idle, waiting, Some("build-1"), Orchestrator::Done);
+        assert_eq!(row.line, "Done \u{00B7} 1 needs you \u{00B7} on build-1");
+        assert_eq!(row.attention, Attention::Done, "a finished turn marks the row");
+
+        // A word alone, and no line of facts to join it to.
+        let alone = Row::placed(Attention::Idle, Waiting::default(), None, Orchestrator::Working);
+        assert_eq!(alone.line, "Working");
+        assert_eq!(alone.attention, Attention::Idle, "no agent of the panel waits");
+    }
+
+    #[test]
+    fn one_word_says_the_heaviest_state_of_a_workspace() {
+        let quiet = Turn { busy: false, failed: 0 };
+        assert_eq!(Orchestrator::of(1, quiet, None), Orchestrator::NeedsYou);
+        assert_eq!(
+            Orchestrator::of(1, Turn { busy: true, failed: 0 }, Some(TurnEnd::Failed)),
+            Orchestrator::NeedsYou,
+            "a question outranks every turn"
+        );
+        assert_eq!(
+            Orchestrator::of(0, Turn { busy: true, failed: 1 }, Some(TurnEnd::Failed)),
+            Orchestrator::Failed,
+            "a failed turn outranks a working one"
+        );
+        assert_eq!(
+            Orchestrator::of(0, Turn { busy: true, failed: 1 }, Some(TurnEnd::Done)),
+            Orchestrator::Working,
+            "a working turn outranks a finished one"
+        );
+        assert_eq!(Orchestrator::of(0, quiet, Some(TurnEnd::Done)), Orchestrator::Done);
+        assert_eq!(Orchestrator::of(0, quiet, None), Orchestrator::Quiet);
+        assert_eq!(Orchestrator::Quiet.word(), None);
+        assert_eq!(Orchestrator::Done.word(), Some("Done"));
+        assert_eq!(Orchestrator::Working.word(), Some("Working"));
+        assert_eq!(Orchestrator::Failed.word(), Some("Failed"));
+        assert_eq!(Orchestrator::NeedsYou.word(), Some("Needs you"));
+    }
+
+    #[test]
+    fn the_mark_of_a_workspace_follows_the_word_and_the_panels_behind_it() {
+        assert_eq!(Orchestrator::NeedsYou.attention(Attention::Idle), Attention::NeedsYou);
+        assert_eq!(
+            Orchestrator::Failed.attention(Attention::Idle),
+            Attention::NeedsYou,
+            "a failed turn asks the person, as an agent panel that failed does"
+        );
+        assert_eq!(Orchestrator::Done.attention(Attention::Idle), Attention::Done);
+        assert_eq!(
+            Orchestrator::Working.attention(Attention::Working),
+            Attention::Working,
+            "a working turn keeps the state of the attention model"
+        );
+        assert_eq!(
+            Orchestrator::Working.attention(Attention::Idle),
+            Attention::Idle,
+            "a row whose agent panels are quiet keeps the state of today"
+        );
+        assert_eq!(Orchestrator::Quiet.attention(Attention::NeedsYou), Attention::NeedsYou);
     }
 }

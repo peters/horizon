@@ -11,9 +11,10 @@ optional long answer, the state of the limit of the plan, and the result of the
 turn with its cost. A turn whose text holds `slow` waits two seconds before its
 answer, so a run shows the working state of the dock.
 
-The words `tool`, `fail`, `long`, `slow`, `card` and `sleepy` choose what a turn
-answers: a tool call that succeeds, a tool call that fails with a result of two
-lines, a long answer, a wait before the answer, or a card. A turn whose text
+The words `tool`, `fail`, `long`, `slow`, `card`, `sleepy` and `question` choose
+what a turn answers: a tool call that succeeds, a tool call that fails with a
+result of two lines, a long answer, a wait before the answer, a card, or a card
+that asks the person a question. A turn whose text
 holds `card` draws one card in the workspace of the conversation through a real
 `horizon --browser-mcp` child, with the identity that Horizon gave this program,
 and then keeps one `next_click` open for that card in a thread of its own. A
@@ -23,9 +24,14 @@ agent and the result of that turn.
 A turn whose text holds `sleepy` draws the same card and opens no `next_click`, so
 the press of the person waits in the queue of the card until a later turn holds
 the wake line that Horizon sends to the orchestrator of the workspace. That turn
-reads the one press with a short wait, and prints `Woken, you pressed <id>`. The
-program ends when the standard input closes, as an agent program of a
-conversation does.
+reads the one press with a short wait, and prints `Woken, you pressed <id>`.
+
+A turn whose text holds `question` draws a card titled `Cold start` that holds one
+callout with two answers and keeps one `next_click` open for it. A press of the
+person updates that card to a finished document without a callout, and the turn
+prints `You picked <label>`, so the group `Needs you` of the sidebar shows the
+question and ends with the answer. The program ends when the standard input
+closes, as an agent program of a conversation does.
 
 Usage, inside the isolated fixture:
 
@@ -53,7 +59,7 @@ DURATION_MS = 12
 SLOW_SECONDS = 2
 LONG_LINES = 40
 TURN_WORDS = {'tool': 'tool', 'fail': 'fail', 'long': 'long', 'slow': 'slow', 'card': 'card',
-              'sleepy': 'sleepy'}
+              'sleepy': 'sleepy', 'question': 'question'}
 TOOL_NAME = 'Bash'
 TOOL_COMMAND = 'echo stand-in'
 TOOL_RESULT = 'stand-in'
@@ -66,6 +72,16 @@ CARD_SUBTITLE = 'drawn by the stand-in orchestrator'
 CARD_TEXT = 'This card comes from the orchestrator of this workspace, not from an agent panel.'
 CARD_BUTTONS = ({'id': 'go', 'label': 'Go', 'tone': 'primary'},
                 {'id': 'cancel', 'label': 'Cancel', 'tone': 'danger'})
+# The card of a turn that holds `question`: one heading and one callout with the
+# two ways that it offers, so the group `Needs you` of the sidebar has a question
+# to show. The ids stay short and stable, and the labels are the words that the
+# answer of the stand-in prints back.
+QUESTION_HEADING = 'Cold start'
+QUESTION_TEXT = 'Two ways cut the start time. Pick one.'
+QUESTION_BUTTONS = ({'id': 'lazy-fonts', 'label': 'Lazy fonts', 'tone': 'primary'},
+                    {'id': 'new-format', 'label': 'New format', 'tone': 'neutral'})
+# The text of the turn that answers a question, in front of the label of the answer.
+PICKED_PREFIX = 'You picked '
 # How long the card waits for one press: five minutes, the default of the tool.
 CLICK_TIMEOUT_MILLIS = 300_000
 CARD_TIMEOUT_SECONDS = 30.0
@@ -167,6 +183,33 @@ def card_document():
         {'type': 'text', 'text': CARD_TEXT},
         {'type': 'buttons', 'items': [dict(button) for button in CARD_BUTTONS]},
     ]}
+
+
+def question_document():
+    """The document of the one card of a `question` turn: the question that waits
+    for the person, with the two answers of the stand-in."""
+    return {'components': [
+        {'type': 'heading', 'text': QUESTION_HEADING},
+        {'type': 'callout', 'text': QUESTION_TEXT,
+         'buttons': [dict(button) for button in QUESTION_BUTTONS]},
+    ]}
+
+
+def answered_document():
+    """The document of the card of a `question` turn after the press: the answer is
+    in, the callout is gone and the card is finished."""
+    return {'finished': True, 'components': [
+        {'type': 'heading', 'text': QUESTION_HEADING},
+    ]}
+
+
+def picked_label(component):
+    """The label of the answer whose id is `component`, or the id itself for a press
+    that names no answer of the card."""
+    for button in QUESTION_BUTTONS:
+        if button['id'] == component:
+            return button['label']
+    return component
 
 
 def mcp_command():
@@ -287,6 +330,78 @@ def wake_turn(session, number):
         text(session, f'msg-{number}-wake', f'Woken, you pressed {component}')
 
 
+def question_turn(session, number):
+    """Draws the card of a `question` turn, waits for the press of the person in a
+    thread of its own, and answers with the label that the person chose.
+
+    A press updates the card to the finished document without a callout, so the
+    question leaves the group `Needs you` of the sidebar and the card folds.
+    """
+    command = mcp_command()
+    if not command:
+        text(session, f'msg-{number}-question',
+             f'The stand-in draws no card: {EXECUTABLE_ENV} names no program of Horizon.')
+        return
+    client = StdioMcpClient(command)
+    try:
+        client.initialize()
+        answer_of_create = client.call_tool(
+            'block_panel',
+            {'operation': 'create', 'title': QUESTION_HEADING, 'document': question_document()},
+            CARD_TIMEOUT_SECONDS)
+    except Fatal as refusal:
+        client.close()
+        text(session, f'msg-{number}-question', f'The stand-in drew no card: {one_line(str(refusal))}')
+        return
+    panel_id = answer_of_create.get('panel_id')
+    if not isinstance(panel_id, str) or not panel_id:
+        client.close()
+        text(session, f'msg-{number}-question',
+             f'The host answered the card without a panel id: {one_line(json.dumps(answer_of_create))}')
+        return
+    text(session, f'msg-{number}-question',
+         f'I drew the card {panel_id} with one question. Pick Lazy fonts or New format in the sidebar.')
+    watch_question(session, number, client, panel_id)
+
+
+def watch_question(session, number, client, panel_id):
+    """Reads the one press on the card of a `question` turn in a thread of its own.
+
+    The press arrives on `next_click`, and the card then takes the finished
+    document without a callout: the question leaves the sidebar and the card folds.
+    """
+    def wait():
+        try:
+            answer_of_wait = client.call_tool(
+                'block_panel',
+                {'operation': 'next_click', 'panel_id': panel_id,
+                 'timeout_millis': CLICK_TIMEOUT_MILLIS},
+                CARD_WAIT_TIMEOUT_SECONDS)
+        except Fatal as refusal:
+            client.close()
+            text(session, f'msg-{number}-picked', f'The wait of the card ended: {one_line(str(refusal))}')
+            return
+        click = answer_of_wait.get('click') if isinstance(answer_of_wait.get('click'), dict) else {}
+        component = click.get('component_id')
+        if not isinstance(component, str) or not component:
+            client.close()
+            return
+        try:
+            client.call_tool(
+                'block_panel',
+                {'operation': 'update', 'panel_id': panel_id, 'document': answered_document()},
+                CARD_TIMEOUT_SECONDS)
+        except Fatal as refusal:
+            text(session, f'msg-{number}-picked', f'The card kept its question: {one_line(str(refusal))}')
+        client.close()
+        picked = PICKED_PREFIX + picked_label(component)
+        text(session, f'msg-{number}-picked', picked)
+        result(session, picked, DURATION_MS)
+
+    thread = threading.Thread(target=wait, name='stand-in-question', daemon=True)
+    thread.start()
+
+
 def answer(session, number, words):
     """One turn: the init line, the answer, what the words ask for, and the result."""
     init(session)
@@ -301,7 +416,9 @@ def answer(session, number, words):
         # draws nothing and calls nothing else.
         wake_turn(session, number)
     else:
-        if TURN_WORDS['card'] in words:
+        if TURN_WORDS['question'] in words:
+            question_turn(session, number)
+        elif TURN_WORDS['card'] in words:
             card_turn(session, number, listen=TURN_WORDS['sleepy'] not in words)
         if TURN_WORDS['fail'] in words:
             tool(session, message_id, failed=True)

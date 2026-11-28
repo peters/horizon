@@ -57,6 +57,12 @@ program ends, the same actor answers `caller_unavailable`.
 
 ## One card for one job
 
+A `callout` with buttons is a question. The sidebar shows that question in its
+group `Needs you`, at the top of the window, with the buttons of the callout, so
+the person answers it from wherever the person looks. Ask a question with a
+callout, and set `finished` on the card or remove the callout when the person
+answered it: a callout that nobody pressed stays in that group.
+
 Draw one card for one job, and keep its `panel_id`. When the job moves on, change
 that card with `update`. Do not draw a new card for each step: the person reads
 one card that changes, not a pile of cards.

@@ -151,6 +151,60 @@ conversation (`Entry::Card` of `horizon-core`).
   heading cut to 40 characters each. The notice is the words of Horizon and it
   holds no other field of the card.
 
+## A card that asks a question stands in the sidebar
+
+A callout with buttons is the way that a card asks the person something. The
+sidebar keeps the questions that the cards of the board ask in its group
+`Needs you`, at the top of the window above the workspaces, so the person
+answers a question from wherever the person looks
+(`crates/horizon-ui/src/app/sidebar/inbox/`).
+
+- **What a question is.** A card panel that is open, whose document is not
+  `finished`, and that holds at least one `callout` with at least one button that
+  the person did not press. The first such callout of the card is its question.
+  The record of an answered callout is the one that
+  [`CardRuntime`](../../../crates/horizon-core/src/block_panel/card.rs) keeps, as
+  the attention mark of the card reads it: the press of this run, or the answer
+  that the saved card holds. The owner of a card may be an orchestrator or an
+  agent panel; a card of Horizon's own asks for a setting on its own path and
+  stands in no group.
+- **The order is the order of the cards.** The oldest first, by the time of the
+  last update of a card, which is the time that the document with that callout
+  arrived, and then by the order of the board. The group shows three questions
+  and one line `and <N> more`.
+- **A press on a button of the group is the press on that button of the card.**
+  The group calls the one path of the clicks of a card
+  ([`crate::app::block_clicks`](../../../crates/horizon-ui/src/app/block_clicks.rs),
+  `press_card_button`), which records the click, the note of the press and the
+  answer that it is in the runtime state of the card. The same path answers a
+  `next_click` that waits, sends the wake line when nobody listens, names the
+  press in the conversation of an orchestrator and saves the answer with the
+  card. The group copies none of those steps, so a question ends at the press
+  that ends the mark of its row. A press beside the buttons, and a press on
+  `Open`, reveals the card on the path of a workspace row (`reveal_new_panel`):
+  the workspace becomes the active one and the canvas shows the panel.
+- **The text is text of a program.** The text of a callout and the label of a
+  button are untrusted, so the group reads them as plain text, with each control
+  character replaced by a space, and cuts the text to 160 characters and a label
+  to 24 before any layout reads its length.
+- **One read for the group and the rows.** The questions are read with the rows
+  of the workspace list, at most once a second
+  ([`crates/horizon-ui/src/app/sidebar/list.rs`](../../../crates/horizon-ui/src/app/sidebar/list.rs),
+  `ListCache`), and at once when the version of the attention states changes or
+  a card of the board comes, goes or holds another document. A frame lays out
+  the texts of the cache, so a frame that changes nothing builds no string, and
+  the sidebar asks for the frame that is due, so a question shows without a move
+  of the pointer.
+- **The line of a workspace row names its orchestrator.** The same read takes
+  the turn of each conversation (`OrchestratorDock::turn_of`) and makes one word
+  of the row, in the order of weight of
+  [`Orchestrator`](../../../crates/horizon-core/src/workspace_list.rs):
+  `Needs you`, `Failed`, `Working`, `Done`. A turn that ended is news while the
+  dock does not show that conversation; a conversation that the dock draws, in
+  the active workspace, clears it. A failed turn is one of the lines that the
+  conversation writes for it, so the count of those lines tells a turn that
+  failed from one that ended well.
+
 ## The operations of this caller
 
 | Operation | This caller | Reason |

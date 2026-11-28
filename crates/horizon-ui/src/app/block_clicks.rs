@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use horizon_browser_control::block::ClickEvent;
+use horizon_browser_control::block::{BlockDocument, ClickEvent, Component};
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
 use horizon_core::agent_bridge::actor;
@@ -63,6 +63,10 @@ pub(in crate::app) struct BlockClickState {
     /// The waits that cover every card of an owner, by that owner's actor.
     agent_waiters: HashMap<String, ClickWaiter>,
     last_wake: HashMap<WakeTarget, Instant>,
+    /// The cards of the board and the revision of each, as the last frame saw
+    /// them. A card that comes, goes or holds another document changes the
+    /// questions and the words of the sidebar, which then reads them again.
+    cards: Vec<(PanelId, u64)>,
 }
 
 impl BlockClickState {
@@ -403,9 +407,13 @@ impl HorizonApp {
     /// after a restart, and a card that comes back with an answered callout
     /// starts quiet. Returns whether it saved an answer.
     fn settle_card_answers(&mut self) -> bool {
-        let ids = self.block_card_ids();
+        let cards = self.card_documents();
+        if self.block_clicks.cards != cards {
+            self.block_clicks.cards.clone_from(&cards);
+            self.sidebar_list.count_inbox_change();
+        }
         let mut saved = false;
-        for id in ids {
+        for (id, _) in cards {
             let live = self
                 .panel_render_caches
                 .card_runtime
@@ -436,13 +444,43 @@ impl HorizonApp {
         saved
     }
 
-    /// The cards of the board, in board order.
-    fn block_card_ids(&self) -> Vec<PanelId> {
+    /// Records the press of the person on the button or the answer `component_id`
+    /// of the card `panel_id`, exactly as a press on that button of the card
+    /// records it: the runtime state of the card holds the click, the note of it
+    /// and the answer that it is, and [`Self::settle_block_clicks`] settles them on
+    /// this frame or a later one. It answers whether the card took the press.
+    ///
+    /// The group `Needs you` of the sidebar draws the buttons of a card that asks
+    /// a question, so the person answers there on the one path of the card.
+    pub(in crate::app) fn press_card_button(&mut self, panel_id: PanelId, component_id: &str) -> bool {
+        let Some(panel) = self.board.panel(panel_id) else {
+            return false;
+        };
+        let Some(card) = panel.block() else {
+            return false;
+        };
+        let (revision, document) = (card.revision, &card.document);
+        let label = button_label(document, component_id).map(str::to_owned);
+        let runtime = self.panel_render_caches.card_runtime.entry(panel_id).or_default();
+        if !runtime.press(component_id, revision, document, manifest::now_millis()) {
+            return false;
+        }
+        if let Some(label) = label {
+            runtime.note_press(&label);
+        }
+        // The answer of the person ends the question of the card and may end the
+        // word of the row of its workspace, so the sidebar reads them again.
+        self.sidebar_list.count_inbox_change();
+        true
+    }
+
+    /// The cards of the board and the revision of each, in board order.
+    fn card_documents(&self) -> Vec<(PanelId, u64)> {
         self.board
             .panels
             .iter()
             .filter(|panel| panel.kind == PanelKind::Block)
-            .map(|panel| panel.id)
+            .map(|panel| (panel.id, panel.block().map_or(0, |card| card.revision)))
             .collect()
     }
 
@@ -580,6 +618,17 @@ impl HorizonApp {
 /// The window the host has to apply a card request, in milliseconds.
 fn host_apply_millis() -> i64 {
     i64::try_from(HOST_APPLY_TIMEOUT.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// The label of the button or the answer `component_id` of `document`.
+fn button_label<'a>(document: &'a BlockDocument, component_id: &str) -> Option<&'a str> {
+    document.components.iter().find_map(|component| match component {
+        Component::Buttons { items } | Component::Callout { buttons: items, .. } => items
+            .iter()
+            .find(|button| button.id == component_id)
+            .map(|button| button.label.as_str()),
+        _ => None,
+    })
 }
 
 /// The line of the conversation that names one press of the person on a card of

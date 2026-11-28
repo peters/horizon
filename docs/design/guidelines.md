@@ -1111,6 +1111,44 @@ The page that shows while the board is empty answers the size of the window.
 - Workspace labels on the canvas use `blend(PANEL_BG_ALT, accent, t)`
   with `t` = 0.08 rest, 0.14 active, 0.18 hover, 0.22 dragging, radius 10, and a
   1 px accent outline (alpha 90 rest, 160 active or hover).
+- The group `Needs you` stands at the top of the sidebar, above the heading of
+  the workspaces. A frame draws the group only while a card of the board asks a
+  question, so a window with no question has no heading there and no height. A
+  question is a card that is open, whose document is not `finished`, and that
+  holds a `callout` with at least one button that nobody pressed. The first such
+  callout of the card is its question. The group shows the three oldest
+  questions, the oldest first: the time of the last update of the card, then the
+  order of the board.
+- The heading is the heading of the `Agents` group: `Needs you` in Inter 13 at
+  weight 620 in `FG_SOFT`, 18 px from the left edge, then the count of the
+  questions in JetBrains Mono 11 `FG_DIM`, 6 px after the name. With more than
+  three questions, the line `and <N> more` follows the third item, at 11 pt in
+  `FG_DIM`, 16 px from the left edge.
+- One item is a box 8 px in at each side of the sidebar, radius 12, with a
+  padding of 10 on all sides. Items stand 6 apart, and the group keeps 12 above
+  it and 12 below it. The fill is `alpha(PALETTE_YELLOW, 23)` and the outline is
+  1 px `alpha(PALETTE_YELLOW, 97)`: `PALETTE_YELLOW` is the colour of the
+  needs-you dot of a workspace row. Line 1 is the name of the workspace in Inter
+  12 at weight 620 in `FG`, one line with an ellipsis. Line 2 stands 7 under it:
+  the text of the callout in Inter 11.5 `FG_SOFT`, at most two lines with an
+  ellipsis. The buttons stand 7 under line 2.
+- The buttons of an item are the first two buttons of the callout, in its order.
+  A button is 26 high, radius 8, with 10 px of padding at each side of its label,
+  and its label is Inter 11.5 on one line, cut to 24 characters. The first
+  button is `ACCENT` with its label in `BG`, the colour of the window background,
+  at weight 620; the second is `PANEL_BG_ALT` with a 1 px `BORDER_SUBTLE`
+  outline and its label in `FG`. Two buttons stand 6 apart, and a second button
+  that does not fit beside the first goes on the row under it, 6 below. A
+  callout with more than two buttons adds the control `Open` in the form of the
+  second button.
+- A press on a button of an item is the press on that button of the card: it
+  records the same click, on the one path of the clicks of a card, and the
+  question leaves the group on the next read. A press on the body of the item
+  and a press on `Open` show the card: its workspace becomes the active one and
+  the canvas reveals the panel, on the path of a workspace row. A pointer over a
+  button or over the body shows the pointing hand, and a line that the item cut
+  shows its whole text in the hover text. A screen reader says
+  `<workspace>: <text>` for the item.
 - Sidebar workspace rows are cards with an 8 px inset and radius 12. The active
   workspace has a `PANEL_BG_ALT` card with a 1 px accent outline (alpha 120).
   Hover is `alpha(PANEL_BG_ALT, 170)` and dragging is
@@ -1128,6 +1166,17 @@ The page that shows while the board is empty answers the size of the window.
   the count of the agents that wait, then the machine. It never holds text of
   the screen of a panel. The panel count is JetBrains Mono 11 in a fixed right
   column.
+- The second line of a workspace row names the state of its orchestrator first,
+  and the facts of today follow after ` · `. One word stands at most, in this
+  order of weight: `Needs you` (a card of the workspace asks a question that
+  nobody answered), `Failed` (the last turn of its orchestrator failed and the
+  person did not see it in the dock), `Working` (a turn of its orchestrator
+  runs) and `Done` (the last turn of its orchestrator ended well and the person
+  did not see it in the dock). A workspace with no question and no word of its
+  orchestrator shows the facts of today alone. The row carries the needs-you
+  badge for `Needs you` and for `Failed`, the done check mark for `Done`, and
+  for `Working` the state that its panels have. `Done` and `Failed` hold until
+  the dock shows the conversation of that workspace.
 - Group headers are sentence case, Inter 12 at weight 620 in `FG_SOFT`, with the
   count in JetBrains Mono 11 `FG_DIM` and the summary at the right.
 - Panel rows hang from a 1 px tree guide (`BORDER_STRONG` alpha 200) under the

@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/agent_bridge/actor.rs,crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/app/sidebar/inbox.rs,crates/horizon-ui/src/app/sidebar/inbox/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -81,6 +81,41 @@ machine and no way out of the card.
   neighbours, that an item really finished, or that the marks of the states are
   true. A board is the agent's account of its own work, as every other part of a
   card is.
+
+### The question of a card is also drawn in the sidebar
+
+A card that asks the person something shows in the group `Needs you` of the
+sidebar, at the top of the window
+(`crates/horizon-ui/src/app/sidebar/inbox/`), so the person answers a question
+from wherever the person looks. The group reads the document of the card and no
+other source.
+
+- **Untrusted: the text of the callout and the labels of its buttons.** They are
+  the text of the program, and the sidebar draws them as plain text: each control
+  character becomes a space, the text is cut to 160 characters and a label to 24
+  characters before any layout reads its length or its rows. No field is a path,
+  a command, an address, a size or a colour. A line that the item cuts shows its
+  whole text in the hover text, which is the same cut text.
+- **The item copies none of the rules of the card.** What counts as a question is
+  the rule of the card itself: a card that is open, whose document is not
+  `finished`, with a callout whose answer the record of the card does not hold.
+  The group invents no second record of an answer, and a callout that the card
+  reads as answered is no question in the sidebar.
+- **A press in the sidebar is a press of the person on the card.** A press on a
+  button of an item calls the one path of the clicks of a card
+  (`HorizonApp::press_card_button`), the same path that a press on the button of
+  the card calls. It records the click and the answer in the runtime state of the
+  card, and the frame settles them on the path of `settle_block_clicks`: a
+  `next_click` that waits answers, a wake line goes out when nobody listens, the
+  conversation of an orchestrator names the press, and the answer is saved with
+  the card. The sidebar holds no request, no wait and no owner of its own. A
+  press beside the buttons reveals the card and reaches no agent.
+- **Does not guarantee:** that the program acts on the answer. An answer that the
+  person pressed is one click of the card, as a click of the card is; the text of
+  the callout is the program's account of its own work.
+- **The item names its workspace.** The only text that the item takes from
+  Horizon is the name of the workspace, which the person chose, and the item as a
+  whole says `<workspace>: <text>` to a screen reader.
 
 ## A link names one page, and a person opens it
 

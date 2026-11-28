@@ -156,6 +156,38 @@ class OrchestratorStandinTests(unittest.TestCase):
                  for block in record['message']['content'] if block.get('type') == 'tool_use']
         self.assertEqual(calls, [], 'the wake turn calls no tool')
 
+    def test_the_question_names_the_card_the_question_and_two_answers(self):
+        document = orchestrator_standin.question_document()
+        components = document['components']
+        self.assertEqual([component['type'] for component in components], ['heading', 'callout'])
+        self.assertEqual(components[0]['text'], 'Cold start')
+        self.assertEqual(orchestrator_standin.QUESTION_HEADING, 'Cold start')
+        self.assertEqual(components[1]['text'], 'Two ways cut the start time. Pick one.')
+        self.assertEqual(orchestrator_standin.QUESTION_TEXT, 'Two ways cut the start time. Pick one.')
+        answers = components[1]['buttons']
+        self.assertEqual([answer['id'] for answer in answers], ['lazy-fonts', 'new-format'])
+        self.assertEqual([answer['label'] for answer in answers], ['Lazy fonts', 'New format'])
+        self.assertEqual(answers[0]['tone'], 'primary')
+
+    def test_the_answer_of_a_question_finishes_the_card_and_names_the_label(self):
+        document = orchestrator_standin.answered_document()
+        self.assertTrue(document['finished'], 'the answered card is finished')
+        self.assertEqual([component['type'] for component in document['components']], ['heading'],
+                         'the callout of the question is gone')
+        self.assertEqual(document['components'][0]['text'], 'Cold start')
+        self.assertEqual(orchestrator_standin.picked_label('lazy-fonts'), 'Lazy fonts')
+        self.assertEqual(orchestrator_standin.picked_label('new-format'), 'New format')
+        self.assertEqual(orchestrator_standin.picked_label('unknown'), 'unknown',
+                         'a press that names no answer prints its id')
+
+    def test_a_turn_of_a_question_draws_nothing_without_a_program_of_horizon(self):
+        records = run(['ask a question'])
+        texts = texts_of(records)
+        self.assertEqual(texts[0], 'You said: ask a question')
+        self.assertIn(orchestrator_standin.EXECUTABLE_ENV, texts[1])
+        self.assertEqual(len(texts), 2, 'the answer and the notice, and no card text')
+        self.assertEqual(records[-1]['type'], 'result', 'the turn ends with its result')
+
     def test_the_wake_text_of_the_stand_in_is_part_of_the_line_of_horizon(self):
         source = REPO / 'crates/horizon-core/src/block_panel/wake.rs'
         self.assertIn(

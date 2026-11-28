@@ -62,6 +62,12 @@ use self::programs::Program;
 use self::session::{Session, Start};
 use super::HorizonApp;
 
+/// The line that `horizon_core::agent_bridge` writes into a conversation for a
+/// turn that failed. It is the one mark of a failed turn in the entries of the
+/// conversation, so a reader that knows how many of them it saw tells the end of
+/// a failed turn from the end of one that ended well.
+pub(super) const TURN_FAILED_LINE: &str = "the turn failed";
+
 /// The notice that names the turn of a wake in a conversation of the dock, which
 /// the tests of the module of the clicks of a card write too.
 #[cfg(test)]
@@ -561,6 +567,28 @@ impl OrchestratorDock {
     /// that its owner is here while this answers `true`.
     pub(in crate::app) fn running(&self, local_id: &str) -> bool {
         self.sessions.get(local_id).is_some_and(Session::has_bridge)
+    }
+
+    /// The turns of the conversation of `local_id`, which the row of its workspace
+    /// reads: whether a turn runs now, and how many turns of the conversation
+    /// failed, which answers `None` for a workspace whose orchestrator this dock
+    /// holds no conversation for.
+    ///
+    /// A failed turn ends with one line that `horizon_core::agent_bridge` writes
+    /// for it, so the count of those lines tells a turn that ended with a failure
+    /// from one that ended well, without a second record of the turns.
+    pub(in crate::app) fn turn_of(&self, local_id: &str) -> Option<horizon_core::workspace_list::Turn> {
+        let snapshot = self.sessions.get(local_id)?.snapshot();
+        Some(horizon_core::workspace_list::Turn {
+            busy: snapshot.busy,
+            failed: snapshot
+                .entries
+                .iter()
+                .filter(|entry| {
+                    matches!(entry, horizon_core::agent_bridge::Entry::Notice { text } if text == TURN_FAILED_LINE)
+                })
+                .count(),
+        })
     }
 
     /// Sends the one wake line of [`horizon_core::WAKE_LINE`] to the program of

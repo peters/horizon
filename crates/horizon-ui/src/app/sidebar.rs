@@ -1,5 +1,6 @@
 pub(in crate::app) mod agents;
 mod computers;
+pub(in crate::app) mod inbox;
 mod list;
 pub(in crate::app) mod machines;
 mod menus;
@@ -25,6 +26,9 @@ use crate::theme;
 use super::util;
 use super::workspace::WorkspaceLayoutCapabilities;
 use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
+
+/// The air above the heading of the workspaces, while no group stands above it.
+const HEADER_TOP: f32 = 16.0;
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
@@ -131,6 +135,11 @@ impl HorizonApp {
         let sidebar_width = SIDEBAR_WIDTH;
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
         self.refresh_sidebar_rows(std::time::Instant::now());
+        // A question and the end of a turn arrive while nothing else draws a frame,
+        // so this asks for the frame that reads them at the moment the read is due.
+        if let Some(wait) = self.sidebar_list.read_due_in(std::time::Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
         self.refresh_machine_rows();
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
@@ -238,7 +247,11 @@ impl HorizonApp {
         workspace_data: &[WorkspaceSidebarEntry],
         actions: &mut SidebarActions,
     ) {
-        self.render_sidebar_header(ui, actions);
+        // The group `Needs you` stands above the heading of the workspaces, and a
+        // frame that draws it keeps the gap under it as its own: the heading then
+        // takes no room above.
+        let inbox = self.render_sidebar_inbox(ui, actions);
+        self.render_sidebar_header(ui, actions, if inbox { 0.0 } else { HEADER_TOP });
         ui.add_space(10.0);
 
         let available = ui.available_height();
@@ -267,8 +280,8 @@ impl HorizonApp {
         ui.add_space(8.0);
     }
 
-    fn render_sidebar_header(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
-        ui.add_space(16.0);
+    fn render_sidebar_header(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions, top: f32) {
+        ui.add_space(top);
         ui.horizontal(|ui| {
             ui.add_space(18.0);
             ui.label(text::line(
