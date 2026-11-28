@@ -21,6 +21,7 @@ use crate::app::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 use crate::theme;
 
 use horizon_core::agent_bridge::ProposalState;
+use horizon_core::workspace_list::Orchestrator;
 
 use super::layout::{dock_fits, dock_rect, dock_width};
 use super::proposal::{self, Choice};
@@ -29,6 +30,10 @@ use super::{DOCK_PANEL_ID, FRONT_DESK, composer, empty, header, layout, list};
 
 /// The most characters of the name of a work item in a notice of the front desk.
 const WORK_ITEM_NOTICE_NAME_CHARS: usize = 40;
+
+/// The word of the notice for a turn that ended while the dock showed it: the
+/// word that [`Orchestrator::Done`] gives a turn that ended unseen.
+const FINISHED_WORD: &str = "finished";
 
 /// The notice of a press that started no work item, because no worker read the
 /// folder of an item of the proposal.
@@ -388,11 +393,17 @@ impl HorizonApp {
                 continue;
             };
             let state = self.workspace_orchestrator(workspace);
-            if self.orchestrator_dock.observe_work_item(&work_item, state).is_none() {
+            let Some(before) = self.orchestrator_dock.observe_work_item(&work_item, state) else {
                 continue;
-            }
-            let Some(word) = state.notice_word() else {
-                continue;
+            };
+            // A turn that ends while the dock shows its conversation leaves no word
+            // on the row, because the person saw it end. The front desk did not see
+            // it, so the end of that turn is still one `finished` notice there.
+            let seen_end = before == Orchestrator::Working && state == Orchestrator::Quiet;
+            let word = match state.notice_word() {
+                Some(word) => word,
+                None if seen_end => FINISHED_WORD,
+                None => continue,
             };
             let name: String = name.chars().take(WORK_ITEM_NOTICE_NAME_CHARS).collect();
             self.orchestrator_dock

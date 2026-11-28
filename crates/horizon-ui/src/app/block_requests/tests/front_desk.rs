@@ -738,3 +738,53 @@ fn a_work_item_that_the_front_desk_started_names_its_change_of_state_once() {
         notices(&app)
     );
 }
+
+/// A real run showed it: the person looked at the conversation of a work item
+/// when its turn ended, so the row carried no `done`, and the front desk never
+/// heard that the work item finished.
+#[test]
+fn a_turn_that_ends_on_the_screen_is_still_one_finished_notice_of_the_front_desk() {
+    let (temp, ctx, mut app) = app();
+    running_front_desk(&temp, &ctx, &mut app);
+    let id = propose(&mut app, &ctx, two_items());
+    app.press_proposal(&ctx, &id, Choice::Start);
+    let work_item = wait_work_item(&mut app, "Faster cold start");
+    let workspace = workspace_named(&app, "Faster cold start").expect("the work item");
+
+    // The person opens the conversation of the work item, and its turn runs.
+    app.board.focus_workspace(workspace);
+    app.orchestrator_dock.front_desk_mut().show_workspace();
+    app.orchestrator_dock.begin_turn_for_test(&work_item);
+    app.sidebar_list.count_inbox_change();
+    app.refresh_sidebar_rows(Instant::now());
+    app.poll_orchestrator_dock(&ctx);
+
+    // The turn ends on the screen: the row says nothing, because the person saw it.
+    app.orchestrator_dock.end_turn_for_test(&work_item);
+    app.sidebar_list.count_inbox_change();
+    app.refresh_sidebar_rows(Instant::now() + Duration::from_secs(2));
+    app.poll_orchestrator_dock(&ctx);
+    assert_eq!(
+        app.orchestrator_dock.work_item_word(&work_item),
+        None,
+        "a turn that the person saw end leaves no word on the row"
+    );
+    assert_eq!(
+        notices(&app)
+            .iter()
+            .filter(|text| *text == "Faster cold start finished")
+            .count(),
+        1,
+        "the front desk hears the end of a turn that it did not see: {:?}",
+        notices(&app)
+    );
+    // A second pass of the same state adds no notice.
+    app.poll_orchestrator_dock(&ctx);
+    assert_eq!(
+        notices(&app)
+            .iter()
+            .filter(|text| *text == "Faster cold start finished")
+            .count(),
+        1
+    );
+}
