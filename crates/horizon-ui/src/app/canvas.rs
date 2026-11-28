@@ -2,8 +2,8 @@ use egui::{Context, Id, Margin, Mesh, Order, Pos2, Rect, Shape, Stroke, Vec2};
 
 use crate::theme;
 
-use super::util::{format_grid_position, paint_canvas_glow, rounded_i32};
-use super::{HorizonApp, SIDEBAR_WIDTH};
+use super::util::{format_grid_position, rounded_i32};
+use super::{HorizonApp, SIDEBAR_WIDTH, canvas_backdrop};
 
 const GRID_SPACING: f32 = 22.0;
 const GRID_DOT_DIAMETER: f32 = 2.3;
@@ -103,32 +103,35 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui, beside: Option<Rect>) {
+    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui, beside: Option<Rect>, canvas_top: f32) {
         // The canvas paints only in the rectangle that the Settings panel leaves,
         // whatever the panel's content asked for: the panel draws first and
         // answers its rectangle, and no painting of the canvas starts inside it.
-        let rect = canvas_paint_rect(ui.available_rect_before_wrap(), beside);
+        let rect = canvas_paint_rect(ui.available_rect_before_wrap(), beside, canvas_top);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.shrink_clip_rect(rect);
             egui::CentralPanel::default()
                 .frame(egui::Frame::default().fill(theme::BG()))
                 .show(ui, |ui| {
-                    paint_canvas_glow(ui);
+                    canvas_backdrop::paint(ui, &mut self.canvas_backdrop_cache, rect);
                     paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
                 });
         });
     }
 }
 
-/// The rectangle that the canvas paints in: what `ui` has left, and never the
-/// rectangle of the panel beside it.
-fn canvas_paint_rect(available: Rect, beside: Option<Rect>) -> Rect {
+/// The rectangle that the canvas paints in: what `ui` has left under the toolbar,
+/// and never the rectangle of the panel beside it.
+///
+/// The toolbar of the root window is an overlay, so the room that `ui` offers
+/// starts at the top of the window and not under the toolbar. `canvas_top` ends
+/// the canvas where the person sees it, so the backdrop of the canvas is a share
+/// of the canvas that the person looks at.
+fn canvas_paint_rect(available: Rect, beside: Option<Rect>, canvas_top: f32) -> Rect {
+    let min = Pos2::new(available.min.x, available.min.y.max(canvas_top));
     match beside {
-        Some(panel) => Rect::from_min_max(
-            available.min,
-            Pos2::new(available.max.x.min(panel.min.x), available.max.y),
-        ),
-        None => available,
+        Some(panel) => Rect::from_min_max(min, Pos2::new(available.max.x.min(panel.min.x), available.max.y)),
+        None => Rect::from_min_max(min, available.max),
     }
 }
 
@@ -278,11 +281,12 @@ mod tests {
     #[test]
     fn the_canvas_paints_only_beside_the_settings_panel() {
         let available = Rect::from_min_max(Pos2::new(210.0, 46.0), Pos2::new(1480.0, 900.0));
+        let canvas_top = available.min.y;
         let reserved = Rect::from_min_max(Pos2::new(1036.0, 0.0), Pos2::new(1480.0, 900.0));
         let overflowing = Rect::from_min_max(Pos2::new(1036.0, 0.0), Pos2::new(1536.9, 900.0));
 
         for panel in [reserved, overflowing] {
-            let painted = canvas_paint_rect(available, Some(panel));
+            let painted = canvas_paint_rect(available, Some(panel), canvas_top);
             assert!(
                 painted.max.x <= panel.min.x,
                 "the canvas {painted:?} ends at the left edge of {panel:?}"
@@ -290,7 +294,7 @@ mod tests {
             assert!((painted.max.x - panel.min.x).abs() <= f32::EPSILON);
             assert!((painted.min.x - available.min.x).abs() <= f32::EPSILON);
         }
-        assert_eq!(canvas_paint_rect(available, None), available);
+        assert_eq!(canvas_paint_rect(available, None, canvas_top), available);
 
         // The Server tab draws the QR plate of an invitation, and a plate is never
         // wider than the panel: the canvas ends at the same edge as on every tab.
@@ -299,7 +303,7 @@ mod tests {
             Pos2::new(available.max.x - server_tab_width, 0.0),
             Pos2::new(available.max.x, available.max.y),
         );
-        let painted = canvas_paint_rect(available, Some(server_tab));
+        let painted = canvas_paint_rect(available, Some(server_tab), canvas_top);
         assert!(
             painted.max.x <= server_tab.min.x + f32::EPSILON,
             "the canvas {painted:?} ends at the Server tab at {server_tab:?}"
@@ -308,10 +312,29 @@ mod tests {
         // A panel that is wider than the window leaves an empty canvas, and never
         // a rectangle that runs backwards.
         let wider_than_the_window = Rect::from_min_max(Pos2::new(-40.0, 0.0), Pos2::new(1600.0, 900.0));
-        let empty = canvas_paint_rect(available, Some(wider_than_the_window));
+        let empty = canvas_paint_rect(available, Some(wider_than_the_window), canvas_top);
         assert!(
             empty.max.x <= available.min.x,
             "a panel wider than the window leaves no canvas: {empty:?}"
         );
+    }
+
+    /// The toolbar of the root window is an overlay, so the room that `ui` offers
+    /// starts at the top of the window. The canvas starts under the toolbar
+    /// whatever that room says, because the backdrop of the canvas is a share of
+    /// the canvas that the person sees.
+    #[test]
+    fn the_canvas_starts_under_the_toolbar() {
+        let room_from_the_window_top = Rect::from_min_max(Pos2::new(210.0, 0.0), Pos2::new(1480.0, 900.0));
+        let room_under_the_toolbar = Rect::from_min_max(Pos2::new(210.0, 46.0), Pos2::new(1480.0, 900.0));
+
+        for available in [room_from_the_window_top, room_under_the_toolbar] {
+            let painted = canvas_paint_rect(available, None, 46.0);
+            assert!(
+                (painted.min.y - 46.0).abs() <= f32::EPSILON,
+                "the canvas {painted:?} starts under the toolbar of {available:?}"
+            );
+            assert!((painted.max.y - available.max.y).abs() <= f32::EPSILON);
+        }
     }
 }

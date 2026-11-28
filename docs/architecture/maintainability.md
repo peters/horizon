@@ -505,6 +505,11 @@ when it names one of those kinds.
     the coordination worker, and the allocation each applied lease is recorded
     in until its release is established
   - `canvas`: canvas rendering and HUD
+  - `canvas_backdrop`: the backdrop of the canvas. It holds the numbers of the
+    design (the stops of the sky, the ellipse of the glow and the ramp of the
+    horizon line), the shapes for a rectangle and the cache of those shapes,
+    keyed by the rectangle, the pixels per point and the theme. The tokens of
+    its colours are in `theme.rs`; `canvas` paints it and clips it to the canvas.
   - `agent_lines`: the lines between an agent panel and the panels that it
     controls. It holds the geometry of the curves, the strength and the colour
     of a line, the agent in focus, and the cache of the shapes, keyed by the

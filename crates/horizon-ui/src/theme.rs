@@ -22,8 +22,13 @@ struct ThemePalette {
     border_strong: Color32,
     titlebar_bg: Color32,
     toolbar_bg: Color32,
-    canvas_cool_glow: Color32,
-    canvas_warm_glow: Color32,
+    canvas_sky_top: Color32,
+    canvas_sky_mid: Color32,
+    canvas_sky_horizon: Color32,
+    canvas_ground: Color32,
+    canvas_glow_warm: Color32,
+    canvas_glow_cool: Color32,
+    canvas_horizon_line: Color32,
     btn_close: Color32,
     palette_green: Color32,
     palette_red: Color32,
@@ -41,14 +46,19 @@ const DARK_THEME: ThemePalette = ThemePalette {
     fg_soft: Color32::from_rgb(174, 185, 205),
     fg_dim: Color32::from_rgb(112, 125, 150),
     cursor: Color32::from_rgb(178, 200, 255),
-    grid_dot: Color32::from_rgb(29, 35, 48),
+    grid_dot: Color32::from_rgba_unmultiplied_const(190, 200, 230, 41),
     accent: Color32::from_rgb(106, 144, 255),
     border_subtle: Color32::from_rgb(39, 48, 66),
     border_strong: Color32::from_rgb(68, 84, 112),
     titlebar_bg: Color32::from_rgb(8, 11, 17),
     toolbar_bg: Color32::from_rgb(11, 15, 22),
-    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(92, 122, 235, 22),
-    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(255, 152, 86, 24),
+    canvas_sky_top: Color32::from_rgb(4, 6, 11),
+    canvas_sky_mid: Color32::from_rgb(8, 13, 27),
+    canvas_sky_horizon: Color32::from_rgb(19, 26, 54),
+    canvas_ground: Color32::from_rgb(5, 7, 12),
+    canvas_glow_warm: Color32::from_rgba_unmultiplied_const(255, 150, 92, 51),
+    canvas_glow_cool: Color32::from_rgba_unmultiplied_const(150, 110, 235, 26),
+    canvas_horizon_line: Color32::from_rgba_unmultiplied_const(255, 196, 150, 61),
     btn_close: Color32::from_rgb(235, 96, 88),
     palette_green: Color32::from_rgb(166, 227, 161),
     palette_red: Color32::from_rgb(243, 139, 168),
@@ -83,14 +93,19 @@ const LIGHT_THEME: ThemePalette = ThemePalette {
     fg_soft: Color32::from_rgb(80, 89, 100),
     fg_dim: Color32::from_rgb(124, 134, 147),
     cursor: Color32::from_rgb(64, 92, 210),
-    grid_dot: Color32::from_rgb(214, 207, 193),
+    grid_dot: Color32::from_rgba_unmultiplied_const(120, 105, 80, 56),
     accent: Color32::from_rgb(58, 86, 212),
     border_subtle: Color32::from_rgb(219, 212, 199),
     border_strong: Color32::from_rgb(178, 168, 147),
     titlebar_bg: Color32::from_rgb(246, 243, 236),
     toolbar_bg: Color32::from_rgb(246, 243, 236),
-    canvas_cool_glow: Color32::from_rgba_unmultiplied_const(94, 106, 210, 10),
-    canvas_warm_glow: Color32::from_rgba_unmultiplied_const(233, 168, 106, 12),
+    canvas_sky_top: Color32::from_rgb(247, 245, 240),
+    canvas_sky_mid: Color32::from_rgb(243, 239, 232),
+    canvas_sky_horizon: Color32::from_rgb(243, 230, 216),
+    canvas_ground: Color32::from_rgb(230, 221, 207),
+    canvas_glow_warm: Color32::from_rgba_unmultiplied_const(240, 150, 86, 61),
+    canvas_glow_cool: Color32::from_rgba_unmultiplied_const(120, 130, 225, 26),
+    canvas_horizon_line: Color32::from_rgba_unmultiplied_const(214, 120, 60, 71),
     btn_close: Color32::from_rgb(207, 55, 66),
     palette_green: Color32::from_rgb(18, 134, 84),
     palette_red: Color32::from_rgb(199, 22, 54),
@@ -284,13 +299,38 @@ pub fn TITLEBAR_BG() -> Color32 {
 }
 
 #[must_use]
-pub fn CANVAS_COOL_GLOW() -> Color32 {
-    active_palette().canvas_cool_glow
+pub fn CANVAS_SKY_TOP() -> Color32 {
+    active_palette().canvas_sky_top
 }
 
 #[must_use]
-pub fn CANVAS_WARM_GLOW() -> Color32 {
-    active_palette().canvas_warm_glow
+pub fn CANVAS_SKY_MID() -> Color32 {
+    active_palette().canvas_sky_mid
+}
+
+#[must_use]
+pub fn CANVAS_SKY_HORIZON() -> Color32 {
+    active_palette().canvas_sky_horizon
+}
+
+#[must_use]
+pub fn CANVAS_GROUND() -> Color32 {
+    active_palette().canvas_ground
+}
+
+#[must_use]
+pub fn CANVAS_GLOW_WARM() -> Color32 {
+    active_palette().canvas_glow_warm
+}
+
+#[must_use]
+pub fn CANVAS_GLOW_COOL() -> Color32 {
+    active_palette().canvas_glow_cool
+}
+
+#[must_use]
+pub fn CANVAS_HORIZON_LINE() -> Color32 {
+    active_palette().canvas_horizon_line
 }
 
 #[must_use]

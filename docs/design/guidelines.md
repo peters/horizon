@@ -56,7 +56,7 @@ Character of each theme:
 | | Dark | Light |
 |---|---|---|
 | Feel | Deep navy ink, cool | Warm off-white paper |
-| Canvas vs panel | Canvas (`BG`) is the darkest layer; panels and raised fills are progressively lighter | Panels are the lightest (near white); the canvas is a warmer, slightly darker paper tone |
+| Canvas vs panel | The canvas backdrop is the darkest layer; panels and raised fills are progressively lighter | Panels are the lightest (near white); the canvas is a warmer, slightly darker paper tone |
 | Accent | Bright periwinkle `#6A90FF` | Deeper royal blue `#3A56D4` |
 | State colors | Light pastels | Deep, saturated |
 | Window shadow | Alpha 128, offset (0, 10), blur 28, spread 2 | Alpha 36, same geometry |
@@ -82,7 +82,7 @@ Values are the exact `Color32::from_rgb` constants in `theme.rs`.
 
 | Token | Dark | Light | Role |
 |---|---|---|---|
-| `BG` | `#070A10` | `#F3F0EA` | Canvas background, text-input well (`extreme_bg_color`), text color on solid accent fills |
+| `BG` | `#070A10` | `#F3F0EA` | Canvas fill under the [backdrop](#canvas-backdrop), text-input well (`extreme_bg_color`), text color on solid accent fills |
 | `BG_ELEVATED` | `#0C1018` | `#FAF8F3` | Modal and side-panel fill, overlay input well, code background, noninteractive widget fill |
 | `PANEL_BG` | `#10141E` | `#FCFBF7` | Terminal panel body, window fill, overlay cards (command palette, pickers), settings section cards |
 | `PANEL_BG_ALT` | `#161B27` | `#F0ECE4` | Raised control fill (buttons, tabs, chips), titlebar base, faint/striped background, base for accent blends |
@@ -106,9 +106,60 @@ Values are the exact `Color32::from_rgb` constants in `theme.rs`.
 | `CURSOR` | `#B2C8FF` | `#405CD2` | Terminal cursor (drawn at 0.8-0.9 opacity) |
 | `BORDER_SUBTLE` | `#273042` | `#DBD4C7` | Default 1 px outlines: cards, inputs, dividers |
 | `BORDER_STRONG` | `#445470` | `#B2A893` | Modal outline, strong control outline, base for accent-tinted borders |
-| `GRID_DOT` | `#1D2330` | `#D6CFC1` | Canvas dot grid |
-| `CANVAS_COOL_GLOW` | rgba(92, 122, 235, 22) | rgba(94, 106, 210, 10) | Canvas ambient glow, cool |
-| `CANVAS_WARM_GLOW` | rgba(255, 152, 86, 24) | rgba(233, 168, 106, 12) | Canvas ambient glow, warm |
+| `GRID_DOT` | rgba(190, 200, 230, 41) | rgba(120, 105, 80, 56) | Canvas dot grid |
+| `CANVAS_SKY_TOP` | `#04060B` | `#F7F5F0` | Canvas backdrop, top of the sky |
+| `CANVAS_SKY_MID` | `#080D1B` | `#F3EFE8` | Canvas backdrop, 46 percent of the height |
+| `CANVAS_SKY_HORIZON` | `#131A36` | `#F3E6D8` | Canvas backdrop, the horizon at 72 percent of the height |
+| `CANVAS_GROUND` | `#05070C` | `#E6DDCF` | Canvas backdrop, the ground at the foot of the canvas |
+| `CANVAS_GLOW_WARM` | rgba(255, 150, 92, 51) | rgba(240, 150, 86, 61) | Canvas backdrop, the centre of the glow |
+| `CANVAS_GLOW_COOL` | rgba(150, 110, 235, 26) | rgba(120, 130, 225, 26) | Canvas backdrop, the outer glow |
+| `CANVAS_HORIZON_LINE` | rgba(255, 196, 150, 61) | rgba(214, 120, 60, 71) | Canvas backdrop, the horizon line |
+
+### Canvas backdrop
+
+The canvas backdrop is one sheet of colour behind the dot grid. It has three
+layers, from the back to the front:
+
+1. The sky and the ground: one vertical gradient over the whole canvas
+   rectangle. The stops are a share of the canvas height:
+
+   | Share | Token |
+   |---|---|
+   | 0 percent | `CANVAS_SKY_TOP` |
+   | 46 percent | `CANVAS_SKY_MID` |
+   | 72 percent | `CANVAS_SKY_HORIZON` |
+   | 100 percent | `CANVAS_GROUND` |
+
+2. The glow: an ellipse that the middle of the horizon line holds. Its
+   horizontal radius is 1.30 times the canvas width and its vertical radius is
+   0.26 times the canvas height. Its alpha runs from its centre outward:
+
+   | Share of the radius | Colour |
+   |---|---|
+   | 0 | `CANVAS_GLOW_WARM` |
+   | 46 percent | `CANVAS_GLOW_COOL` |
+   | 76 percent and outward | the cool colour at alpha 0 |
+
+   The glow is a mesh of 24 rings and 96 segments, so its alpha falls with no
+   visible edge. The canvas clips it to the canvas rectangle.
+
+3. The horizon line: one horizontal line of 1 point at 72 percent of the canvas
+   height, in `CANVAS_HORIZON_LINE`. Its alpha is 0 at the left edge and at the
+   right edge of the canvas. The alpha rises to its full value at 20 percent of
+   the width and it stays there to 80 percent of the width.
+
+A measure is a share of the canvas rectangle of the window, so the horizon
+stands at the same share of every canvas: the canvas of the root window, the
+canvas of a detached workspace window and the canvas behind the first start
+page. The canvas starts under the toolbar. The backdrop does not show under the
+sidebar, the dock, the Settings panel or the settings bar.
+
+The backdrop is fixed to the screen. A pan or a zoom of the canvas moves the
+dot grid and it does not move the backdrop.
+
+The shapes depend only on the canvas rectangle, the pixels per point and the
+theme. `canvas_backdrop.rs` keeps them, and a frame where none of the three
+changed paints the shapes of the frame before and builds nothing.
 
 ### State colors
 
@@ -618,7 +669,8 @@ Fixed metrics:
 | Panel padding | 8 |
 | Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. On a card panel the hit target stops above the footer: its height is the on-screen height of the footer and the panel padding under it, at most 32 and at least 10 screen points, so a button of the card never loses its press to a resize grab. |
 | Line between an agent and a panel it controls | 1.5 screen points wide at every canvas zoom, with a filled dot of radius 3 at the agent end and a ring of radius 3 with a 1.5 point stroke at the other end |
-| Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
+| Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5. The colour is `GRID_DOT` |
+| Canvas horizon line | 1 point thick, at 72 percent of the canvas height |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
 | Overlay text input | 44 high |
@@ -645,7 +697,9 @@ outside for large frames and glows.
 
 There are four levels, from back to front:
 
-1. **Canvas**: `BG`, two low-alpha radial glows and the dot grid.
+1. **Canvas**: the backdrop of the canvas (the sky and the ground, the glow and
+   the horizon line, see [Canvas backdrop](#canvas-backdrop)) and the dot grid.
+   The window fills `BG` under the backdrop.
 2. **Workspace frame and panels**: workspace frame at radius 20 with a faint
    accent tint (`alpha(blend(PANEL_BG, accent, 0.12), 24)` active or 14 idle)
    and a 1 px accent outline (alpha 110 active, 55 idle); panels at radius 16

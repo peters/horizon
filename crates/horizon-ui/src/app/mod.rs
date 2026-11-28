@@ -34,6 +34,7 @@ mod browser_request_claims;
 mod browser_requests;
 mod browser_visibility_requests;
 mod canvas;
+mod canvas_backdrop;
 mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
@@ -405,6 +406,9 @@ pub struct HorizonApp {
     /// because a unit test starts no `ssh`.
     link_child: Option<String>,
     canvas_grid_cache: CanvasGridCache,
+    /// The sky, the glow and the horizon line of the canvas, with the shapes of
+    /// the frame that last changed.
+    canvas_backdrop_cache: canvas_backdrop::BackdropCache,
     /// The lines between an agent panel and the panels that it controls, with
     /// the shapes of the frame that last changed.
     agent_lines: agent_lines::AgentLines,

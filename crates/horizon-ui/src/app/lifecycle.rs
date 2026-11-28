@@ -40,6 +40,7 @@ impl HorizonApp {
             self.theme_applied = true;
             self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
+            self.canvas_backdrop_cache.forget();
             self.panel_render_caches.editor_preview_cache.clear();
             for state in self.panel_render_caches.browser_ui_state.values_mut() {
                 state.reset_rendering();
@@ -343,7 +344,8 @@ impl HorizonApp {
         // only beside the leftmost of them.
         let settings_panel_rect = self.settings.as_ref().and_then(|editor| editor.panel_rect);
         let beside = leftmost_panel([settings_panel_rect, self.orchestrator_dock.frame_rect()]);
-        self.render_canvas(ui, beside);
+        let canvas_top = self.canvas_rect(ui.ctx()).min.y;
+        self.render_canvas(ui, beside, canvas_top);
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
         // The lines of the agents run under the panels and over the canvas

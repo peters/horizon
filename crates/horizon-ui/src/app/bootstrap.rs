@@ -180,7 +180,7 @@ impl HorizonApp {
             machine_watch: super::machine_watch::MachinesWatch::default(), reconnects: super::reconnect::ReconnectWaits::default(), node_cards: super::node_cards::NodeCards::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None, close_panel_confirm: None,
             machine_epoch: 0, machine_load_rx: None, server_sync: None, link_child: None, shared_terminals: super::shared_terminals::SharedTerminals::default(),
-            canvas_grid_cache: CanvasGridCache::default(), agent_lines: super::agent_lines::AgentLines::default(),
+            canvas_grid_cache: CanvasGridCache::default(), canvas_backdrop_cache: super::canvas_backdrop::BackdropCache::default(), agent_lines: super::agent_lines::AgentLines::default(),
             frame_stats: FrameStats::default(), output_wake, undrawn, workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true, sidebar_drag_workspace: None,

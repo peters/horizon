@@ -214,7 +214,7 @@ impl HorizonApp {
         let workspace_bounds = self.board.workspace_bounds_map();
         self.handle_canvas_pan_in_rect(ctx, canvas_rect, Some(workspace_id));
         // A detached window has no Settings panel beside its canvas.
-        self.render_canvas(ui, None);
+        self.render_canvas(ui, None, canvas_rect.min.y);
         self.render_detached_workspace_backgrounds(ctx, &workspace_bounds, canvas_rect, workspace_id);
         self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);

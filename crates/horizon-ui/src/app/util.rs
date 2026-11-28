@@ -100,22 +100,6 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
     [w, h]
 }
 
-pub(super) fn paint_canvas_glow(ui: &mut egui::Ui) {
-    let rect = ui.max_rect();
-    let painter = ui.painter();
-
-    painter.circle_filled(
-        Pos2::new(rect.max.x + 48.0, rect.center().y),
-        rect.height() * 0.44,
-        theme::CANVAS_WARM_GLOW(),
-    );
-    painter.circle_filled(
-        Pos2::new(rect.min.x - 72.0, rect.min.y + rect.height() * 0.16),
-        rect.height() * 0.28,
-        theme::CANVAS_COOL_GLOW(),
-    );
-}
-
 pub(super) fn clamp_panel_size(size: Vec2) -> Vec2 {
     Vec2::new(
         size.x.max(super::PANEL_MIN_SIZE[0]),
