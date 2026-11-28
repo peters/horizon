@@ -406,7 +406,8 @@ price_per_hour: "<what one hour of it costs, such as 0.03 EUR>"
 ```
 
 The answer is `machine_set` with `created`, which is false when the name was
-already there. `name` follows the machine key rule, `session` is 1 to 40
+already there. A `machine_set` that names no `key` keeps the key that the machine
+has, as it keeps a fact, and the empty text as `key` clears it. `name` follows the machine key rule, `session` is 1 to 40
 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, and `provider` and `repository`
 are one line of at most 60 characters each. `repository` is the repository that
 the machine is ready for, and Horizon draws it on the second line of the row of
@@ -515,6 +516,8 @@ title:     "build-1"
 That is the record that `machine_set` wrote, so the panel it opens is the panel
 that a click on the machine row opens. Pass no `ssh`, `key` or `remote_command`
 with `machine`: the record holds them, and any of them is `invalid_request`.
+The orchestrator of the dock can call `open_terminal` with `machine` too: the
+terminal opens in its workspace, and only a route of its own needs an agent panel.
 Without a record, the long form is still there:
 
 ```

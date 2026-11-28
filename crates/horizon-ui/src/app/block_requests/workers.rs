@@ -29,7 +29,7 @@ use horizon_browser_control::manifest::block_workers::{
     MAX_WORKERS, NOT_ALLOWED, WorkerSummary, check_message, check_report, check_task, task_line, worker_prompt,
 };
 use horizon_core::agent_bridge::WorkerAskState;
-use horizon_core::{AgentStatus, PresetConfig, preset_named};
+use horizon_core::{AgentStatus, PanelId, PresetConfig, preset_named};
 
 use super::super::HorizonApp;
 use super::super::block_panels::preset_kind_name;
@@ -284,11 +284,7 @@ impl HorizonApp {
         let focused = self.board.focused;
         // The newest worker of this conversation is the neighbour of a new worker,
         // and an orchestrator without a worker has no neighbour to point at.
-        let beside = self
-            .orchestrator_dock
-            .workers_of(local_id)
-            .last()
-            .and_then(|worker| self.board.panel_id_by_local_id(&worker.panel));
+        let beside = self.worker_neighbour(local_id);
         let Ok(id) = self.create_agent_child_panel(options, workspace, beside) else {
             return Outcome::failed(
                 block_preset::PANEL_UNAVAILABLE,
@@ -360,6 +356,16 @@ impl HorizonApp {
         self.orchestrator_dock.session_system_message(local_id, &line);
         self.mark_runtime_dirty();
         ctx.request_repaint();
+    }
+
+    /// The panel that the newest worker of the conversation of `local_id` holds,
+    /// or `None` when that conversation has no worker yet: the place beside which
+    /// a new worker and the terminal of a machine of the orchestrator land.
+    pub(in crate::app) fn worker_neighbour(&self, local_id: &str) -> Option<PanelId> {
+        self.orchestrator_dock
+            .workers_of(local_id)
+            .last()
+            .and_then(|worker| self.board.panel_id_by_local_id(&worker.panel))
     }
 
     /// The state word of the worker of the panel `panel`, as `workers` reports it.

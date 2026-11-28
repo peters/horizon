@@ -466,6 +466,8 @@ fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
     let (temp, ctx, mut app) = app();
     present(&mut app, &ctx, temp.path(), 1);
     let root = queue(&temp);
+    // A route of its own needs an agent panel, so the orchestrator reads which
+    // field reaches the terminal of a machine.
     let terminal = app.apply_block_request(
         &orchestrator_request(
             &app,
@@ -484,14 +486,18 @@ fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
         ),
         &ctx,
     );
-    assert_eq!(code(&terminal), "caller_unavailable", "{terminal:?}");
+    assert_eq!(code(&terminal), "not_allowed", "{terminal:?}");
     let Outcome::Failed { message, .. } = &terminal else {
         unreachable!("a refusal names its reason");
     };
-    assert_eq!(message, "The agent that asked is no longer in this host");
+    assert_eq!(
+        message,
+        "An orchestrator opens the terminal of a machine of the machine list: pass machine. A route of its own needs an agent panel."
+    );
 
     // A panel of a preset is opened beside the caller panel, so a caller with no
-    // panel is refused there too, with the same code.
+    // panel is refused there too, and the words name the operation that reaches
+    // a panel of its own.
     let request = orchestrator_request(
         &app,
         1,
@@ -511,6 +517,13 @@ fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
         .expect("the answer is readable")
         .expect("the worker answered");
     assert_eq!(code(&panel), "caller_unavailable", "{panel:?}");
+    let Outcome::Failed { message, .. } = &panel else {
+        unreachable!("a refusal names its reason");
+    };
+    assert_eq!(
+        message,
+        "An orchestrator has no panel to stand beside: start an agent program with worker_start."
+    );
 }
 
 /// The stand-in program of the dock: it names its session and then reads the

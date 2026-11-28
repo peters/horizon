@@ -1004,6 +1004,64 @@ HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py
    front desk adds no message of the person to a work item here: this step tests
    only the read, because the stand-in passes no message of its own.
 
+### 6.36 OD-35 — An orchestrator opens the terminal of a machine
+
+This task needs one machine in the list, so the fixture writes the record of
+`build-1` and starts the stand-in `ssh` of that record. The folder `<evidence>`
+holds the pictures and the state of this task.
+
+1. Stop the fixture and start it again with the machine of the fixture, the
+   stand-in of the dock and the state folder `<evidence>/dock-terminal`.
+
+   ```sh
+   HORIZON_ORCHESTRATOR_DOCK=1 \
+   HORIZON_ORCHESTRATOR_PROGRAM=<repo>/scripts/device-smoke/orchestrator_standin.py \
+     python3 scripts/device-smoke/serve.py \
+       --horizon <candidate>/horizon --native-view --machine-watch \
+       --state <evidence>/dock-terminal
+   ```
+
+2. Open a Device panel on the address of the fixture in the current workspace.
+
+3. Read the section Machines of the sidebar.
+
+   Result: One row reads `build-1` and the line `Stand-in, this fixture`.
+
+4. Click in the field of the dock, type `open the terminal of build-1`, and press
+   Enter.
+
+   Result: The dock shows the bubble `open the terminal of build-1` and the text
+   `I opened the terminal of build-1 (<panel id>).`. One new panel stands in the
+   workspace of the conversation, and it is an SSH terminal of `build-1`. The
+   title bar of that panel reads `opened by the orchestrator`. The keyboard stays
+   in the field of the dock.
+
+5. Take a picture of the whole desktop and keep it as `dock-terminal`.
+
+   Result: The picture shows the new terminal of `build-1` beside the panels of
+   the workspace, its title bar `opened by the orchestrator`, and the two entries
+   of the dock.
+
+6. Click in the field of the dock, type `terminal`, and press Enter.
+
+   Result: The stand-in opens the terminal of the first machine of the list, which
+   is `build-1` again, and the dock shows one more text
+   `I opened the terminal of build-1 (<panel id>).`. A second panel stands in the
+   workspace with the same title bar.
+
+7. Click in the field of the dock, type `terminal with ssh`, and press Enter.
+
+   Result: The stand-in asks for a route of its own, and Horizon refuses it. The
+   board changes in no other way, and the dock shows the text of the refusal
+   `An orchestrator opens the terminal of a machine of the machine list: pass
+   machine. A route of its own needs an agent panel.`
+
+8. Press the row `build-1` of the section Machines.
+
+   Result: The terminal of the record opens in the active workspace, and its title
+   bar reads `opened by Machines`. That panel is the panel of the person, and it
+   is not the panel of the orchestrator.
+
 ## 7. Pass criteria
 
 - The dock draws only after the switch turns it on.

@@ -475,14 +475,38 @@ The program that the orchestrator dock runs speaks for one workspace. Its actor 
   `beside` anchor, so the board puts its card on a free tile of that workspace
   that covers no panel. The position and the size stay Horizon's, as for every
   card.
-- **Nothing more than an agent panel is granted.** Every card operation of this
-  caller is an operation that an agent panel of the same workspace has.
-  `open_terminal`, `open_panel`, `server_link_request` and `browser_host_request`
-  need the panel of the caller, so they answer the refusal of a caller without a
-  panel, `caller_unavailable`. The machine operations and the reads of this tool
-  take no actor, as they do for a panel. The browser page tools and the Device
-  tools keep the rule of their own boundary: the actor of an orchestrator is in
-  no workspace stamp, so it controls no page and no viewer.
+- **Nothing more than an agent panel is granted.** Every operation of this caller
+  is an operation that an agent panel of the same workspace has.
+  `server_link_request` and `browser_host_request` need the panel of the caller,
+  and `open_panel` needs it too, so all three answer the refusal of a caller
+  without a panel, `caller_unavailable`. The machine operations and the reads of
+  this tool take no actor, as they do for a panel. The browser page tools and the
+  Device tools keep the rule of their own boundary: the actor of an orchestrator
+  is in no workspace stamp, so it controls no page and no viewer.
+- **Its one panel is the terminal of a machine of the list.** `open_terminal` with
+  `machine` opens the terminal of one record of the machine list in the workspace
+  of this caller, with the mark `the orchestrator` and the actor of the request,
+  as a panel opens it with the mark of its kind. The grant is narrow:
+  - The machine list is already this caller's. It rents and registers the
+    machines, and the person opens the same terminal with one press on the row of
+    that machine in the sidebar; the panel that opens is the panel of that press.
+  - The route, the key and the remote command come from the record and from no
+    field of the request. The request passes `machine` and an optional `title` and
+    nothing else: `ssh`, `key` and `remote_command` with `machine` are
+    `invalid_request`, and `block_machines::check_single_target` refuses both
+    targets and no target. `Machine::checked_terminal` and
+    `MachineKeys::require` re-check the saved record on the coordination worker,
+    as they do for a panel.
+  - A route of its own, `open_terminal` with `ssh`, is `not_allowed` for this
+    caller. It names a host, an optional user and port and a remote command that
+    the caller composes, and only an agent panel of the board opens one.
+  - The bound `agent_opens.terminals` counts the actor
+    `horizon:orchestrator/<local id>` as it counts the actor of a panel, so this
+    caller opens at most `MAX_TERMINALS_PER_OWNER` terminals in one Horizon run.
+  - The terminal is placed as a worker of this caller is placed, and it takes no
+    keyboard. It is an ordinary SSH panel after that: this tool does not read it,
+    write to it or close it, and the terminal is a login to a host that the
+    record names.
 - **The presence of the owner is the bridge of the dock.** `card_owner_present`
   answers `true` while the dock holds a running bridge for that workspace, so a
   control of the card is live only while that program runs. No other state of a

@@ -15,7 +15,8 @@ use horizon_core::browser::manifest::block::{self, Operation, Outcome, Request};
 use super::super::HorizonApp;
 use super::super::block_machine_keys;
 use super::super::browser_requests::ActorPanel;
-use super::{CardCaller, answer_secret_names, caller_unavailable};
+use super::super::machine_open::TerminalOpener;
+use super::{CardCaller, answer_secret_names, caller_unavailable, orchestrator_needs_machine};
 
 impl HorizonApp {
     /// Applies one request and returns its answer, or `None` for a `next_click`
@@ -66,14 +67,27 @@ impl HorizonApp {
                         key.as_deref(),
                         machine.as_deref(),
                     ),
-                    actor,
+                    TerminalOpener::Panel(actor),
                     request,
                     root,
                     ctx,
                 ),
-                CardCaller::Orchestrator { .. } | CardCaller::Session { .. } | CardCaller::FrontDesk => {
-                    Some(caller_unavailable())
-                }
+                // The orchestrator of a workspace has no panel, so it opens the
+                // terminal of a machine of the list and no route of its own.
+                CardCaller::Orchestrator { workspace } => self.answer_open_terminal(
+                    &OpenTerminalFields::of(
+                        ssh.as_ref(),
+                        remote_command.as_deref(),
+                        title.as_deref(),
+                        key.as_deref(),
+                        machine.as_deref(),
+                    ),
+                    TerminalOpener::Orchestrator { workspace },
+                    request,
+                    root,
+                    ctx,
+                ),
+                CardCaller::Session { .. } | CardCaller::FrontDesk => Some(caller_unavailable()),
             },
             Operation::OpenPanel {
                 preset,
@@ -171,13 +185,13 @@ impl HorizonApp {
         Outcome::BrowserHostStatus { host: Box::new(host) }
     }
 
-    /// Answers `open_terminal`: a route of its own, or the record of a machine of
-    /// this Horizon. A caller that names a machine passes none of the fields that
-    /// the record holds.
+    /// Answers `open_terminal`: a route of its own for a caller panel, or the
+    /// record of a machine of this Horizon. A caller that names a machine passes
+    /// none of the fields that the record holds.
     fn answer_open_terminal(
         &mut self,
         asked: &OpenTerminalFields<'_>,
-        actor: ActorPanel,
+        opener: TerminalOpener,
         request: &Request,
         root: Option<&Path>,
         ctx: &Context,
@@ -207,7 +221,7 @@ impl HorizonApp {
                     ));
                 }
             }
-            self.answer_machine_terminal(machine, title, actor, request, root, ctx);
+            self.answer_machine_terminal(machine, title, opener, request, root, ctx);
             return None;
         }
         let Some(ssh) = ssh else {
@@ -215,6 +229,9 @@ impl HorizonApp {
                 block_machines::INVALID_REQUEST,
                 "open_terminal needs ssh or machine",
             ));
+        };
+        let Some(actor) = opener.panel() else {
+            return Some(orchestrator_needs_machine());
         };
         let terminal = match block_terminal::check(ssh, remote_command) {
             Ok(terminal) => terminal,

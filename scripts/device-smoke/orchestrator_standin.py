@@ -17,10 +17,11 @@ work items through the three operations of the front desk, a turn that holds
 `started the work items` answers the line that Horizon sends after a press, and
 `what waits` reads the work items and counts the ones that need the person.
 
-The words `tool`, `fail`, `long`, `slow`, `card`, `sleepy` and `question` choose
-what a turn answers: a tool call that succeeds, a tool call that fails with a
-result of two lines, a long answer, a wait before the answer, a card, or a card
-that asks the person a question. A turn whose text
+The words `tool`, `fail`, `long`, `slow`, `card`, `sleepy`, `question` and
+`terminal` choose what a turn answers: a tool call that succeeds, a tool call that
+fails with a result of two lines, a long answer, a wait before the answer, a card,
+a card that asks the person a question, or the terminal of a machine of the list,
+which an orchestrator opens with `machine`. A turn whose text
 holds `card` draws one card in the workspace of the conversation through a real
 `horizon --browser-mcp` child, with the identity that Horizon gave this program,
 and then keeps one `next_click` open for that card in a thread of its own. A
@@ -74,7 +75,15 @@ DURATION_MS = 12
 SLOW_SECONDS = 2
 LONG_LINES = 40
 TURN_WORDS = {'tool': 'tool', 'fail': 'fail', 'long': 'long', 'slow': 'slow', 'card': 'card',
-              'sleepy': 'sleepy', 'question': 'question'}
+              'sleepy': 'sleepy', 'question': 'question', 'terminal': 'terminal'}
+# The word of a turn that opens the terminal of a machine of the list, and the text
+# of a turn that found no machine to open.
+TERMINAL_WORD = 'terminal'
+TERMINAL_NO_MACHINE_TEXT = ('I found no machine in the list of this Horizon, so I opened no '
+                            'terminal. Register one with machine_set first.')
+# The word and the address of the route of a turn that asks for a route of its own.
+ROUTE_WORD = 'ssh'
+ROUTE_HOST = '203.0.113.10'
 TOOL_NAME = 'Bash'
 TOOL_COMMAND = 'echo stand-in'
 TOOL_RESULT = 'stand-in'
@@ -484,6 +493,44 @@ def worker_preset(command):
     return ''
 
 
+def machine_of_list(command):
+    """The name of the first machine of the list of this Horizon, or an empty text."""
+    answer = work_item_tool(command, {'operation': 'machines'}, CARD_TIMEOUT_SECONDS)
+    for machine in answer.get('machines') or []:
+        if isinstance(machine, dict) and isinstance(machine.get('name'), str):
+            return machine['name']
+    return ''
+
+
+def terminal_turn(session, number, words):
+    """One turn that opens the terminal of a machine of the list, as the
+    orchestrator of this workspace opens it: with `machine` and no route of its own.
+
+    The last word of the turn names the machine, and a turn that names none takes
+    the first machine of the list, which is the record that the fixture seeded. A
+    turn that also holds `ssh` asks for a route of its own, which Horizon refuses
+    to an orchestrator, so the run reads that refusal.
+    """
+    command = mcp_command()
+    asked = words.partition(TERMINAL_WORD)[2].split()
+    name = asked[-1] if asked else ''
+    if ROUTE_WORD in words:
+        operation = {'operation': 'open_terminal', 'ssh': {'host': ROUTE_HOST}}
+    else:
+        name = name or machine_of_list(command)
+        if not name:
+            text(session, f'msg-{number}-terminal', TERMINAL_NO_MACHINE_TEXT)
+            return
+        operation = {'operation': 'open_terminal', 'machine': name}
+    try:
+        answer = work_item_tool(command, operation, CARD_TIMEOUT_SECONDS)
+    except Fatal as failure:
+        text(session, f'msg-{number}-terminal', f'The host answered: {one_line(str(failure))}')
+        return
+    panel_id = answer.get('panel_id')
+    text(session, f'msg-{number}-terminal', f'I opened the terminal of {name} ({panel_id}).')
+
+
 def worker_turn(session, number, words):
     """One turn of an orchestrator about a worker: the start, the line of a press,
     or the report of a worker that came back.
@@ -597,6 +644,8 @@ def answer(session, number, words):
     elif worker_turn(session, number, words):
         pass
     else:
+        if TURN_WORDS['terminal'] in words:
+            terminal_turn(session, number, words)
         if TURN_WORDS['question'] in words:
             question_turn(session, number)
         elif TURN_WORDS['card'] in words:

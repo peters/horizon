@@ -24,7 +24,7 @@ use horizon_core::{AgentStatus, BlockPanelState, Panel, PanelId, PanelKind, Pres
 
 use super::HorizonApp;
 use super::actions::support::preset_panel_options;
-use super::block_requests::{BlockAnswer, caller_unavailable};
+use super::block_requests::{BlockAnswer, caller_without_panel};
 use super::browser_requests::ActorPanel;
 
 /// The panels each agent panel opened from a preset inside the window of
@@ -175,13 +175,14 @@ impl HorizonApp {
             move || block_preset::check_directory_on_disk(&directory),
             move |app, checked| {
                 app.block_claim.worker_job_finished();
-                let outcome = match app
-                    .request_caller(&request)
-                    .and_then(|caller| caller.panel().ok_or_else(caller_unavailable))
-                {
+                let outcome = match app.request_caller(&request) {
                     Err(refusal) => refusal,
-                    Ok(actor) => match checked {
-                        Some(Ok(path)) => app.open_panel(
+                    // A panel of a preset stands beside the caller panel, so a
+                    // caller without one is refused, and the orchestrator reads
+                    // which operation reaches a panel.
+                    Ok(caller) => match (caller.panel(), checked) {
+                        (None, _) => caller_without_panel(caller),
+                        (Some(actor), Some(Ok(path))) => app.open_panel(
                             &preset,
                             &path,
                             PanelText {
@@ -192,8 +193,8 @@ impl HorizonApp {
                             &request.actor,
                             &opening,
                         ),
-                        Some(Err(refusal)) => block::Outcome::failed(refusal.code, &refusal.message),
-                        None => worker_stopped(),
+                        (Some(_), Some(Err(refusal))) => block::Outcome::failed(refusal.code, &refusal.message),
+                        (Some(_), None) => worker_stopped(),
                     },
                 };
                 app.write_block_answer(BlockAnswer::new(root.as_deref(), request, outcome));

@@ -863,5 +863,6 @@ mod front_desk;
 mod heights;
 mod machine;
 mod orchestrator;
+mod orchestrator_terminal;
 mod orchestrator_workers;
 mod tidy;

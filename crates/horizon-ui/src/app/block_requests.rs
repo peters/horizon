@@ -27,7 +27,7 @@ pub(in crate::app) mod work_items;
 pub(in crate::app) mod workers;
 
 pub(in crate::app) use self::caller::CardCaller;
-pub(super) use self::caller::caller_unavailable;
+pub(super) use self::caller::{caller_unavailable, caller_without_panel, orchestrator_needs_machine};
 
 /// How often a frame comes back while a prompt line waits for the program of its
 /// panel: the line goes out on the frame after that program draws.

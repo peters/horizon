@@ -26,15 +26,87 @@ use super::block_requests::BlockAnswer;
 use super::browser_requests::ActorPanel;
 use super::machine_click::{OPENED_FROM_MACHINES, deleted_key_notice};
 
+/// The mark of the titlebar of a terminal that the orchestrator of a workspace
+/// opened. It is Horizon's own text, as the mark of a worker is.
+pub(in crate::app) const ORCHESTRATOR_MARK: &str = "the orchestrator";
+
+/// Who asked for the terminal of a machine: a panel of this board, or the
+/// orchestrator of a workspace, which has no panel of its own.
+///
+/// The two read differently. A panel gives its own workspace, the neighbour of
+/// its own and the mark of its kind. An orchestrator gives the workspace of its
+/// program, the constant mark of its role, and the place of a new worker of its
+/// conversation.
+#[derive(Clone, Copy)]
+pub(in crate::app) enum TerminalOpener {
+    Panel(ActorPanel),
+    Orchestrator { workspace: WorkspaceId },
+}
+
+impl TerminalOpener {
+    /// The panel of the board that asked, for the operations that need one.
+    pub(in crate::app) fn panel(self) -> Option<ActorPanel> {
+        match self {
+            Self::Panel(actor) => Some(actor),
+            Self::Orchestrator { .. } => None,
+        }
+    }
+
+    /// The mark of the titlebar: the kind of the calling panel, or the role of
+    /// the orchestrator.
+    fn mark(self, app: &HorizonApp) -> String {
+        match self {
+            Self::Panel(actor) => app
+                .board
+                .panel(actor.panel_id)
+                .map_or_else(|| "Agent".to_owned(), |panel| panel.kind.display_name().to_owned()),
+            Self::Orchestrator { .. } => ORCHESTRATOR_MARK.to_owned(),
+        }
+    }
+
+    /// The actor that opened the panel, in the form that a saved panel carries:
+    /// the panel's, or the actor of the request of the orchestrator.
+    fn actor(self, app: &HorizonApp) -> Option<String> {
+        match self {
+            Self::Panel(actor) => app.opener_actor(actor),
+            Self::Orchestrator { workspace } => app
+                .board
+                .workspace(workspace)
+                .and_then(|workspace| horizon_core::agent_bridge::actor::of_workspace(&workspace.local_id)),
+        }
+    }
+
+    /// Places the terminal of `options` where this opener puts a panel of its
+    /// own: beside the calling panel, or as a worker of the conversation of the
+    /// orchestrator is placed.
+    fn place(self, app: &mut HorizonApp, options: PanelOptions) -> horizon_core::Result<String> {
+        let id = match self {
+            Self::Panel(actor) => return app.create_machine_panel(actor.workspace_id, options, Some(actor.panel_id)),
+            Self::Orchestrator { workspace } => {
+                let beside = app
+                    .board
+                    .workspace(workspace)
+                    .map(|workspace| workspace.local_id.clone())
+                    .and_then(|local_id| app.worker_neighbour(&local_id));
+                app.create_agent_child_panel(options, workspace, beside)?
+            }
+        };
+        app.board
+            .panel(id)
+            .map(|panel| panel.local_id.clone())
+            .ok_or_else(|| horizon_core::Error::State("The new terminal is not on the board".into()))
+    }
+}
+
 impl HorizonApp {
     /// Answers `open_terminal { machine }`: opens the terminal of the record in
-    /// the caller's workspace, beside the calling agent panel, without taking
-    /// keyboard focus.
+    /// the workspace of the caller, beside the calling agent panel or as a worker
+    /// of the orchestrator, without taking keyboard focus.
     pub(super) fn answer_machine_terminal(
         &mut self,
         name: &str,
         title: Option<&str>,
-        actor: ActorPanel,
+        opener: TerminalOpener,
         request: &block::Request,
         root: Option<&Path>,
         ctx: &Context,
@@ -66,18 +138,11 @@ impl HorizonApp {
             return;
         }
         let keys = MachineKeys::from_home(self.session_store.home());
-        let agent_name = self
-            .board
-            .panel(actor.panel_id)
-            .map_or("Agent", |panel| panel.kind.display_name())
-            .to_owned();
-        let agent_actor = self
-            .board
-            .panel(actor.panel_id)
-            .map(|panel| horizon_core::browser_actor(&panel.local_id));
+        let agent_name = opener.mark(self);
+        let agent_actor = opener.actor(self);
         let (name, title) = (name.to_owned(), title.map_or_else(|| record.title(), str::to_owned));
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
-        let (writing, owner, workspace) = (ctx.clone(), request.actor.clone(), actor.workspace_id);
+        let (writing, owner) = (ctx.clone(), request.actor.clone());
         let key = self.machine_list.key(name.as_str()).map(str::to_owned);
         self.block_claim.worker_job_started();
         self.browser_create_host.io.then(
@@ -96,7 +161,7 @@ impl HorizonApp {
                             agent_actor,
                         );
                         let focused = app.board.focused;
-                        match app.create_machine_panel(workspace, options, Some(actor.panel_id)) {
+                        match opener.place(app, options) {
                             Ok(panel_id) => {
                                 // The person keeps the keyboard where it was.
                                 if let Some(focused) = focused {

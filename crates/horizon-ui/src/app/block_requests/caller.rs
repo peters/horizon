@@ -31,6 +31,9 @@ use super::super::browser_requests::{ActorPanel, actor_panel};
 use super::super::orchestrator_dock::FRONT_DESK;
 use super::request_expired;
 
+/// The code of an operation that the caller may not ask for at all.
+const NOT_ALLOWED: &str = "not_allowed";
+
 /// Who asked for a card: an agent panel, the orchestrator of a workspace, a
 /// session of a machine of the list, or the front desk of the dock.
 #[derive(Clone, Copy)]
@@ -64,6 +67,35 @@ impl CardCaller<'_> {
 /// a machine that asks outside the cards.
 pub(in crate::app) fn caller_unavailable() -> Outcome {
     Outcome::failed("caller_unavailable", "The agent that asked is no longer in this host")
+}
+
+/// The refusal of an orchestrator that asks for a route of its own: it has no
+/// agent panel, so it opens the terminal of a machine of the list and nothing
+/// else, and the answer names the field that reaches it.
+pub(in crate::app) fn orchestrator_needs_machine() -> Outcome {
+    Outcome::failed(
+        NOT_ALLOWED,
+        "An orchestrator opens the terminal of a machine of the machine list: pass machine. A route of its own needs an agent panel.",
+    )
+}
+
+/// The refusal of an orchestrator that asks for the panel of a preset: a panel
+/// of a preset stands beside the caller panel, and an orchestrator has none.
+pub(in crate::app) fn orchestrator_has_no_panel() -> Outcome {
+    Outcome::failed(
+        "caller_unavailable",
+        "An orchestrator has no panel to stand beside: start an agent program with worker_start.",
+    )
+}
+
+/// The refusal of a caller that has no panel of this board for an operation that
+/// needs one. The words name the way forward for the one caller that can follow
+/// it with another operation of the tool.
+pub(in crate::app) fn caller_without_panel(caller: CardCaller<'_>) -> Outcome {
+    match caller {
+        CardCaller::Orchestrator { .. } => orchestrator_has_no_panel(),
+        CardCaller::Panel(_) | CardCaller::Session { .. } | CardCaller::FrontDesk => caller_unavailable(),
+    }
 }
 
 impl HorizonApp {

@@ -222,8 +222,9 @@ answers a question from wherever the person looks
 | Operation | This caller | Reason |
 | --------- | ----------- | ------ |
 | `create`, `update`, `list`, `inspect`, `next_click`, `visibility`, `close` | works | the card operations need the workspace of the caller and no panel |
-| `open_terminal` | `caller_unavailable` | the terminal stands beside the panel of the caller and carries the mark of that panel |
-| `open_panel` | `caller_unavailable` | the panel of a preset stands beside the panel of the caller, and no panel of this caller exists |
+| `open_terminal { machine }` | works | the terminal of a machine of the list stands in the workspace of the caller, as a worker stands, and its titlebar carries the mark `opened by the orchestrator`; the route, the key and the remote command come from the record, as they do for a panel |
+| `open_terminal { ssh }` | `not_allowed` | a route of its own needs an agent panel, because it names a host, a route and a command that the caller composes |
+| `open_panel` | `caller_unavailable` | the panel of a preset stands beside the panel of the caller, and no panel of this caller exists; the message names `worker_start` |
 | `presets` | works | a read of the names of the settings, which needs no actor |
 | `machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`, `delete_machine_key` | works | the machine list of this Horizon takes no actor, and the orchestrator rents machines of it |
 | `secret_names` | works | the answer is the names of the stored secrets and no value |
