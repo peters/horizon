@@ -632,16 +632,23 @@ when it names one of those kinds.
   session lives on disk (`crates/horizon-core/src/agent_bridge/store.rs`). The
   dock draws no galley and no string while the switch is off.
 
+- `app::block_requests` claims the card requests of the agents, applies them on
+  the frame and answers them on the coordination worker. `block_requests.rs`
+  holds the claim state, the dispatch of one operation and the write of one
+  answer. The checks that settle a caller and the workspace of its cards are
+  `block_requests/caller.rs`: `request_caller` maps an actor to `CardCaller`, and
+  `owner_workspace` answers the workspace of the cards of one owner.
+
 - `app::orchestrator_dock`, `app::block_requests` and `app::block_clicks` share
   one rule with the card path: the orchestrator of a workspace is a card caller
   without a panel. The dock answers the presence of that caller with
-  `OrchestratorDock::running`, `block_requests::request_caller` maps its actor to
-  `CardCaller::Orchestrator`, `owner_workspace` answers the workspace of its local
-  id, and `block_clicks::card_owner_present` reads it. The state chip of such a
-  card names the program of the dock and says whether it listens. The operations
-  that need the panel of a caller are refused there with the one refusal of a
-  caller without a panel, so a new operation of `block_panel` states in one match
-  arm whether an orchestrator reaches it.
+  `OrchestratorDock::running`, `block_requests/caller.rs::request_caller` maps its
+  actor to `CardCaller::Orchestrator`, `owner_workspace` answers the workspace of
+  its local id, and `block_clicks::card_owner_present` reads it. The state chip of
+  such a card names the program of the dock and says whether it listens. The
+  operations that need the panel of a caller are refused there with the one
+  refusal of a caller without a panel, so a new operation of `block_panel` states
+  in one match arm whether an orchestrator reaches it.
 
 ## File Size Policy
 

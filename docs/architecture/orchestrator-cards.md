@@ -83,8 +83,11 @@ workspace gets `not_owner`.
 ## The presence of the owner
 
 `card_owner_present` answers `true` for a card of an orchestrator while the dock
-holds a running bridge for that workspace
-(`OrchestratorDock::running`), and the state chip of the card names the program
+holds a running bridge for that workspace (`OrchestratorDock::running`) and the
+card stands in that workspace. A card that the person moved to another workspace
+has no owner there, as a card of a panel owner has none once that panel is in
+another workspace: the program of the dock reads and closes only the cards of
+the workspace that its actor names. The state chip of the card names the program
 of the dock and says whether it listens. While no bridge runs, the chip says
 `No agent` and every control of the card is drawn disabled.
 

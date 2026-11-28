@@ -155,8 +155,12 @@ impl HorizonApp {
         };
         if let Some(local_id) = actor::workspace_of(owner) {
             // A program of the dock has no terminal and no panel of this board, so
-            // the bridge of its conversation is its presence.
-            return self.orchestrator_dock.running(local_id);
+            // the bridge of its conversation is its presence. That program reads and
+            // closes only the cards of the workspace that its actor names, so a card
+            // that the person moved to another workspace has no owner there, as a card
+            // of a panel owner has none once that panel is in another workspace.
+            return self.board.workspace_id_by_local_id(local_id) == Some(panel.workspace_id)
+                && self.orchestrator_dock.running(local_id);
         }
         let Some((machine, session)) = node_cards::actor_parts(owner) else {
             return false;

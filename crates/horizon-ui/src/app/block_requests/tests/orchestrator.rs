@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::app::block_machines::settle_machine_load;
-use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+use crate::app::orchestrator_dock::OrchestratorDock;
+use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use horizon_browser_control::manifest::block_terminal::TerminalRoute;
 use horizon_core::agent_bridge::actor;
 use horizon_core::{MachineKeys, RuntimeState, StartupDecision};
@@ -468,6 +469,202 @@ fn an_operation_that_needs_the_panel_of_the_caller_is_refused() {
         .expect("the answer is readable")
         .expect("the worker answered");
     assert_eq!(code(&panel), "caller_unavailable", "{panel:?}");
+}
+
+/// The window of the test that draws frames of the dock: wide enough that the
+/// dock stands beside the canvas.
+const WIDE: [f32; 2] = [2000.0, 1000.0];
+
+/// The stand-in program of the dock: it names its session and then reads the
+/// lines of the person until the bridge stops, so a test holds a running bridge
+/// without an agent program.
+const SILENT: &str = r#"printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
+while IFS= read -r line; do :; done
+"#;
+
+/// The board of the test that draws frames: the same two workspaces, with the
+/// editor panels that a frame draws without an agent program.
+fn frame_app() -> TestApp {
+    let runtime = RuntimeState {
+        workspaces: vec![
+            editor_workspace_state(FIRST, [0.0, 0.0]),
+            editor_workspace_state(SECOND, [900.0, 0.0]),
+        ],
+        ..RuntimeState::default()
+    };
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime),
+    });
+    settle_machine_load(&mut app);
+    // The frames of a person's window, as the tests of the dock settle them: no
+    // deferred theme and no one-shot startup layout takes the input of a frame.
+    app.theme_applied = true;
+    app.initial_pan_done = true;
+    app.startup_workspace_organization_pending = false;
+    app.root_viewport_stabilizer = None;
+    for _ in 0..3 {
+        let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(WIDE, None));
+    }
+    (temp, ctx, app)
+}
+
+/// One frame of the window whose pointer stands at `at`, pressed or released.
+fn pointer_frame(at: egui::Pos2, pressed: bool) -> egui::RawInput {
+    let mut input = raw_input(WIDE, None);
+    input.events = vec![
+        egui::Event::PointerMoved(at),
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    input
+}
+
+/// One frame of the window that presses the Enter key.
+fn enter_frame() -> egui::RawInput {
+    let mut input = raw_input(WIDE, None);
+    input.events = vec![egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: Some(egui::Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }];
+    input
+}
+
+/// A request of the agent panel with `local_id`, which is the actor of a panel
+/// of this board.
+fn panel_request(local_id: &str, operation: Operation) -> Request {
+    Request {
+        request_id: "test-panel".into(),
+        actor: format!("horizon:{local_id}"),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation,
+    }
+}
+
+/// Starts the program of the dock for the workspace that the dock draws, as a
+/// person does: a click in the field of the draft and the Enter key. It answers
+/// the local id of that workspace, whose bridge is the presence of its
+/// orchestrator.
+fn start_dock_bridge(app: &mut HorizonApp, ctx: &Context, folder: &Path) -> String {
+    let program = horizon_core::stand_in_program_in(folder, "stand-in.sh", SILENT).expect("the stand-in program");
+    app.orchestrator_dock = OrchestratorDock::with_program(true, program);
+    let local_id = app
+        .board
+        .active_workspace
+        .and_then(|id| app.board.workspace(id))
+        .map(|workspace| workspace.local_id.clone())
+        .expect("the active workspace of the board");
+    app.orchestrator_dock.draft_mut(&local_id).push_str("hello");
+    // The dock takes the right edge of the window in a frame, so it knows the
+    // rectangles of its parts after one frame.
+    let _ = run_app_frame_with_input(ctx, app, raw_input(WIDE, None));
+    let field = app
+        .orchestrator_dock
+        .last_frame()
+        .expect("the frame of the dock")
+        .field
+        .center();
+    let _ = run_app_frame_with_input(ctx, app, pointer_frame(field, true));
+    let _ = run_app_frame_with_input(ctx, app, pointer_frame(field, false));
+    let _ = run_app_frame_with_input(ctx, app, enter_frame());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !app.orchestrator_dock.running(&local_id) {
+        assert!(std::time::Instant::now() < deadline, "the program of the dock starts");
+        let _ = run_app_frame_with_input(ctx, app, raw_input(WIDE, None));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        app.orchestrator_dock.draft_mut(&local_id).is_empty(),
+        "the message of the person left the field of the dock"
+    );
+    local_id
+}
+
+#[test]
+fn a_card_that_the_person_moved_to_another_workspace_has_no_present_owner() {
+    let (temp, ctx, mut app) = frame_app();
+    let second = app.board.workspaces[1].id;
+    let owner_panel = app.board.panels[0].local_id.clone();
+    let closing_panel = app.board.panels[1].local_id.clone();
+
+    // The card of the orchestrator of the workspace that the dock draws.
+    let card = created_in(&mut app, &ctx, 0, "Plan");
+    let local_id = start_dock_bridge(&mut app, &ctx, temp.path());
+    assert_eq!(
+        local_id,
+        workspace_local_id(&app, 0),
+        "the dock draws the first workspace of this board"
+    );
+    let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    assert!(
+        app.card_agent_present(id),
+        "the program of the dock runs, so the card of its orchestrator is live"
+    );
+    // The two panels of this board are agent panels after the frames of the dock,
+    // so an actor of either of them reaches the card operations.
+    for panel in &mut app.board.panels {
+        if panel.local_id == owner_panel || panel.local_id == closing_panel {
+            panel.kind = PanelKind::Claude;
+        }
+    }
+
+    // The person moves the card to the other workspace.
+    app.board.assign_panel_to_workspace(id, second);
+    assert!(
+        !app.card_agent_present(id),
+        "the orchestrator is not in the workspace that the card moved to"
+    );
+    let chip = app.card_titlebar_chip(id).expect("the card has a state chip");
+    assert_eq!(
+        chip.state,
+        crate::block_widget::chip::ChipState::Gone,
+        "the chip of the moved card says `No agent`"
+    );
+
+    // A card of a panel owner that the person moved in the same way behaves the
+    // same way: its owner is the panel, and that panel is in another workspace.
+    let create = panel_request(
+        &owner_panel,
+        Operation::Create {
+            title: Some("Notes".into()),
+            document: document("Notes"),
+        },
+    );
+    let Outcome::Created { panel_id, .. } = app.apply_block_request(&create, &ctx) else {
+        panic!("the agent panel draws a card");
+    };
+    let panel_card = app.board.panel_id_by_local_id(&panel_id).expect("the card");
+    assert!(
+        app.card_agent_present(panel_card),
+        "the owner panel is in the workspace of its card"
+    );
+    app.board.assign_panel_to_workspace(panel_card, second);
+    assert!(
+        !app.card_agent_present(panel_card),
+        "a card of a panel owner that left its workspace has no present owner either"
+    );
+
+    // An agent of the workspace that holds a moved card closes it, as it closes
+    // the card of a panel that is not in that workspace.
+    let closed = app.apply_block_request(
+        &panel_request(&closing_panel, Operation::Close { panel_id: card.clone() }),
+        &ctx,
+    );
+    let Outcome::Closed { by_owner, .. } = &closed else {
+        panic!("the agent of the workspace closes the card of the moved orchestrator: {closed:?}");
+    };
+    assert!(!by_owner, "the closer is not the owner of the card");
+    assert!(
+        app.board.panel_id_by_local_id(&card).is_none(),
+        "the card left the board"
+    );
 }
 
 #[test]

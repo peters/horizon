@@ -13,12 +13,10 @@ use egui::Context;
 use horizon_browser_control::block::{BlockDocument, parse_sent_document};
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_terminal;
-use horizon_core::agent_bridge::actor;
 use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
 };
-use horizon_core::node_cards;
 use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::HorizonApp;
@@ -26,6 +24,11 @@ use super::answer_retries::{RefusedAnswer, RefusedAnswers};
 use super::block_machine_keys;
 use super::browser_requests::{ActorPanel, actor_panel};
 use super::device_requests::HOST_REQUEST_POLL;
+
+mod caller;
+
+pub(in crate::app) use self::caller::CardCaller;
+pub(super) use self::caller::caller_unavailable;
 
 /// How often a frame comes back while a prompt line waits for the program of its
 /// panel: the line goes out on the frame after that program draws.
@@ -100,38 +103,6 @@ impl BlockClaimState {
 /// the JSON text of it.
 fn card_document(document: &serde_json::Value) -> Result<BlockDocument, Outcome> {
     parse_sent_document(document).map_err(|error| Outcome::failed(error.code(), &error.to_string()))
-}
-
-/// Who asked for a card: an agent panel, the orchestrator of a workspace, or a
-/// session of a machine of the list.
-#[derive(Clone, Copy)]
-pub(in crate::app) enum CardCaller<'a> {
-    Panel(ActorPanel),
-    /// The program that the dock runs for one workspace, which has no panel.
-    Orchestrator {
-        workspace: WorkspaceId,
-    },
-    Session {
-        machine: &'a str,
-    },
-}
-
-impl CardCaller<'_> {
-    /// The agent panel of this caller, when a panel of this board asked. The two
-    /// callers without a panel answer `None` here and are refused by every
-    /// operation that needs the panel itself, such as `open_terminal`.
-    pub(super) fn panel(self) -> Option<ActorPanel> {
-        match self {
-            Self::Panel(panel) => Some(panel),
-            Self::Orchestrator { .. } | Self::Session { .. } => None,
-        }
-    }
-}
-
-/// The refusal of a caller that cannot ask for what it asks, such as a session of
-/// a machine that asks outside the cards.
-pub(super) fn caller_unavailable() -> Outcome {
-    Outcome::failed("caller_unavailable", "The agent that asked is no longer in this host")
 }
 
 impl HorizonApp {
@@ -401,52 +372,6 @@ impl HorizonApp {
                 None
             }
         }
-    }
-
-    /// The checks every request passes before Horizon applies it: the host, the
-    /// deadline, and the caller, a panel of this board or a session of a machine.
-    pub(super) fn request_caller<'a>(&self, request: &'a Request) -> Result<CardCaller<'a>, Outcome> {
-        if request.host_instance != manifest::host_instance() {
-            return Err(Outcome::failed("wrong_host", "Request belongs to another Horizon host"));
-        }
-        if request.deadline_at_millis <= manifest::now_millis() {
-            return Err(request_expired());
-        }
-        if let Some(panel) = actor_panel(&self.board, &request.actor) {
-            return Ok(CardCaller::Panel(panel));
-        }
-        // The orchestrator of a workspace asks as `horizon:orchestrator/<local
-        // id>`. The id in the actor is checked against this board, and that
-        // workspace is the whole right of this caller: it has no panel.
-        if let Some(local_id) = actor::workspace_of(&request.actor) {
-            let workspace = self
-                .board
-                .workspace_id_by_local_id(local_id)
-                .ok_or_else(caller_unavailable)?;
-            return Ok(CardCaller::Orchestrator { workspace });
-        }
-        let (machine, _session) = node_cards::actor_parts(&request.actor).ok_or_else(caller_unavailable)?;
-        if self.machine_list.find(machine).is_none() {
-            return Err(caller_unavailable());
-        }
-        Ok(CardCaller::Session { machine })
-    }
-
-    /// The workspace of the cards of `owner`: its panel's, the orchestrator's
-    /// workspace, or its machine's.
-    pub(super) fn owner_workspace(&self, owner: &str) -> Option<WorkspaceId> {
-        if let Some(panel) = actor_panel(&self.board, owner) {
-            return Some(panel.workspace_id);
-        }
-        if let Some(local_id) = actor::workspace_of(owner) {
-            return self.board.workspace_id_by_local_id(local_id);
-        }
-        let (machine, _session) = node_cards::actor_parts(owner)?;
-        self.board
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.name == machine)
-            .map(|workspace| workspace.id)
     }
 
     /// The mark of a panel that an agent panel opened: the display name of the
