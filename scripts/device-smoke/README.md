@@ -301,6 +301,13 @@ a row of the chip `Workers`:
   "command": "<repo>/scripts/device-smoke/orchestrator_standin.py", "args": ["--worker"]}]
 ```
 
+The fixture puts its private home over the home folder of the person, so a
+program of a preset must be at a path outside that folder. When the repository
+is in the home folder, copy `orchestrator_standin.py` and the other `.py` files
+of `scripts/device-smoke/` to a folder outside it, and name that copy as the
+`command`. A run that named the path in the home folder showed a worker panel
+that ended with `No such file or directory`.
+
 The kind `gemini` is the first preset of this file, because a panel of that kind
 carries no session badge: the titlebar of a panel of 520 points holds the badge of
 the mark `opened by worker of the orchestrator` and no second badge beside it. A

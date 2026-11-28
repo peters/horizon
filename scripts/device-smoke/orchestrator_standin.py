@@ -528,6 +528,12 @@ def terminal_turn(session, number, words):
         text(session, f'msg-{number}-terminal', f'The host answered: {one_line(str(failure))}')
         return
     panel_id = answer.get('panel_id')
+    if not panel_id:
+        # An answer with no panel is a refusal of the host: the turn says its words,
+        # so a run reads why nothing opened.
+        refusal = answer.get('message') or json.dumps(answer)
+        text(session, f'msg-{number}-terminal', one_line(str(refusal)))
+        return
     text(session, f'msg-{number}-terminal', f'I opened the terminal of {name} ({panel_id}).')
 
 
