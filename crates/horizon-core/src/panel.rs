@@ -1,6 +1,7 @@
 mod agent_status;
 mod cwd;
 mod echo;
+mod end;
 mod follow;
 mod lifecycle;
 mod metrics;

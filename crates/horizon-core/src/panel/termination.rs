@@ -53,24 +53,33 @@ pub(crate) fn watch(child: HangingChild, name: &str, completion: Option<PanelCom
 }
 
 fn end_after_hangup(child: &HangingChild, name: &str, completion: Option<&PanelCompletion>) {
-    if ended_within(child, AFTER_HANGUP) {
-        finish(completion);
-        return;
+    if !ended_within(child, AFTER_HANGUP) {
+        end_now(child, name);
+    }
+    finish(completion);
+}
+
+/// Ends the program now, with the two steps of a close and no wait for the
+/// hangup, and answers whether it ended within them.
+///
+/// A panel that a board closes gives its program [`AFTER_HANGUP`] first, because
+/// the hangup ends most programs. A caller that has no panel of a board, such as
+/// the fixture of a test, ends its program at once.
+pub(crate) fn end_now(child: &HangingChild, name: &str) -> bool {
+    if child.has_ended() {
+        return true;
     }
     if !signal(child, Signal::TERM, "SIGTERM", name) {
-        finish(completion);
-        return;
+        return child.has_ended();
     }
     if ended_within(child, AFTER_TERM) {
-        finish(completion);
-        return;
+        return true;
     }
     let _ = signal(child, Signal::KILL, "SIGKILL", name);
     // A program that the kernel already tore down cannot answer a signal and
     // never leaves its entry of the process table on a Mac, so the last wait has
     // its own end too.
-    let _ = ended_within(child, AFTER_KILL);
-    finish(completion);
+    ended_within(child, AFTER_KILL)
 }
 
 /// Counts the panel of this program, whichever step ended it.

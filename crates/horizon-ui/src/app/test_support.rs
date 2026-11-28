@@ -424,3 +424,57 @@ pub(super) fn card_body(panel: Rect, zoom: f32) -> Rect {
         Pos2::new(panel.max.x, panel.max.y - CARD_FOOT_SPAN * zoom),
     )
 }
+
+/// One process of this computer: its id, the id of its parent, and its command
+/// line.
+pub(super) fn process_rows() -> Vec<(u32, u32, String)> {
+    let output = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,args="])
+        .output()
+        .expect("the process list of this computer");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    // The pid column is right-aligned to the width of the widest pid of this
+    // computer, so a line of a shorter pid starts with spaces and the words of a
+    // line are read without them.
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            let parent = words.next()?.parse().ok()?;
+            Some((pid, parent, line.to_owned()))
+        })
+        .collect()
+}
+
+/// Ends every program whose command line holds one of `words`, and every program
+/// that those started.
+///
+/// A stand-in that a test starts waits for a link that ends with its window, so a
+/// test that ends before that link leaves the program behind, and its parent is
+/// gone by then. Each word names one stand-in and the test that started it.
+pub(super) fn end_programs_holding(words: &[&str]) {
+    let rows = process_rows();
+    let mut found: std::collections::BTreeSet<u32> = rows
+        .iter()
+        .filter(|(_, _, line)| words.iter().any(|word| line.contains(word)))
+        .map(|(pid, _, _)| *pid)
+        .collect();
+    loop {
+        let started: Vec<u32> = rows
+            .iter()
+            .filter(|(_, parent, _)| found.contains(parent))
+            .map(|(pid, _, _)| *pid)
+            .collect();
+        let before = found.len();
+        found.extend(started);
+        if found.len() == before {
+            break;
+        }
+    }
+    if !found.is_empty() {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .args(found.iter().map(u32::to_string))
+            .status();
+    }
+}

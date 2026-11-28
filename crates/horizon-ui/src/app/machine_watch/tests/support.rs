@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use egui::Context;
 
 use crate::app::HorizonApp;
-use crate::app::test_support::run_app_frame;
+use crate::app::test_support::{end_programs_holding, process_rows, run_app_frame};
 
 /// How long a test waits for the watch to reach the state that it expects.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(30);
@@ -171,7 +171,7 @@ impl Ssh {
             "#!/bin/sh\nprintf 'c' >> {calls}\nprintf '%s\\n' \"$*\" >> {argv}\nmarker={marker}\n\
              for a in \"$@\"; do last=$a; done\n\
              case $last in rm*--*) exit 0 ;; esac\n\
-             case \" $* \" in *\" -R \"*) exec sh -c 'sleep 300' -s \"$marker\" ;; esac\n\
+             case \" $* \" in *\" -R \"*) while :; do sleep 1; done ;; esac\n\
              HORIZON_MACHINE_WATCH_TMUX_SOCKET={socket}\nexport HORIZON_MACHINE_WATCH_TMUX_SOCKET\n\
              {body}\n",
             calls = quoted(&calls.to_string_lossy()),
@@ -207,31 +207,31 @@ impl Ssh {
     /// and not the subshells that a command substitution or a pipeline of that text
     /// forks for a moment, which carry the same command line.
     pub(crate) fn children(&self) -> usize {
-        let output = Command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,args="])
-            .output()
-            .expect("the process list of this computer");
-        let text = String::from_utf8_lossy(&output.stdout).into_owned();
-        // The pid column is right-aligned to the width of the widest pid of this
-        // computer, so a line of a shorter pid starts with spaces and the words of a
-        // line are read without them.
-        let rows: Vec<(u32, u32, bool)> = text
-            .lines()
-            .filter_map(|line| {
-                let mut words = line.split_whitespace();
-                let pid = words.next()?.parse().ok()?;
-                let parent = words.next()?.parse().ok()?;
-                Some((pid, parent, line.contains(&self.marker)))
-            })
-            .collect();
+        let rows = process_rows();
         let marked: std::collections::BTreeSet<u32> = rows
             .iter()
-            .filter(|(_, _, marked)| *marked)
+            .filter(|(_, _, line)| line.contains(&self.marker))
             .map(|(pid, _, _)| *pid)
             .collect();
         rows.iter()
             .filter(|(pid, parent, _)| marked.contains(pid) && !marked.contains(parent))
             .count()
+    }
+
+    /// Ends every program of this stand-in, and every program that those started.
+    ///
+    /// The `ssh` of a forward waits for a link that ends with the window: a test
+    /// that drops the program of its machine before that link ends leaves the
+    /// program behind, and its parent is gone by then.
+    fn end_programs(&self) {
+        let folder = self.folder.path().to_string_lossy().into_owned();
+        end_programs_holding(&[&self.marker, &folder]);
+    }
+}
+
+impl Drop for Ssh {
+    fn drop(&mut self) {
+        self.end_programs();
     }
 }
 

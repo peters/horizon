@@ -132,8 +132,9 @@ struct StandIn {
 
 impl StandIn {
     /// The stand-in that holds its link, as a forward that `sshd` accepted does.
+    /// It holds it in this shell, so no program of it outlives the end of the link.
     fn holding() -> Self {
-        Self::of("case $* in *'mkdir -p '*) exit 0 ;; esac\nsleep 30\n")
+        Self::of("case $* in *'mkdir -p '*) exit 0 ;; esac\nwhile :; do sleep 1; done\n")
     }
 
     /// The stand-in that ends at once with the words of a refused forward.
@@ -177,6 +178,20 @@ impl StandIn {
             .rev()
             .find(|line| line.split_whitespace().any(|word| word == "-R"))
             .map(str::to_owned)
+    }
+
+    /// Ends every program of this stand-in, and every program that those started.
+    ///
+    /// The stand-in of a holding forward waits for a link that ends with its
+    /// window, so a test that ends before that link leaves the program behind.
+    fn end_programs(&self) {
+        crate::app::test_support::end_programs_holding(&[&self.folder.path().to_string_lossy()]);
+    }
+}
+
+impl Drop for StandIn {
+    fn drop(&mut self) {
+        self.end_programs();
     }
 }
 

@@ -243,6 +243,16 @@ impl TerminalHarness {
     }
 }
 
+impl Drop for TerminalHarness {
+    fn drop(&mut self) {
+        // A panel of a test has no board that closes it, and a dropped terminal
+        // only detaches from its program. Without this the recorder of the
+        // session (`script`) takes the hangup and waits for the program under
+        // it, so both outlive the test process by hours.
+        self.panel.end_program();
+    }
+}
+
 /// One poll can read the echo of both lines of a burst: the text of the second
 /// line is on the screen, and the poll that found it already ran. The wait takes
 /// that text, where a wait for a poll that both drains a wakeup and sees the text
@@ -611,6 +621,84 @@ fn a_panel_that_holds_a_foreign_grid_draws_it_and_keeps_its_pointer_in_it() {
         !harness.panel.terminal().expect("terminal").shows_foreign_grid(),
         "a button of the person of this computer ends the hold"
     );
+}
+
+/// The longest wait for the processes of a dropped harness to go. It is a hang
+/// guard and not a rule of the product: a loaded computer ends a program late.
+const AFTER_DROP: Duration = Duration::from_secs(10);
+
+/// A harness whose program a test drops without a board ends both: the recorder
+/// of its session (`script`) takes the hangup of a closed terminal and runs on,
+/// and the program of the panel runs under it until the test process ends.
+#[test]
+fn a_harness_that_is_dropped_ends_its_program_and_its_recorder() {
+    // The word names this run of the test alone, and it reaches the command line
+    // of the recorder and of the program under it.
+    let word = format!("hz-dropped-{}", std::process::id());
+    // A program that waits for input of its terminal for ever: the recorder of
+    // the session holds the other end of that terminal, so it reads no end of
+    // file and runs on after the harness is gone.
+    let child = format!("printf 'READY'\nwhile IFS= read -r line; do :; done\n# {word}");
+    {
+        let mut harness = TerminalHarness::with_child(&child);
+        harness.wait_for_text("READY");
+        let running = processes_with(&word);
+        assert!(
+            !running.is_empty(),
+            "the fixture must run under its recorder before the drop: {running:?}"
+        );
+    }
+
+    let deadline = Instant::now() + AFTER_DROP;
+    loop {
+        let running = processes_with(&word);
+        if running.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a dropped harness left these processes running: {running:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The command lines of the processes of this computer that hold `word`.
+fn processes_with(word: &str) -> Vec<String> {
+    command_lines().into_iter().filter(|line| line.contains(word)).collect()
+}
+
+/// The command lines of every process of this computer.
+#[cfg(target_os = "linux")]
+fn command_lines() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        })
+        .filter_map(|entry| std::fs::read(entry.path().join("cmdline")).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
+        .collect()
+}
+
+/// The command lines of every process of this computer.
+#[cfg(not(target_os = "linux"))]
+fn command_lines() -> Vec<String> {
+    let answer = std::process::Command::new("ps").args(["-A", "-o", "command="]).output();
+    match answer {
+        Ok(answer) => String::from_utf8_lossy(&answer.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 fn press(pos: Pos2, pressed: bool) -> Event {
