@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that each work item row of the sidebar shows a tile in
-the workspace color with the initials of its name, a state word at its right
-edge, and no badge on its tile. It also makes sure that the panel rows of a work
+the workspace color with the initials of its name, a state word under its
+name, and no badge on its tile. It also makes sure that the panel rows of a work
 item stay folded until the fold control opens them, and that a panel row shows
 the task of an agent, a working dot, and a close button only on the hovered or
 focused row.
@@ -67,8 +67,8 @@ focused row.
 
    Result: The row shows a tile with `BS` in the workspace color and the name in
    bold text. The row has no second line: it shows no text of the screen of its
-   panel. The tile has no dot and no badge. The row shows no state word at its
-   right edge while no panel waits and no orchestrator speaks.
+   panel. The tile has no dot and no badge. The row shows no state word under its
+   name while no panel waits and no orchestrator speaks.
 
 2. Look at the row of `Checkout redesign`.
 
@@ -179,8 +179,8 @@ focused row.
 
 4. Hold the pointer on the row of `billing-service`.
 
-   Result: The row shows the `NEW WINDOW` badge left of its state word, and the
-   chevron of the fold control at its right end.
+   Result: The row shows the `NEW WINDOW` badge at its right end, left of the
+   chevron of the fold control.
 
 5. Right-click the row of `billing-service` and click **Move to Main Window**.
    Make the Horizon window wide again.
@@ -222,7 +222,7 @@ size 2400 x 1100, with the orchestrator dock on and the stand-in program in
    Result: The row `Front desk` is selected at the top of the sidebar. The
    captions `WORK ITEMS` and `MACHINES` show with their counts. One work item
    row shows no active mark, its panel rows are folded, and its state word stands
-   at its right edge. The dashed control `+ Rent a machine` shows under the
+   under its name. The dashed control `+ Rent a machine` shows under the
    machine rows. The four chips of `AGENTS` show in two lines. The footer shows
    `Server: not set` and the link `Set up` at the bottom.
 
@@ -254,7 +254,7 @@ size 2400 x 1100, with the orchestrator dock on and the stand-in program in
 ## 7. Pass criteria
 
 - 6.1 shows a tile with initials on each row, no badge on the tile, and the
-  state word at the right edge of a row that has a state.
+  state word under the name of a row that has a state.
 - 6.2 shows the active tint and bar, the folded panel rows, and the chevron that
   opens and folds them.
 - 6.3 shows the close button only on the hovered or focused row, and a tap on

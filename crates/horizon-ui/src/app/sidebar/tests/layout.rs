@@ -147,16 +147,17 @@ fn the_front_desk_row_keeps_its_inset() {
     assert!((parts.label_left - 44.0).abs() < f32::EPSILON);
 }
 
-/// A work item row of the design: 8 in at each side, 46 high, the word at the right
-/// edge and the bar of the active row at the left edge of the sidebar.
+/// A work item row of the design: 8 in at each side, 46 high, its texts end 8 in
+/// from the card and the bar of the active row stands at the left edge of the
+/// sidebar.
 #[test]
-fn a_work_item_row_keeps_the_word_and_the_bar_of_the_design() {
+fn a_work_item_row_keeps_the_texts_and_the_bar_of_the_design() {
     let row = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WIDTH, rows::ROW_HEIGHT));
     let card = rows::card(row);
     assert!((rows::ROW_HEIGHT - 46.0).abs() < f32::EPSILON);
     assert!((card.min.x - 8.0).abs() < f32::EPSILON);
     assert!((card.max.x - (WIDTH - 8.0)).abs() < f32::EPSILON);
-    assert!((rows::word_right(card, fold::Mark::Hidden) - (WIDTH - 16.0)).abs() < f32::EPSILON);
+    assert!((rows::text_right(card, fold::Mark::Hidden) - (WIDTH - 16.0)).abs() < f32::EPSILON);
     let bar = rows::active_bar(row);
     assert!(
         (bar.min.x - 0.0).abs() < f32::EPSILON,

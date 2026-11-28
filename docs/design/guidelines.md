@@ -1262,21 +1262,26 @@ The page of four starts answers the size of the window.
   form. The tile is 30 x 30 with radius 9, its fill is
   `blend(PANEL_BG_ALT, accent, 0.26)`, or 0.42 for the active row, and it shows
   the first letters of the first two words of the name in Inter weight 700. A
-  work item row shows no badge on its tile: the word at its right edge carries the
+  work item row shows no badge on its tile: the word under its name carries the
   state.
-- The name of a work item row is Inter 13 at weight 620 in `FG`. The line under
-  it is the line of the older form without the state word: the count of the agents
-  that wait and `on <machine>`, in Inter 12 at weight 400 in the secondary colour
-  of the sidebar. A row with no fact shows the name alone, in the middle of the
-  row. The name and the line never hold text of the screen of a panel.
-- The state word stands at the right edge of the row, 8 in, in Inter 10.5 at
-  weight 400. A dot 6 x 6 of the same colour stands 5 before it. The word is the
+- The name of a work item row is Inter 13 at weight 620 in `FG`. It keeps the
+  whole width of the row, to 8 in from the right edge of the card. The second
+  line holds the state word and, 8 after it, the facts of the older form: the
+  count of the agents that wait and `on <machine>`, in Inter 12 at weight 400 in
+  the secondary colour of the sidebar. The facts show only while 36 or more is
+  left for them. A row with no state word and no fact shows the name alone, in
+  the middle of the row. The name and the line never hold text of the screen of
+  a panel.
+- The state word stands at the start of the second line, under the name, in
+  Inter 10.5 at weight 400. A dot 6 x 6 of the same colour stands 5 before it.
+  The sidebar is narrow, so a word at the right edge of the row would cut the
+  name. The word is the
   word of the orchestrator of the workspace when it has one: `working` in
   `ACCENT`, `needs you` in `PALETTE_YELLOW`, `failed` in `PALETTE_RED` and `done`
   in `ACCENT`. A workspace with no word of its orchestrator shows `needs you` or
   `done` when its attention state carries a badge, and it shows no word otherwise.
-  The name and the line end 8 before the word. The badge `NEW WINDOW` of a
-  detached workspace stands left of the word and keeps its rule.
+  The badge `NEW WINDOW` of a detached workspace stands at the right end of the
+  row and keeps its rule.
 - The active work item row has the fill `alpha(<workspace accent>, 23)` and a bar
   3 wide of the workspace accent at the left edge of the sidebar, from 10 under
   the top of the row to 10 over its bottom, with radius 3 on its two right
@@ -1289,8 +1294,8 @@ The page of four starts answers the size of the window.
   and down while the row is open. It shows while the pointer is on the row or the
   row is open. Its hover text is `Show panels` or `Hide panels`, and the same
   words are its accessible name. A press on it opens or folds the panel rows of
-  that row and does nothing else. The state word moves 22 left while the control
-  shows. A work item with no panel has no control. While the setting of the
+  that row and does nothing else. The texts of the row end 22 earlier while the
+  control shows. A work item with no panel has no control. While the setting of the
   accordion is on, opening one work item folds the others. The fold is a state of
   the run and it is not saved with the session. A panel row keeps its form.
 - The group `MACHINES` has the caption `MACHINES` with the count of the machines,

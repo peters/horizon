@@ -21,7 +21,7 @@ use super::fold::Mark;
 use super::text::{self, SEMIBOLD};
 use super::{SidebarWorkspaceInsert, WorkspaceSidebarEntry};
 
-/// The one word at the right edge of a work-item row.
+/// The one word under the name of a work-item row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) enum WorkspaceWord {
     Working,
@@ -61,8 +61,6 @@ pub(super) const TILE_SIDE: f32 = 30.0;
 const CARD_RADIUS: u8 = 10;
 /// The gap between the tile and the text of the row.
 const TEXT_GAP: f32 = 10.0;
-/// The right inset of the row's text, when no word stands there.
-const TEXT_INSET: f32 = 10.0;
 /// The size of the name and of the line under it.
 const NAME_SIZE: f32 = 13.0;
 const LINE_SIZE: f32 = 12.0;
@@ -70,10 +68,13 @@ const LINE_SIZE: f32 = 12.0;
 const WORD_SIZE: f32 = 10.5;
 const WORD_DOT_SIDE: f32 = 6.0;
 const WORD_DOT_GAP: f32 = 5.0;
-/// The right inset of the state word, and the room that the name and the line
-/// keep before it.
+/// The right inset of the texts of a row, and the gap between the state word and
+/// the facts that follow it on the second line.
 const WORD_INSET: f32 = 8.0;
 const WORD_GAP: f32 = 8.0;
+/// The least room that the facts keep after the state word. In less room the
+/// second line holds the word alone.
+const MIN_FACTS_WIDTH: f32 = 36.0;
 /// The least room that the name keeps before the `NEW WINDOW` badge gives way.
 const MIN_NAME_WIDTH: f32 = 48.0;
 const BADGE_GAP: f32 = 6.0;
@@ -112,13 +113,14 @@ pub(super) fn tile_rect(card: Rect) -> Rect {
     )
 }
 
-/// Where the state word of a row ends: 8 in from the right edge of the card, and
-/// 22 more while the fold control shows there.
-pub(super) fn word_right(card: Rect, mark: Mark) -> f32 {
+/// Where the texts of a row end: 8 in from the right edge of the card, and 22
+/// more while the fold control shows there. The sidebar is narrow, so the state
+/// word stands under the name and the name keeps this whole width.
+pub(super) fn text_right(card: Rect, mark: Mark) -> f32 {
     card.max.x - WORD_INSET - if mark.shows() { FOLD_SHIFT } else { 0.0 }
 }
 
-/// The shift of the state word while the control of the fold shows.
+/// The shift of the texts while the control of the fold shows.
 const FOLD_SHIFT: f32 = 22.0;
 
 /// The fill of a row's card: the accent blend while dragged, the tint of the
@@ -167,10 +169,8 @@ pub(super) fn paint(
     let text_left = tile.max.x + TEXT_GAP;
 
     let fold = mark.shows().then(|| super::fold::rect(row));
-    let word_left = word.map(|word| paint_word(ui, workspace.id.0, word, word_right(card, mark), card));
-    let text_right = word_left.map_or(card.max.x - TEXT_INSET, |left| left - WORD_GAP);
-    let text_right = badges_right(ui, card, workspace, text_left, text_right);
-    let text = paint_text(ui, card, workspace, text_left, text_right);
+    let text_right = badges_right(ui, card, workspace, text_left, text_right(card, mark));
+    let text = paint_text(ui, card, workspace, word, text_left, text_right);
 
     Parts {
         fold,
@@ -214,27 +214,29 @@ pub(in crate::app) fn paint_workspace_tile(ui: &egui::Ui, tile: Rect, name: &str
     painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
 }
 
-/// Paints the state word at the right edge of the card and answers where its dot
-/// begins: the dot in the colour of the state, then the word in the same colour.
-fn paint_word(ui: &egui::Ui, workspace: u64, word: WorkspaceWord, right: f32, card: Rect) -> f32 {
-    let galley = text::line(ui, word.text(), WORD_SIZE, text::REGULAR, word.color(), 120.0);
-    let word_left = right - galley.size().x;
+/// Paints the state word at `left`, centred on `center_y`: the dot in the colour
+/// of the state, then the word in the same colour.
+fn paint_word(
+    ui: &egui::Ui,
+    workspace: u64,
+    word: WorkspaceWord,
+    galley: std::sync::Arc<egui::Galley>,
+    left: f32,
+    center_y: f32,
+) {
     let color = word.color();
-    let dot_x = word_left - WORD_DOT_GAP - WORD_DOT_SIDE;
-    let center = pos2(dot_x + WORD_DOT_SIDE / 2.0, card.center().y);
-    ui.painter().circle_filled(center, WORD_DOT_SIDE / 2.0, color);
+    let word_left = left + WORD_DOT_SIDE + WORD_DOT_GAP;
+    let right = word_left + galley.size().x;
+    let half = galley.size().y / 2.0;
     ui.painter()
-        .galley(pos2(word_left, card.center().y - galley.size().y / 2.0), galley, color);
+        .circle_filled(pos2(left + WORD_DOT_SIDE / 2.0, center_y), WORD_DOT_SIDE / 2.0, color);
+    ui.painter().galley(pos2(word_left, center_y - half), galley, color);
     let response = ui.interact(
-        Rect::from_min_max(
-            pos2(dot_x, card.center().y - WORD_DOT_SIDE / 2.0),
-            pos2(right, card.center().y + WORD_DOT_SIDE / 2.0),
-        ),
+        Rect::from_min_max(pos2(left, center_y - half), pos2(right, center_y + half)),
         ui.make_persistent_id(("sidebar_work_item_word", workspace)),
         Sense::hover(),
     );
     response.widget_info(|| WidgetInfo::labeled(egui::Role::Label, true, word.text()));
-    dot_x
 }
 
 /// What the two texts of a row say about themselves.
@@ -244,33 +246,56 @@ struct Text {
     line_elided: bool,
 }
 
-/// Paints the name and, under it, the line of facts. The name stands alone in the
-/// middle of the row when there is no line.
-fn paint_text(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, text_left: f32, text_right: f32) -> Text {
+/// Paints the name and, under it, the second line: the state word with its dot,
+/// and after it the facts while they have room. The name stands alone in the
+/// middle of the row when there is no second line.
+fn paint_text(
+    ui: &egui::Ui,
+    card: Rect,
+    workspace: &WorkspaceSidebarEntry,
+    word: Option<WorkspaceWord>,
+    text_left: f32,
+    text_right: f32,
+) -> Text {
     let facts = workspace.facts.as_str();
     let width = (text_right - text_left).max(1.0);
     let name = text::line(ui, &workspace.name, NAME_SIZE, SEMIBOLD, theme::FG(), width);
-    let line = (!facts.is_empty()).then(|| text::line(ui, facts, LINE_SIZE, text::REGULAR, text::secondary(), width));
+    let word_room = (width - WORD_DOT_SIDE - WORD_DOT_GAP).max(1.0);
+    let word = word.map(|word| {
+        (
+            word,
+            text::line(ui, word.text(), WORD_SIZE, text::REGULAR, word.color(), word_room),
+        )
+    });
+    let word_width = word.as_ref().map_or(0.0, |(_, galley)| {
+        WORD_DOT_SIDE + WORD_DOT_GAP + galley.size().x + WORD_GAP
+    });
+    let facts_width = width - word_width;
+    let line = (!facts.is_empty() && facts_width >= MIN_FACTS_WIDTH)
+        .then(|| text::line(ui, facts, LINE_SIZE, text::REGULAR, text::secondary(), facts_width));
     let name_height = name.size().y;
-    let line_height = line.as_ref().map_or(0.0, |line| line.size().y);
-    let gap = if line.is_some() { 2.0 } else { 0.0 };
-    let top = card.center().y - (name_height + gap + line_height) / 2.0;
-    let painter = ui.painter();
+    let second_height = line
+        .as_ref()
+        .map_or(0.0, |line| line.size().y)
+        .max(word.as_ref().map_or(0.0, |(_, galley)| galley.size().y));
+    let gap = if second_height > 0.0 { 2.0 } else { 0.0 };
+    let top = card.center().y - (name_height + gap + second_height) / 2.0;
     let name_elided = name.elided;
-    painter.galley(pos2(text_left, top), name, theme::FG());
+    ui.painter().galley(pos2(text_left, top), name, theme::FG());
+    let second_center = top + name_height + gap + second_height / 2.0;
+    if let Some((word, galley)) = word {
+        paint_word(ui, workspace.id.0, word, galley, text_left, second_center);
+    }
+    let line_elided = line.as_ref().is_some_and(|line| line.elided);
     if let Some(line) = line {
-        let line_elided = line.elided;
-        painter.galley(pos2(text_left, top + name_height + gap), line, text::secondary());
-        return Text {
-            box_rect: Rect::from_min_size(pos2(text_left, top), vec2(width, name_height + gap + line_height)),
-            name_elided,
-            line_elided,
-        };
+        let line_top = second_center - line.size().y / 2.0;
+        ui.painter()
+            .galley(pos2(text_left + word_width, line_top), line, text::secondary());
     }
     Text {
-        box_rect: Rect::from_min_size(pos2(text_left, top), vec2(width, name_height)),
+        box_rect: Rect::from_min_size(pos2(text_left, top), vec2(width, name_height + gap + second_height)),
         name_elided,
-        line_elided: false,
+        line_elided,
     }
 }
 
@@ -315,7 +340,7 @@ pub(super) fn paint_workspace_drop_indicator(
     );
 }
 
-/// The word at the right edge of a work-item row, from the state of the row.
+/// The word under the name of a work-item row, from the state of the row.
 pub(super) fn word_of(row: &horizon_core::workspace_list::Row) -> Option<WorkspaceWord> {
     match row.orchestrator {
         Orchestrator::NeedsYou => Some(WorkspaceWord::NeedsYou),
@@ -361,7 +386,7 @@ mod tests {
     #[test]
     fn the_row_keeps_the_geometry_of_the_design() {
         // A row of a sidebar 214 wide: the card is 8 in at each side, the tile is
-        // 30 wide and 8 in from the card, and the word ends 8 before the card.
+        // 30 wide and 8 in from the card, and the texts end 8 before the card.
         let row = egui::Rect::from_min_size(pos2(0.0, 100.0), egui::vec2(214.0, super::ROW_HEIGHT));
         let card = card(row);
         assert!((card.min.x - 8.0).abs() < f32::EPSILON);
@@ -372,10 +397,10 @@ mod tests {
         assert!((tile.width() - 30.0).abs() < f32::EPSILON);
         assert!((tile.height() - 30.0).abs() < f32::EPSILON);
         assert!((tile.center().y - card.center().y).abs() < f32::EPSILON);
-        assert!((super::word_right(card, super::Mark::Hidden) - 198.0).abs() < f32::EPSILON);
+        assert!((super::text_right(card, super::Mark::Hidden) - 198.0).abs() < f32::EPSILON);
         assert!(
-            (super::word_right(card, super::Mark::Open) - 176.0).abs() < f32::EPSILON,
-            "the word moves 22 left while the control of the fold shows"
+            (super::text_right(card, super::Mark::Open) - 176.0).abs() < f32::EPSILON,
+            "the texts end 22 earlier while the control of the fold shows"
         );
         let fold = super::super::fold::rect(row);
         assert!((fold.max.x - (214.0 - 6.0)).abs() < f32::EPSILON);
@@ -411,19 +436,28 @@ mod tests {
     }
 
     #[test]
-    fn the_word_sits_at_the_right_edge_and_the_text_elides_before_it() {
+    fn the_word_stands_under_the_name_and_the_name_keeps_the_width_of_the_row() {
         let parts = painted(true, false, false);
+        let card = super::card(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(214.0, super::ROW_HEIGHT),
+        ));
+        // The texts start 10 after the tile and end where the fold control begins,
+        // so no word at the right edge takes room from the name.
+        let left = super::tile_rect(card).max.x + super::TEXT_GAP;
+        assert!((parts.text.min.x - left).abs() < f32::EPSILON);
         assert!(
-            parts.text.max.x
-                < super::word_right(
-                    super::card(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(214.0, super::ROW_HEIGHT)
-                    )),
-                    super::Mark::Open
-                ),
-            "the name keeps 8 before the word"
+            (parts.text.max.x - super::text_right(card, super::Mark::Open)).abs() < f32::EPSILON,
+            "the name keeps the whole width of the row: {:?}",
+            parts.text
         );
+        // A row with a word has two lines, also when it has no fact.
+        assert!(
+            parts.text.height() > 22.0,
+            "the word is the second line: {:?}",
+            parts.text
+        );
+        assert!(!parts.name_elided, "a short name is whole beside no word");
         assert_eq!(
             parts.fold.map(|fold| fold.min.x),
             Some(214.0 - 24.0),
