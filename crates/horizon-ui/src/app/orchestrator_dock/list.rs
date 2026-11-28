@@ -16,10 +16,7 @@
 //! one notice above them names the entries that it does not draw. The list
 //! itself keeps [`horizon_core::agent_bridge::MAX_ENTRIES`] entries.
 
-use egui::{
-    Align, FontId, Label, Mesh, Rangef, Rect, RichText, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder,
-    pos2, vec2,
-};
+use egui::{Align, Label, Mesh, Rangef, Rect, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use egui::{Color32, CursorIcon};
 use horizon_core::agent_bridge::{Entry, ProposalState, ToolState};
 
@@ -30,6 +27,7 @@ use crate::typeface::Weight;
 use horizon_core::Board;
 
 use super::OrchestratorDock;
+use super::markdown;
 use super::proposal;
 use super::text;
 
@@ -554,17 +552,9 @@ fn person_row(ui: &mut Ui, text: &str, via_front_desk: bool, width: f32) {
 fn agent_row(ui: &mut Ui, text: &str, width: f32) {
     let indent = AGENT_BAR_WIDTH + AGENT_GAP;
     let text_width = (width * AGENT_SHARE - indent).max(1.0);
-    let rich = RichText::new(text)
-        .font(FontId::proportional(BODY_SIZE))
-        .color(theme::FG())
-        .line_height(Some(BODY_SIZE * AGENT_LINE_HEIGHT));
-    let galley = egui::WidgetText::from(rich.clone()).into_galley(
-        ui,
-        Some(TextWrapMode::Wrap),
-        text_width,
-        FontId::proportional(BODY_SIZE),
-    );
-    let height = galley.size().y;
+    // The marks of Markdown are drawn, not shown: an agent writes them every day.
+    let job = markdown::job(text, BODY_SIZE, AGENT_LINE_HEIGHT, theme::FG(), text_width);
+    let height = ui.painter().layout_job(job.clone()).size().y;
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     agent_bar(
         ui.painter(),
@@ -576,7 +566,7 @@ fn agent_row(ui: &mut Ui, text: &str, width: f32) {
             .max_rect(text_rect)
             .layout(egui::Layout::top_down(Align::LEFT)),
     );
-    text_ui.add(Label::new(rich).selectable(true).wrap());
+    text_ui.add(Label::new(job).selectable(true).wrap());
 }
 
 /// The bar of one agent text: a mesh of two colours that runs the full height of
@@ -602,6 +592,14 @@ fn agent_bar(painter: &egui::Painter, rect: Rect) {
 /// one line, and, for a call that failed, the first line of its result under
 /// them.
 fn tool_row(ui: &mut Ui, name: &str, summary: &str, result: Option<&str>, state: ToolState, width: f32) {
+    let full_name = name;
+    let name = tool_label(name);
+    // A tool whose summary only repeats its name shows the name once.
+    let summary = if summary.eq_ignore_ascii_case(name) || summary.eq_ignore_ascii_case(full_name) {
+        ""
+    } else {
+        summary
+    };
     let name_left = TOOL_INDENT + TOOL_DOT + TOOL_GAP_AFTER_DOT;
     let name_galley = text::mono_line(ui, name, TOOL_FONT_SIZE, theme::FG_SOFT(), (width - name_left).max(1.0));
     let summary_left = name_left + name_galley.size().x + TOOL_GAP_AFTER_NAME;
@@ -623,7 +621,11 @@ fn tool_row(ui: &mut Ui, name: &str, summary: &str, result: Option<&str>, state:
         Some(result) => line_height + TOOL_RESULT_GAP + result.size().y,
         None => line_height,
     };
-    let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let (row, response) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    if name.len() != full_name.len() {
+        // The short name of a tool of a server; the whole name is one hover away.
+        response.on_hover_text(full_name);
+    }
     let painter = ui.painter();
     painter.circle_filled(
         pos2(row.min.x + TOOL_INDENT + TOOL_DOT / 2.0, row.min.y + line_height / 2.0),
@@ -645,6 +647,19 @@ fn tool_row(ui: &mut Ui, name: &str, summary: &str, result: Option<&str>, state:
     }
 }
 
+/// The name that the row of a tool shows. A tool of a server carries the name of
+/// its server in front (`mcp__<server>__<tool>`), which fills the row and hides
+/// the tool, so the row shows the part after the last `__`.
+pub(super) fn tool_label(name: &str) -> &str {
+    if !name.starts_with("mcp__") {
+        return name;
+    }
+    match name.rsplit_once("__") {
+        Some((_, tool)) if !tool.is_empty() => tool,
+        _ => name,
+    }
+}
+
 /// The colour of the dot of one tool call.
 fn dot_color(state: ToolState) -> egui::Color32 {
     match state {
@@ -655,10 +670,18 @@ fn dot_color(state: ToolState) -> egui::Color32 {
 }
 
 /// One notice of Horizon: the text in the middle, and one line at each side that
-/// takes the free width.
+/// takes the free width. A notice that is longer than one row wraps, centred,
+/// with no line at its sides: a notice that is cut hides what Horizon says.
 fn notice_row(ui: &mut Ui, text: &str, width: f32) {
     let max_text = (width - 2.0 * NOTICE_GAP - 2.0 * NOTICE_MIN_LINE).max(1.0);
     let galley = text::mono_line(ui, text, NOTICE_FONT_SIZE, theme::FG_DIM(), max_text);
+    if galley.elided {
+        let wrapped = text::mono_rows_centred(ui, text, NOTICE_FONT_SIZE, theme::FG_DIM(), max_text);
+        let (row, _) = ui.allocate_exact_size(vec2(width, wrapped.size().y), Sense::hover());
+        ui.painter()
+            .galley(pos2(row.center().x, row.min.y), wrapped, theme::FG_DIM());
+        return;
+    }
     let height = galley.size().y;
     let (row, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let text_width = galley.size().x;
@@ -705,7 +728,22 @@ fn working_row(ui: &mut Ui, width: f32) {
 mod tests {
     use horizon_core::agent_bridge::Entry;
 
-    use super::{MAX_DRAWN_ENTRIES, skipped_notice, waits_for_text};
+    use super::{MAX_DRAWN_ENTRIES, skipped_notice, tool_label, waits_for_text};
+
+    #[test]
+    fn the_row_of_a_tool_of_a_server_shows_the_tool_and_not_the_server() {
+        assert_eq!(
+            tool_label("mcp__plugin_horizon_horizon-browser__block_panel"),
+            "block_panel"
+        );
+        assert_eq!(tool_label("Bash"), "Bash");
+        assert_eq!(tool_label("my__tool"), "my__tool", "only a tool of a server is cut");
+        assert_eq!(
+            tool_label("mcp__server__"),
+            "mcp__server__",
+            "a name with no tool stays whole"
+        );
+    }
 
     fn person(text: &str) -> Entry {
         Entry::Person {

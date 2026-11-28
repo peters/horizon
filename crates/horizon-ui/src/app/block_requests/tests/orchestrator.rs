@@ -841,3 +841,35 @@ fn the_front_desk_actor_is_caller_unavailable_for_every_operation() {
         "the host refuses the actor of the front desk before any operation runs"
     );
 }
+
+/// A card is the answer of the orchestrator that the person writes to, so it
+/// comes into the view of the canvas. A card of a conversation that the dock does
+/// not show moves no view, and no card takes the keyboard.
+#[test]
+fn a_new_card_of_the_shown_conversation_comes_into_view_and_no_other_card_moves_the_view() {
+    let (temp, ctx, mut app) = app();
+    let _local_id = present(&mut app, &ctx, temp.path(), 0);
+    let first = app.board.workspaces[0].id;
+    app.board.focus_workspace(first);
+    let focused = app.board.focused;
+    // The view stands far from every panel of the board.
+    app.canvas_view.set_pan_offset([-9000.0, -9000.0]);
+    let far = app.canvas_view.pan_offset;
+
+    // The dock shows the front desk: the person does not look at this
+    // conversation, so its card moves nothing.
+    app.orchestrator_dock.front_desk_mut().show();
+    let _ = created_in(&mut app, &ctx, 0, "Plan");
+    assert_eq!(app.canvas_view.pan_offset, far, "an unseen conversation moves no view");
+
+    // The dock shows the conversation of the workspace: its card comes into view.
+    app.orchestrator_dock.front_desk_mut().show_workspace();
+    let card = created_in(&mut app, &ctx, 0, "Answer");
+    assert_ne!(
+        app.canvas_view.pan_offset, far,
+        "the card of the conversation that the dock shows comes into view"
+    );
+    let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    assert_ne!(app.board.focused, Some(id), "the card takes no key of the person");
+    assert_eq!(app.board.focused, focused, "the focus of the board stays where it was");
+}

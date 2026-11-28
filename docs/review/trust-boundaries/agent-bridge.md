@@ -164,9 +164,12 @@ whole rule.
 The dock is another reader of the untrusted text of the program, so the same
 rules hold for it.
 
-- **The text of the program is plain text.** A text of the agent is one label:
-  no markdown, no link and no path in it becomes active. The person selects and
-  copies it, and nothing else reads it.
+- **The text of the program is text.** A text of the agent is one label. The
+  dock draws the marks of Markdown for bold, italic, code, a heading and a bullet
+  as a weight, a slant, a font and a dot (`orchestrator_dock/markdown.rs`). A
+  mark changes only how a span is drawn: no link, no image and no path in the
+  text becomes active, and no span takes a press. A mark with no partner stays
+  text. The person selects and copies the text.
 - **One frame lays out a bounded number of entries.** The list lays out at most
   the last 200 entries of the conversation, and one notice above them names the
   entries that it does not draw. The conversation itself keeps

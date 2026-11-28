@@ -195,13 +195,11 @@ impl HorizonApp {
 
     /// Whether the dock stands open on the conversation of `local_id` in this
     /// frame, so its turns are seen.
-    fn dock_shows(&self, local_id: &str) -> bool {
-        self.orchestrator_dock.visible()
-            && self
-                .board
-                .active_workspace
-                .and_then(|id| self.board.workspace(id))
-                .is_some_and(|workspace| workspace.local_id == local_id)
+    ///
+    /// The dock shows the front desk or the active workspace, so the active
+    /// workspace alone does not say that its conversation is on the screen.
+    pub(in crate::app) fn dock_shows(&self, local_id: &str) -> bool {
+        self.orchestrator_dock.visible() && self.orchestrator_dock.front_desk().key(&self.board) == local_id
     }
 
     /// The rows of the last read of the session, which a test reads: the
@@ -429,6 +427,13 @@ mod tests {
         // The test turns the dock on itself, so it starts from a window without it.
         app.orchestrator_dock = crate::app::orchestrator_dock::OrchestratorDock::new(false);
         app.orchestrator_dock.toggle();
+        // A dock shows the front desk at its start; the person presses the row of
+        // the workspace, and the dock then shows that conversation.
+        assert!(
+            !app.dock_shows(&local_id),
+            "the front desk is no conversation of a workspace"
+        );
+        app.orchestrator_dock.front_desk_mut().show_workspace();
         assert!(app.dock_shows(&local_id), "the dock draws the active workspace");
         assert!(
             !app.dock_shows("another-workspace"),

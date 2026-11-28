@@ -144,6 +144,12 @@ conversation (`Entry::Card` of `horizon-core`).
 - A press on the row brings the card into view, through the same path that the row
   of the sidebar uses (`reveal_selected_panel`). The row sends nothing to the
   program.
+- A new card of an orchestrator comes into the view of the canvas by itself while
+  the dock shows the conversation of that orchestrator: the person wrote to it,
+  and the card is its answer. The keyboard stays where it is. A card of a
+  conversation that the dock does not show, and a card of an agent panel or of a
+  machine, moves no view (`show_card_of_shown_conversation` in
+  `crates/horizon-ui/src/app/block_requests/caller.rs`).
 - A row whose card left the board is drawn dim, says `closed` at its right end,
   and takes no press. The stored conversation keeps that row, so the row of a card
   of an earlier run reads as a closed row after a restart: Horizon loads the local

@@ -1493,7 +1493,9 @@ hides it, whatever the setting says. No other value of the variable is a switch.
 
 - The cost of the conversation stands 10 points left of the chip, on the same
   centre line, while it is above zero: the sum of the ended turns with two
-  decimals and `USD`, as `0.03 USD`, at 11 JetBrains Mono and `FG_SOFT`. A header
+  decimals and `USD`, as `0.03 USD`, at 11 JetBrains Mono and `FG_SOFT`. A cost
+  above zero that rounds to no cent reads `<0.01 USD`: a turn that cost a part of
+  a cent was not free. A header
   that is too narrow for the name, the cost and the chip cuts the name with an
   ellipsis first, and then hides the cost. The chip stays.
 - The empty state is vertically centred between the header and the composer,
@@ -1532,19 +1534,30 @@ hides it, whatever the setting says. No other value of the variable is a switch.
   air, and the text at 13.5 `FG` with a line height of 1.55 times the size,
   wrapped. The bar is a vertical gradient from `ACCENT` at its top to
   `workspace_accent(6)`, the mauve of the workspace accents, at its bottom. It is
-  a mesh of two colours with a round cap of 1.5 points at each end. The text is
-  plain text: no markdown, no link and no path is active, and the person selects
-  and copies it.
+  a mesh of two colours with a round cap of 1.5 points at each end. The dock
+  draws the marks of Markdown that an agent writes every day and does not show
+  them as text: `**bold**` at weight 620, `*italic*` in italics, `` `code` `` and
+  the lines of a fenced block at 12.5 JetBrains Mono `FG_SOFT` on `PANEL_BG_ALT`,
+  the line of a heading at weight 620, and `- ` or `* ` at the start of a line as
+  a bullet. A mark with no partner on its line stays text, so no character of a
+  message is lost. Every span is text: no link and no path is active, and the
+  person selects and copies the text.
 - An entry of a tool is one row, indented 13 points: a dot of 6 points, the name
   of the tool at 12 JetBrains Mono `FG_SOFT`, and what the tool was asked to do
-  at 12 JetBrains Mono `FG_DIM`, cut with an ellipsis to one line. The dot is
+  at 12 JetBrains Mono `FG_DIM`, cut with an ellipsis to one line. A tool of a
+  server has the name `mcp__<server>__<tool>`: the row shows `<tool>`, and the
+  hover text of the row is the whole name. A request that only repeats the name
+  of the tool is not drawn, so the row reads `Skill` and not `Skill Skill`. The
+  dot is
   `ACCENT` while the tool runs, `PALETTE_GREEN` when it ends and `PALETTE_RED`
   when it fails. A tool that failed draws the first line of its result under the
   request, in the column of the request: 11.5 JetBrains Mono `PALETTE_RED`, one
   line with an ellipsis. A tool that is done draws no such line. Two tool rows
   that follow each other stand 4 points apart.
 - An entry of a notice of Horizon is centred at 10.5 JetBrains Mono `FG_DIM`,
-  with a 1 px `BORDER_SUBTLE` line at each side that takes the free width.
+  with a 1 px `BORDER_SUBTLE` line at each side that takes the free width. A
+  notice that does not fit one row wraps between words, each row centred, and
+  draws no line at its sides. A notice is never cut.
 - An entry of a card is one reference row, indented 13 points like a tool row and
   at most 96 percent of the list width: one row of 34 points, radius 10, a fill of
   `alpha(ACCENT, 18)`, a 1 px outline of `alpha(ACCENT, 115)` and 10 points of

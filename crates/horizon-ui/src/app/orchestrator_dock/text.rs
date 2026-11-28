@@ -28,6 +28,14 @@ pub(super) fn mono_line(ui: &Ui, text: &str, size: f32, color: Color32, max_widt
     layout(ui, job, Weight::Regular)
 }
 
+/// `text` in the monospace font of the interface, wrapped at `max_width` with
+/// each row centred on the position that the galley is painted at.
+pub(super) fn mono_rows_centred(ui: &Ui, text: &str, size: f32, color: Color32, max_width: f32) -> Arc<Galley> {
+    let mut job = wrapped_rows_job(text, &FontId::monospace(size), color, max_width, usize::MAX);
+    job.halign = egui::Align::Center;
+    layout(ui, job, Weight::Regular)
+}
+
 /// The metrics of one row or paragraph of text: its size, its weight, its colour
 /// and its line height as a factor of the size.
 #[derive(Clone, Copy)]

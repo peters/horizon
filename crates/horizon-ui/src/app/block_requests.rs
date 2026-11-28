@@ -505,6 +505,7 @@ impl HorizonApp {
         }
         self.settle_card_fold(ctx, id, false);
         self.note_card_row(id);
+        self.show_card_of_shown_conversation(ctx, caller, id);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         let Some(panel) = self.board.panel(id) else {

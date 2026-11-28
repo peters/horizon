@@ -38,6 +38,7 @@ mod front_desk;
 mod header;
 mod layout;
 mod list;
+mod markdown;
 mod programs;
 pub(in crate::app) mod proposal;
 mod session;

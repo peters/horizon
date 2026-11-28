@@ -13,9 +13,10 @@
 //! desk: the actor belongs to a program that Horizon started, as the actor of an
 //! orchestrator does.
 //!
-//! Nothing here changes the board or reads the disk: the checks read the
-//! manifest of the request, the board, the dock and the machine list that the
-//! frame holds.
+//! The checks here change nothing and read no disk: they read the manifest of
+//! the request, the board, the dock and the machine list that the frame holds.
+//! One method at the end moves the view of the canvas to a new card of the
+//! conversation that the dock shows.
 
 use horizon_core::WorkspaceId;
 use horizon_core::agent_bridge::actor;
@@ -137,5 +138,40 @@ impl HorizonApp {
             .running(local_id)
             .then(|| self.board.workspace_id_by_local_id(local_id))
             .flatten()
+    }
+}
+
+impl HorizonApp {
+    /// Brings a new card of an orchestrator into the view of the canvas while the
+    /// dock shows the conversation of that orchestrator. The person wrote to it and
+    /// waits for its answer, and the card is that answer, so it must not land
+    /// outside the view. The keyboard stays where it is. A card of any other
+    /// caller, and a card of a conversation that the dock does not show, moves no
+    /// view: an agent does not move the canvas of a person who looks elsewhere.
+    pub(in crate::app) fn show_card_of_shown_conversation(
+        &mut self,
+        ctx: &egui::Context,
+        caller: CardCaller<'_>,
+        card: horizon_core::PanelId,
+    ) {
+        let CardCaller::Orchestrator { workspace } = caller else {
+            return;
+        };
+        if self.workspace_is_detached(workspace) {
+            return;
+        }
+        let shown = self
+            .board
+            .workspace(workspace)
+            .is_some_and(|workspace| self.dock_shows(&workspace.local_id));
+        if shown {
+            // The reveal of the canvas gives the focus of the board to the panel
+            // that it shows. A card that an agent drew takes no key of the person.
+            let focused = self.board.focused;
+            self.reveal_panel_visible(ctx, card);
+            if let Some(focused) = focused {
+                self.board.focus(focused);
+            }
+        }
     }
 }

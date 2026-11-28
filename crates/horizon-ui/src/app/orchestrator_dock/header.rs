@@ -222,15 +222,18 @@ fn lines(ui: &Ui, width: f32, form: Form<'_>, state: State) -> Lines {
 
 /// The total of the conversation left of the chip, while it is above zero.
 fn cost_of(ui: &Ui, cost_usd_total: f64, max_width: f32) -> Option<Arc<Galley>> {
-    (cost_usd_total > 0.0).then(|| {
-        text::mono_line(
-            ui,
-            &format!("{cost_usd_total:.2} USD"),
-            COST_SIZE,
-            theme::FG_SOFT(),
-            max_width,
-        )
-    })
+    (cost_usd_total > 0.0)
+        .then(|| text::mono_line(ui, &cost_words(cost_usd_total), COST_SIZE, theme::FG_SOFT(), max_width))
+}
+
+/// The words of a cost above zero. A cost that rounds to no cent is not free, so
+/// it reads `<0.01 USD` and never `0.00 USD`.
+pub(super) fn cost_words(cost_usd_total: f64) -> String {
+    if cost_usd_total < 0.005 {
+        "<0.01 USD".to_owned()
+    } else {
+        format!("{cost_usd_total:.2} USD")
+    }
 }
 
 /// The height of the header of `form` at `width` points, which the dock works out
@@ -325,4 +328,17 @@ fn back_control(ui: &Ui, rect: Rect) -> bool {
         .on_hover_text(BACK_NAME)
         .on_hover_cursor(CursorIcon::PointingHand);
     response.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cost_words;
+
+    #[test]
+    fn a_cost_under_one_cent_is_not_shown_as_no_cost() {
+        assert_eq!(cost_words(0.0004), "<0.01 USD");
+        assert_eq!(cost_words(0.0049), "<0.01 USD");
+        assert_eq!(cost_words(0.005), "0.01 USD");
+        assert_eq!(cost_words(1.239), "1.24 USD");
+    }
 }
