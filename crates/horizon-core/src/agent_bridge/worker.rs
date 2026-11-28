@@ -14,38 +14,35 @@
 //! [`BridgeEvent::Ended`] with the exit code and the tail of the words, and
 //! speaks the wake. A log line of this module never holds a line of the program.
 //!
-//! [`Bridge::stop`] closes the standard input, waits, then ends the child by its
-//! own process id when the child ignores both steps, and joins the threads. The
-//! whole stop is bounded by [`STOP_TIMEOUT`].
+//! [`Bridge::stop`] closes the standard input, waits, then ends the child by the
+//! identity that the start recorded when the child ignores both steps, and joins
+//! the threads. The whole stop is bounded by [`STOP_TIMEOUT`]. A bridge that is dropped instead
+//! closes the input, gives the child the two signals on a thread of its own and
+//! waits for nothing.
+//!
+//! A line above [`MAX_LINE_BYTES`] is not thrown away whole: the reader parses
+//! the head of the line for its `type`, its `subtype` and its `is_error` in a
+//! stream, so the codec can end a turn whose `result` line was too long, and
+//! then reads the rest of the line to its newline while it holds nothing of it.
 
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufReader, ErrorKind, Read, Write};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread::{JoinHandle, sleep};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-
-use rustix::process::Signal;
 
 use crate::process::{HangingChild, start_identity};
 
+use super::ending::{end_child, join_within, remaining, wait_child};
+use super::line_reader::{ReadLine, read_line};
 use super::program::{ProgramSpec, apply_environment};
-use super::{BridgeEvent, DropReason, LineCodec, MAX_LINE_BYTES, MAX_TEXT_BYTES, STDERR_TAIL_BYTES, STOP_TIMEOUT};
+use super::{BridgeEvent, DropReason, LineCodec, MAX_TEXT_BYTES, STDERR_TAIL_BYTES, STOP_TIMEOUT};
 
 /// How long a stop waits for the reader after it closed the standard input,
 /// before it ends the child.
 const STOP_GRACE: Duration = Duration::from_millis(250);
-
-/// The time between two reads of the state of a thread during a stop.
-const STOP_POLL: Duration = Duration::from_millis(5);
-
-/// How long a stop waits for the program after the termination signal, before
-/// the kill signal.
-const TERM_GRACE: Duration = Duration::from_millis(1500);
-
-/// How long a stop waits for the program after the kill signal.
-const KILL_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the reader waits for the last words of the standard error after the
 /// child ended.
@@ -85,9 +82,15 @@ pub struct Bridge {
     events: Receiver<BridgeEvent>,
     turns: Option<Sender<String>>,
     ended: Arc<AtomicBool>,
-    /// The process id of the child, which the stop uses when the pipes do not
-    /// end it.
+    /// The process id of the child, as a log line and as a value of the caller
+    /// name it. No signal uses it alone.
     pid: u32,
+    /// The id and the start time of the child, taken when it started, so that a
+    /// signal reaches that process and no later process that the system gave the
+    /// same id.
+    identity: HangingChild,
+    /// Whether a stop already ended the child.
+    stopped: bool,
     threads: Option<Threads>,
 }
 
@@ -133,6 +136,9 @@ impl Bridge {
         let shown_program = command.get_program().to_string_lossy().into_owned();
         let mut child = command.spawn().map_err(BridgeError::Start)?;
         let pid = child.id();
+        // The identity of the child is taken once, here, while its id certainly
+        // names it.
+        let identity = HangingChild::new(pid, start_identity(pid));
         let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
             let _ = child.kill();
@@ -152,10 +158,10 @@ impl Bridge {
             let codec = Arc::clone(&codec);
             move || write_lines(stdin, turns, &codec)
         })
-        .map_err(|error| fail_start(pid, error))?;
+        .map_err(|error| fail_start(&child, pid, error))?;
         let error_tail = Arc::clone(&tail);
         let stderr = spawn("agent-bridge-err", move || read_tail(stderr, &error_tail))
-            .map_err(|error| fail_start(pid, error))?;
+            .map_err(|error| fail_start(&child, pid, error))?;
         let reader = Reader {
             stdout,
             codec: Arc::clone(&codec),
@@ -166,12 +172,14 @@ impl Bridge {
             tail: Arc::clone(&tail),
             ended: Arc::clone(&ended),
         };
-        let reader = spawn("agent-bridge-out", move || reader.run()).map_err(|error| fail_start(pid, error))?;
+        let reader = spawn("agent-bridge-out", move || reader.run()).map_err(|error| fail_start(&child, pid, error))?;
         Ok(Self {
             events,
             turns: Some(turn_sender),
             ended,
             pid,
+            identity,
+            stopped: false,
             threads: Some(Threads { reader, writer }),
         })
     }
@@ -213,9 +221,10 @@ impl Bridge {
     }
 
     /// Ends this bridge: closes the standard input, waits for the program, and
-    /// ends it by its own process id when it outlives both steps. The whole
-    /// stop is bounded by [`STOP_TIMEOUT`].
+    /// ends it by the identity that the start recorded when it outlives both
+    /// steps. The whole stop is bounded by [`STOP_TIMEOUT`].
     pub fn stop(mut self) {
+        self.stopped = true;
         self.close_input();
         let Some(threads) = self.threads.take() else {
             return;
@@ -223,7 +232,7 @@ impl Bridge {
         let deadline = Instant::now() + STOP_TIMEOUT;
         let mut done = join_within(&threads.reader, STOP_GRACE.min(remaining(deadline)));
         if !done {
-            end_child(self.pid);
+            end_child(&self.identity);
             done = join_within(&threads.reader, remaining(deadline));
         }
         if done {
@@ -244,15 +253,38 @@ impl Bridge {
 }
 
 impl Drop for Bridge {
+    /// Ends a bridge that nobody stops: it closes the input first, then gives the
+    /// child the termination and the kill signal on a thread of its own, so the
+    /// drop waits for nothing and no program of a dropped bridge stays behind.
+    /// The thread ends the child within [`STOP_TIMEOUT`].
     fn drop(&mut self) {
         self.close_input();
         self.threads = None;
+        if self.stopped {
+            return;
+        }
+        let identity = self.identity.clone();
+        let pid = identity.pid;
+        let spawned = std::thread::Builder::new()
+            .name("agent-bridge-end".to_owned())
+            .spawn(move || end_child(&identity));
+        if let Err(error) = spawned {
+            tracing::warn!(pid, %error, "the program of a dropped bridge may outlive it");
+        }
     }
 }
 
-/// Ends the child of a start that failed, and answers the error of that start.
-fn fail_start(pid: u32, error: BridgeError) -> BridgeError {
-    end_child(pid);
+/// Ends the child of a start that failed, waits for it, and answers the error of
+/// that start.
+///
+/// A child that is only signalled stays in the process table until Horizon ends,
+/// so this path waits for it as the path of a pipe that is not there does.
+pub(super) fn fail_start(child: &Arc<Mutex<Option<Child>>>, pid: u32, error: BridgeError) -> BridgeError {
+    if let Some(child) = child.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    tracing::warn!(pid, "a start of the agent bridge failed and its program ended");
     error
 }
 
@@ -299,9 +331,7 @@ impl Reader {
         loop {
             let batch = match read_line(&mut lines, &mut line) {
                 Ok(ReadLine::End) => break,
-                Ok(ReadLine::TooLong) => vec![BridgeEvent::Dropped {
-                    reason: DropReason::TooLong,
-                }],
+                Ok(ReadLine::TooLong(shape)) => codec.lock().unwrap_or_else(PoisonError::into_inner).over_long(&shape),
                 Ok(ReadLine::Line) => match std::str::from_utf8(&line) {
                     Ok(text) => codec.lock().unwrap_or_else(PoisonError::into_inner).parse(text),
                     Err(_) => vec![BridgeEvent::Dropped {
@@ -367,126 +397,4 @@ fn read_tail(mut stderr: ChildStderr, tail: &Arc<Mutex<Vec<u8>>>) {
             Err(_) => return,
         }
     }
-}
-
-/// The answer of one bounded read of one line of the program.
-enum ReadLine {
-    /// One whole line, without its newline, within the bound.
-    Line,
-    /// A line above the bound, read to its newline and held nowhere.
-    TooLong,
-    /// The end of the standard output.
-    End,
-}
-
-/// Reads one line of at most [`MAX_LINE_BYTES`] bytes. A longer line is read to
-/// its newline and answers [`ReadLine::TooLong`] without a byte of it.
-fn read_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<ReadLine> {
-    line.clear();
-    let mut too_long = false;
-    loop {
-        let chunk = match reader.fill_buf() {
-            Ok(chunk) => chunk,
-            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        if chunk.is_empty() {
-            return Ok(if too_long {
-                ReadLine::TooLong
-            } else if line.is_empty() {
-                ReadLine::End
-            } else {
-                ReadLine::Line
-            });
-        }
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let take = newline.unwrap_or(chunk.len());
-        if !too_long {
-            if line.len() + take <= MAX_LINE_BYTES {
-                line.extend_from_slice(&chunk[..take]);
-            } else {
-                too_long = true;
-                line.clear();
-            }
-        }
-        let consumed = if newline.is_some() { take + 1 } else { take };
-        reader.consume(consumed);
-        if newline.is_some() {
-            return Ok(if too_long { ReadLine::TooLong } else { ReadLine::Line });
-        }
-    }
-}
-
-/// Waits for the child to end and answers its exit code.
-fn wait_child(child: &Arc<Mutex<Option<Child>>>) -> Option<i32> {
-    let mut slot = child.lock().unwrap_or_else(PoisonError::into_inner);
-    match slot.as_mut()?.wait() {
-        Ok(status) => status.code(),
-        Err(_) => None,
-    }
-}
-
-/// Ends the child of `pid`: the termination signal, then the kill signal, each
-/// step guarded by the start time of the process so that no signal reaches a
-/// later process that the system gave the same id.
-fn end_child(pid: u32) {
-    let child = HangingChild::new(pid, start_identity(pid));
-    if child.has_ended() || !signal(&child, Signal::TERM, "SIGTERM") {
-        return;
-    }
-    if ended_within(&child, TERM_GRACE) || !signal(&child, Signal::KILL, "SIGKILL") {
-        return;
-    }
-    let _ = ended_within(&child, KILL_GRACE);
-}
-
-/// Sends one signal to the exact process id of the child.
-fn signal(child: &HangingChild, signal: Signal, step: &'static str) -> bool {
-    if !child.still_names_its_process() {
-        return false;
-    }
-    let Ok(raw) = i32::try_from(child.pid) else {
-        return false;
-    };
-    let Some(pid) = rustix::process::Pid::from_raw(raw) else {
-        return false;
-    };
-    let reached = rustix::process::kill_process(pid, signal).is_ok();
-    if reached {
-        tracing::warn!(pid = child.pid, step, "the program of the bridge outlived its stop");
-    }
-    reached
-}
-
-/// Whether the program of `child` ended within `within`.
-fn ended_within(child: &HangingChild, within: Duration) -> bool {
-    let deadline = Instant::now() + within;
-    loop {
-        if child.has_ended() {
-            return true;
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return false;
-        }
-        sleep(STOP_POLL.min(deadline.saturating_duration_since(now)));
-    }
-}
-
-/// The time that is left of `deadline`.
-fn remaining(deadline: Instant) -> Duration {
-    deadline.saturating_duration_since(Instant::now())
-}
-
-/// Waits up to `limit` for `thread`, and answers whether it ended. A thread that
-/// did not end is left to its own end.
-fn join_within(thread: &JoinHandle<()>, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
-        if thread.is_finished() {
-            return true;
-        }
-        sleep(STOP_POLL);
-    }
-    thread.is_finished()
 }

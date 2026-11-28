@@ -21,7 +21,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::event::{BridgeEvent, DropReason};
-use super::{MAX_SUMMARY_CHARS, MAX_TEXT_BYTES};
+use super::{MAX_ID_CHARS, MAX_SUMMARY_CHARS, MAX_TEXT_BYTES};
 
 /// The messages whose text one codec joins. A full map is emptied rather than
 /// grown; a message id that the map lost starts a new text, which the
@@ -46,6 +46,26 @@ pub trait LineCodec: Send {
     fn user_line(&self, text: &str) -> String;
     /// The events of one line of the program, without its newline.
     fn parse(&mut self, line: &str) -> Vec<BridgeEvent>;
+    /// The events of one line of the program that is above the bound of the
+    /// reader, of which only `shape` could be read.
+    fn over_long(&mut self, _shape: &LineShape) -> Vec<BridgeEvent> {
+        vec![BridgeEvent::Dropped {
+            reason: DropReason::TooLong,
+        }]
+    }
+}
+
+/// The head of one line of the program that the reader could not hold: the three
+/// fields of its top level that say what the loss of the line costs. Every other
+/// field of such a line is skipped without a value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LineShape {
+    /// The `type` of the line, cut to 64 characters by the reader.
+    pub kind: Option<String>,
+    /// The `subtype` of the line, cut to 64 characters by the reader.
+    pub subtype: Option<String>,
+    /// The `is_error` of the line, or `false` when it holds none.
+    pub is_error: bool,
 }
 
 /// The codec of Claude Code.
@@ -73,6 +93,9 @@ impl ClaudeCodec {
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return vec![dropped(DropReason::UnknownShape)];
         };
+        // An id is a text of the program like any other: it enters an entry and
+        // a key of the map below, so it is cut before it goes there.
+        let message_id = tidy(message_id, MAX_ID_CHARS);
         let mut events = Vec::new();
         let mut text = String::new();
         let mut tools = Vec::new();
@@ -85,7 +108,7 @@ impl ClaudeCodec {
                         block.get("name").and_then(Value::as_str),
                     ) {
                         tools.push((
-                            tool_id.to_owned(),
+                            tidy(tool_id, MAX_ID_CHARS),
                             tidy(name, MAX_SUMMARY_CHARS),
                             summary(name, block.get("input")),
                         ));
@@ -95,9 +118,9 @@ impl ClaudeCodec {
             }
         }
         if !text.is_empty() {
-            let whole = self.join(message_id, &text);
+            let whole = self.join(&message_id, &text);
             events.push(BridgeEvent::AgentText {
-                message_id: message_id.to_owned(),
+                message_id: message_id.clone(),
                 text: whole,
             });
         }
@@ -149,19 +172,40 @@ impl LineCodec for ClaudeCodec {
             _ => Vec::new(),
         }
     }
+
+    /// An over-long line is dropped, and a `result` line also ends the turn of
+    /// its conversation: the end of a turn is one line, and the person would
+    /// otherwise wait for a turn that its program already ended. The turn ends
+    /// with the failure that the head of the line named, or with no failure, and
+    /// its duration and its cost stay unknown because the line is not read.
+    fn over_long(&mut self, shape: &LineShape) -> Vec<BridgeEvent> {
+        let mut events = vec![dropped(DropReason::TooLong)];
+        if shape.kind.as_deref() == Some("result") {
+            events.push(BridgeEvent::TurnEnded {
+                failed: shape.is_error,
+                duration_ms: None,
+                cost_usd: None,
+            });
+        }
+        events
+    }
 }
 
 /// The events of one `system` line.
 fn system(value: &Value) -> Vec<BridgeEvent> {
     match value.get("subtype").and_then(Value::as_str) {
+        // The session id becomes the `--resume` argument of a later start, so
+        // only the form that the program sends is accepted. Any other value is a
+        // shape that this codec does not know, and so an option of the program
+        // or a word of a shell never arrives as a session id.
         Some("init") => match value.get("session_id").and_then(Value::as_str) {
-            Some(session_id) => vec![
+            Some(session_id) if super::actor::is_uuid(session_id) => vec![
                 BridgeEvent::SessionStarted {
                     session_id: session_id.to_owned(),
                 },
                 BridgeEvent::TurnStarted,
             ],
-            None => vec![dropped(DropReason::UnknownShape)],
+            _ => vec![dropped(DropReason::UnknownShape)],
         },
         Some("permission_denied") => match value.get("tool_name").and_then(Value::as_str) {
             Some(tool) => {
@@ -197,7 +241,7 @@ fn tool_results(value: &Value) -> Vec<BridgeEvent> {
             continue;
         };
         events.push(BridgeEvent::ToolEnded {
-            tool_id: tool_id.to_owned(),
+            tool_id: tidy(tool_id, MAX_ID_CHARS),
             failed: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
             summary: first_line(&result_text(block.get("content"))),
         });

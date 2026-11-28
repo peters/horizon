@@ -25,7 +25,19 @@ pub const ENV_REMOVE_PREFIXES: [&str; 2] = ["CLAUDE_CODE_", "HORIZON_WORK_"];
 
 /// The names of the variables that a nested Claude Code must not inherit, and
 /// that no prefix above matches.
-pub const ENV_REMOVE_NAMES: [&str; 1] = ["CLAUDECODE"];
+///
+/// The last four are the identity that
+/// [`crate::panel::spawn::agent_identity_vars`] gives to an agent panel: a
+/// Horizon that an agent panel started holds them, so a start without an
+/// identity of its own must not pass them on. The program of a workspace sets
+/// its own values after this removal.
+pub const ENV_REMOVE_NAMES: [&str; 5] = [
+    "CLAUDECODE",
+    "HORIZON",
+    "HORIZON_BROWSER_ACTOR",
+    crate::browser::manifest::HOST_INSTANCE_ENV,
+    "HORIZON_EXECUTABLE",
+];
 
 /// The flags of the line format of the codec of Claude Code.
 const CLAUDE_ARGS: [&str; 5] = ["-p", "--input-format", "stream-json", "--output-format", "stream-json"];
@@ -146,13 +158,21 @@ pub fn claude_for_workspace(cwd: &Path, session: SessionChoice, identity: &Bridg
 }
 
 /// The program of one Claude Code conversation, with no terminal.
+///
+/// This function checks the session choice, because its id becomes one argument
+/// of the program. An id that is not of the form of a UUID (see
+/// [`super::actor::is_uuid`]) is read as another option of the program, or it is
+/// above the length of one argument. Such a start is a new session with a fresh
+/// id and the option `--session-id` instead. A [`SessionChoice::Resume`] of that
+/// form continues its session with `--resume`.
 #[must_use]
 pub fn claude(cwd: &Path, session: SessionChoice) -> ProgramSpec {
     let mut args: Vec<OsString> = CLAUDE_ARGS.iter().map(OsString::from).collect();
     args.push(OsString::from("--verbose"));
     let (flag, session_id) = match session {
-        SessionChoice::New(session_id) => ("--session-id", session_id),
-        SessionChoice::Resume(session_id) => ("--resume", session_id),
+        SessionChoice::New(session_id) if super::actor::is_uuid(&session_id) => ("--session-id", session_id),
+        SessionChoice::Resume(session_id) if super::actor::is_uuid(&session_id) => ("--resume", session_id),
+        SessionChoice::New(_) | SessionChoice::Resume(_) => ("--session-id", fresh_session()),
     };
     args.push(OsString::from(flag));
     args.push(OsString::from(session_id));
@@ -163,4 +183,10 @@ pub fn claude(cwd: &Path, session: SessionChoice) -> ProgramSpec {
         env_remove: ENV_REMOVE_NAMES.iter().map(OsString::from).collect(),
         cwd: cwd.to_path_buf(),
     }
+}
+
+/// The id of the session of a start that does not continue the session that it
+/// was asked for.
+fn fresh_session() -> String {
+    crate::new_local_id()
 }

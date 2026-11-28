@@ -23,7 +23,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::codec::{cut_bytes, tidy};
-use super::event::BridgeEvent;
+use super::event::{BridgeEvent, DropReason};
 use super::{MAX_ENTRIES, MAX_SUMMARY_CHARS, MAX_TEXT_BYTES};
 
 /// The link of one bridge, as the person sees it.
@@ -122,6 +122,9 @@ pub struct Conversation {
     dropped: u32,
     /// The text of the notice of the refused lines.
     dropped_text: String,
+    /// Whether the notice of an over-long line of the current turn is in the
+    /// list, so one turn gives one such notice and not one for each line.
+    too_long_noticed: bool,
 }
 
 impl Default for Conversation {
@@ -140,6 +143,7 @@ impl Conversation {
             cap_text: String::new(),
             dropped: 0,
             dropped_text: String::new(),
+            too_long_noticed: false,
         }
     }
 
@@ -209,7 +213,10 @@ impl Conversation {
                 snapshot.link = Link::Running;
                 snapshot.session_id = Some(tidy(&session_id, MAX_SUMMARY_CHARS));
             }
-            BridgeEvent::TurnStarted => snapshot.busy = true,
+            BridgeEvent::TurnStarted => {
+                snapshot.busy = true;
+                self.too_long_noticed = false;
+            }
             BridgeEvent::AgentText { message_id, text } => apply_agent_text(snapshot, &message_id, &text),
             BridgeEvent::ToolStarted { tool_id, name, summary } => snapshot.entries.push(Entry::Tool {
                 tool_id,
@@ -245,13 +252,23 @@ impl Conversation {
                 {
                     snapshot.cost_usd_total += cost_usd;
                 }
+                // One turn ends every tool call that it left running: a result
+                // line that the reader could not read must not leave a row of
+                // the list that says that a tool still runs.
+                settle_tools(snapshot, failed);
                 if failed {
                     snapshot.entries.push(Entry::Notice {
                         text: "the turn failed".to_owned(),
                     });
                 }
             }
-            BridgeEvent::Dropped { .. } => apply_drop(snapshot, &mut self.dropped, &mut self.dropped_text),
+            BridgeEvent::Dropped { reason } => apply_drop(
+                snapshot,
+                reason,
+                &mut self.dropped,
+                &mut self.dropped_text,
+                &mut self.too_long_noticed,
+            ),
             BridgeEvent::Ended { exit_code, stderr_tail } => apply_end(snapshot, exit_code, &stderr_tail),
         }
         Self::trim(snapshot, &mut self.capped, &mut self.cap_text);
@@ -327,6 +344,21 @@ fn apply_tool_end(snapshot: &mut ConversationSnapshot, tool_id: &str, failed: bo
     }
 }
 
+/// Ends every tool call that is still running. One program serves one turn at a
+/// time, so an ended turn leaves no tool of this list running: without this, a
+/// tool result that the reader could not read leaves its row running for the rest
+/// of the conversation.
+fn settle_tools(snapshot: &mut ConversationSnapshot, failed: bool) {
+    let state = if failed { ToolState::Failed } else { ToolState::Done };
+    for entry in &mut snapshot.entries {
+        if let Entry::Tool { state: shown, .. } = entry
+            && *shown == ToolState::Running
+        {
+            *shown = state;
+        }
+    }
+}
+
 /// The first line of `text`, cut like a summary, or `None` when it is empty.
 fn first_line(text: &str) -> Option<String> {
     let line = text.lines().next().unwrap_or_default();
@@ -338,8 +370,17 @@ fn first_line(text: &str) -> Option<String> {
 }
 
 /// Counts one refused line in one notice, so a program that sends bad lines
-/// keeps one line of the conversation and not a page.
-fn apply_drop(snapshot: &mut ConversationSnapshot, dropped: &mut u32, dropped_text: &mut String) {
+/// keeps one line of the conversation and not a page. A line above the bound of
+/// the reader also gets one notice of its own for each turn: the line that ends a
+/// turn can be such a line, so the person reads why a turn ended without its
+/// result.
+fn apply_drop(
+    snapshot: &mut ConversationSnapshot,
+    reason: DropReason,
+    dropped: &mut u32,
+    dropped_text: &mut String,
+    too_long_noticed: &mut bool,
+) {
     *dropped = dropped.saturating_add(1);
     let text = dropped_notice(*dropped);
     let previous = dropped_text.as_str();
@@ -354,6 +395,12 @@ fn apply_drop(snapshot: &mut ConversationSnapshot, dropped: &mut u32, dropped_te
         }
     } else {
         snapshot.entries.push(Entry::Notice { text });
+    }
+    if reason == DropReason::TooLong && !*too_long_noticed {
+        *too_long_noticed = true;
+        snapshot.entries.push(Entry::Notice {
+            text: TOO_LONG_NOTICE.to_owned(),
+        });
     }
 }
 
@@ -379,6 +426,11 @@ fn dropped_notice(dropped: u32) -> String {
         format!("{dropped} lines of the program were dropped")
     }
 }
+
+/// The text of the notice of a line of the program that the reader could not
+/// hold. It is the words of Horizon and names its own cause, so no text of the
+/// line reaches it.
+const TOO_LONG_NOTICE: &str = "A line of the program was too long to read";
 
 /// The text of the notice of one refusal of the program.
 fn denied_text(tool: &str, message: &str) -> String {

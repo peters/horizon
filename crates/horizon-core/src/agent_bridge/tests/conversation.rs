@@ -284,9 +284,104 @@ fn a_dropped_line_gives_one_notice_that_counts_the_lines() {
     ]);
     assert_eq!(
         entries(&conversation),
-        vec![Entry::Notice {
-            text: "2 lines of the program were dropped".to_owned()
+        vec![
+            Entry::Notice {
+                text: "2 lines of the program were dropped".to_owned()
+            },
+            Entry::Notice {
+                text: TOO_LONG.to_owned()
+            },
+        ]
+    );
+}
+
+/// The text of the notice of a line that the reader could not hold.
+const TOO_LONG: &str = "A line of the program was too long to read";
+
+/// How many notices of an over-long line the conversation holds.
+fn too_long_notices(conversation: &Conversation) -> usize {
+    entries(conversation)
+        .iter()
+        .filter(|entry| matches!(entry, Entry::Notice { text } if text == TOO_LONG))
+        .count()
+}
+
+#[test]
+fn an_over_long_line_gives_one_notice_for_each_turn() {
+    let mut conversation = Conversation::new();
+    conversation.apply(BridgeEvent::TurnStarted);
+    for _ in 0..3 {
+        conversation.apply(BridgeEvent::Dropped {
+            reason: crate::agent_bridge::DropReason::TooLong,
+        });
+    }
+    assert_eq!(too_long_notices(&conversation), 1, "one notice for one turn");
+    conversation.apply(BridgeEvent::TurnEnded {
+        failed: false,
+        duration_ms: None,
+        cost_usd: None,
+    });
+    conversation.apply(BridgeEvent::TurnStarted);
+    conversation.apply(BridgeEvent::Dropped {
+        reason: crate::agent_bridge::DropReason::TooLong,
+    });
+    assert_eq!(too_long_notices(&conversation), 2, "the next turn gives its own notice");
+}
+
+#[test]
+fn a_notice_of_a_dropped_line_that_is_not_too_long_keeps_its_own_text() {
+    let conversation = conversation(vec![BridgeEvent::Dropped {
+        reason: crate::agent_bridge::DropReason::NotJson,
+    }]);
+    assert_eq!(too_long_notices(&conversation), 0);
+}
+
+#[test]
+fn an_ended_turn_leaves_no_tool_running() {
+    let ended = conversation(vec![
+        BridgeEvent::ToolStarted {
+            tool_id: "tool-1".to_owned(),
+            name: "Read".to_owned(),
+            summary: "/tmp/alpha.txt".to_owned(),
+        },
+        BridgeEvent::TurnEnded {
+            failed: false,
+            duration_ms: None,
+            cost_usd: None,
+        },
+    ]);
+    assert_eq!(
+        entries(&ended),
+        vec![Entry::Tool {
+            tool_id: "tool-1".to_owned(),
+            name: "Read".to_owned(),
+            summary: "/tmp/alpha.txt".to_owned(),
+            result: None,
+            state: ToolState::Done,
         }]
+    );
+
+    let failed = conversation(vec![
+        BridgeEvent::ToolStarted {
+            tool_id: "tool-1".to_owned(),
+            name: "Read".to_owned(),
+            summary: "/tmp/alpha.txt".to_owned(),
+        },
+        BridgeEvent::TurnEnded {
+            failed: true,
+            duration_ms: None,
+            cost_usd: None,
+        },
+    ]);
+    assert_eq!(
+        entries(&failed).first(),
+        Some(&Entry::Tool {
+            tool_id: "tool-1".to_owned(),
+            name: "Read".to_owned(),
+            summary: "/tmp/alpha.txt".to_owned(),
+            result: None,
+            state: ToolState::Failed,
+        })
     );
 }
 

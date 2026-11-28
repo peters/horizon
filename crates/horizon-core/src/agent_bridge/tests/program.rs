@@ -204,3 +204,57 @@ fn the_identity_of_a_workspace_names_the_plugin_dir_only_while_it_is_a_directory
     assert_eq!(identity.host_instance, crate::browser::manifest::host_instance());
     assert_eq!(identity.home, crate::HorizonHome::resolve().root());
 }
+
+#[test]
+fn a_session_id_that_is_not_of_the_form_of_a_uuid_never_reaches_the_command_line() {
+    for id in ["--dangerously-skip-permissions", "a-session", &"a".repeat(4096)] {
+        let spec = claude(Path::new("/tmp/work"), SessionChoice::Resume(id.to_owned()));
+        let arguments = arguments(&spec);
+        assert!(
+            !arguments.iter().any(|argument| argument == id),
+            "the id {id:?} is on the command line: {arguments:?}"
+        );
+        assert!(
+            !arguments.iter().any(|argument| argument == "--resume"),
+            "a resume that cannot name a session starts a new one: {arguments:?}"
+        );
+        assert!(
+            arguments.iter().any(|argument| argument == "--session-id"),
+            "{arguments:?}"
+        );
+        assert_eq!(
+            arguments.last().map(String::len),
+            Some(36),
+            "the new session carries a uuid: {arguments:?}"
+        );
+    }
+    let spec = claude(Path::new("/tmp/work"), SessionChoice::Resume(SESSION.to_owned()));
+    assert_eq!(arguments(&spec).last(), Some(&SESSION.to_owned()));
+}
+
+#[test]
+fn a_start_without_an_identity_removes_the_identity_of_a_nested_agent() {
+    let spec = claude(Path::new("/tmp/work"), SessionChoice::New(SESSION.to_owned()));
+    let removed: Vec<String> = spec
+        .env_remove
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    assert!(removed.iter().any(|name| name == "CLAUDECODE"), "{removed:?}");
+    for name in [
+        "HORIZON",
+        "HORIZON_BROWSER_ACTOR",
+        crate::browser::manifest::HOST_INSTANCE_ENV,
+        "HORIZON_EXECUTABLE",
+    ] {
+        assert!(
+            removed.iter().any(|removed| removed == name),
+            "a start without an identity removes {name}: {removed:?}"
+        );
+    }
+    assert_eq!(
+        spec.env,
+        Vec::new(),
+        "a start without an identity sets no identity of its own"
+    );
+}

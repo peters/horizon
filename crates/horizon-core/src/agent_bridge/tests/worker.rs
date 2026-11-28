@@ -8,10 +8,12 @@
 //! network.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::super::ending::end_child;
+use super::super::worker::fail_start;
 use crate::agent_bridge::{Bridge, BridgeError, BridgeEvent, ClaudeCodec, MAX_TEXT_BYTES, ProgramSpec, STOP_TIMEOUT};
 
 /// The longest time that a test waits for one event of its stand-in.
@@ -251,4 +253,117 @@ read -r line
     ));
     assert!(bridge.send("a".repeat(MAX_TEXT_BYTES)).is_ok());
     bridge.stop();
+}
+
+#[test]
+fn an_over_long_result_line_ends_the_turn_that_it_closes() {
+    // The measured program repeats a large tool input in the `result` line of a
+    // turn, under `permission_denials`, so the one line that ends the turn is
+    // above the bound of the reader.
+    let body = r#"#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
+s='aaaaaaaaaa'
+i=0
+while [ $i -lt 18 ]; do s=$s$s; i=$((i+1)); done
+printf '{"type":"result","permission_denials":[{"tool_input":{"content":"%s"}}],"is_error":true}\n' "$s"
+read -r line
+"#;
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let (wake, _) = wake_counter();
+    let bridge = start(folder.path(), body, wake);
+    let events = wait_for(&bridge, "the end of the over-long turn", |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, BridgeEvent::TurnEnded { .. }))
+    });
+    assert_eq!(
+        events,
+        vec![
+            BridgeEvent::SessionStarted {
+                session_id: SESSION.to_owned()
+            },
+            BridgeEvent::TurnStarted,
+            BridgeEvent::Dropped {
+                reason: crate::agent_bridge::DropReason::TooLong
+            },
+            BridgeEvent::TurnEnded {
+                failed: true,
+                duration_ms: None,
+                cost_usd: None,
+            },
+        ]
+    );
+    bridge.stop();
+}
+
+#[test]
+fn a_bridge_that_is_dropped_ends_its_program() {
+    // The program ignores the close of its standard input: only a signal ends it.
+    let body = r#"#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001"}'
+exec sleep 60
+"#;
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let (wake, _) = wake_counter();
+    let bridge = start(folder.path(), body, wake);
+    let pid = bridge.pid();
+    wait_for(&bridge, "the session of the program", |events| !events.is_empty());
+    drop(bridge);
+    wait_until("the program of a dropped bridge", || !crate::process::is_alive(pid));
+}
+
+#[test]
+fn a_start_that_fails_waits_for_its_program() {
+    let child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exec sleep 60"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("a stand-in program of the test");
+    let pid = child.id();
+    let child = Arc::new(Mutex::new(Some(child)));
+    let _ = fail_start(&child, pid, BridgeError::Pipes);
+    assert!(
+        !crate::process::is_alive(pid),
+        "a failed start leaves no entry of the process table behind"
+    );
+}
+
+#[test]
+fn a_signal_waits_for_the_identity_of_the_child_when_it_fills_after_the_start() {
+    // A system that reads the start time of a process with a program fills the
+    // identity of a child after its start. A signal that reads the cell before it
+    // fills reaches no process, so it waits for the cell within a small bound.
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "exec sleep 60"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a stand-in program of the test");
+    let pid = child.id();
+    let cell = Arc::new(std::sync::OnceLock::new());
+    let identity = crate::process::HangingChild::new(pid, Arc::clone(&cell));
+    let late = Arc::clone(&cell);
+    let filler = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = late.set(crate::process::start_time(pid));
+    });
+    end_child(&identity);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut ended = false;
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(POLL);
+    }
+    if !ended {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let _ = filler.join();
+    assert!(ended, "the signal waited for the identity and ended the child");
 }

@@ -28,23 +28,32 @@ the same rules.
   nothing for every other type, so a later version of the program never costs the
   conversation an event.
 - **A refused line is dropped whole.** A line that is not JSON, a JSON line
-  without a `type` string, and a line above `MAX_LINE_BYTES` become
-  `BridgeEvent::Dropped` with a typed reason. The event holds the reason and never
-  the line. A refused line ends nothing: the turn, the conversation and the
-  program go on.
-- **A long line is read to its newline and held nowhere.** The reader takes at
-  most `MAX_LINE_BYTES` of one line, reads the rest of it in chunks and keeps no
-  byte of it.
+  without a `type` string, a `system/init` line whose session id is not a UUID,
+  and a line above `MAX_LINE_BYTES` become `BridgeEvent::Dropped` with a typed
+  reason. The event holds the reason and never the line. A refused line ends
+  nothing, with one exception: an over-long `result` line also ends its turn,
+  because the turn would otherwise stay busy for ever. The duration and the cost
+  of that turn stay unknown.
+- **A long line is read to its newline and held nowhere.** The reader keeps at
+  most `MAX_LINE_BYTES` of one line. It then reads the head of that line in a
+  stream, for the top level `type`, `subtype` and `is_error` only: every other
+  value is skipped without a value, one text of the head holds at most
+  `MAX_SHAPE_CHARS` characters, and at most `MAX_SHAPE_BYTES` of one line is read
+  at all. The rest of the line reaches its newline and the reader keeps no byte
+  of it.
 - **Every text has a bound.** One text of the agent is cut at `MAX_TEXT_BYTES`
-  bytes, and one summary, one refusal and one notice at `MAX_SUMMARY_CHARS`
-  characters. The codec joins at most 256 message ids and at most `MAX_TEXT_BYTES`
-  of one message.
-- **No text of the program reaches a log line, a path or a command line.** The
-  bridge logs a start, an end and a dropped line with the reason. It writes no
-  file of its own: the stored conversation is the file of `store`, which the
-  section below states. A tool summary is built from one fixed key of the tool
-  input (`command`, `file_path`, or the tool name alone), and the whole input
-  never becomes an event.
+  bytes, one summary, one refusal and one notice at `MAX_SUMMARY_CHARS`
+  characters, and one id of the program at `MAX_ID_CHARS` characters. The codec
+  joins at most 256 message ids and at most `MAX_TEXT_BYTES` of one message.
+- **No text of the program reaches a log line, a path or a file, and one named
+  value reaches a command line.** The bridge logs a start, an end and a dropped
+  line with the reason. It writes no file of its own: the stored conversation is
+  the file of `store`, which the section below states. A tool summary is built
+  from one fixed key of the tool input (`command`, `file_path`, or the tool name
+  alone), and the whole input never becomes an event. The one text of the program
+  that reaches a command line is the session id, and the bridge accepts it only in
+  the form of a UUID: no byte of it is read as another option of the program or as
+  a word of a shell.
 - **A tool name is a claim.** The name, the summary and the result of a tool come
   from the program. The dock draws them as plain text, and no value of them
   becomes a command, a path or a setting.
@@ -52,10 +61,13 @@ the same rules.
 ## What the bridge guarantees
 
 - **One process, by its own id.** The bridge starts the program of a
-  `ProgramSpec` with no shell around it, and its stop ends exactly that process
-  id, guarded by the start time of the process, so no signal reaches a later
-  process that the system gave the same id. `Bridge::stop` waits at most
-  `STOP_TIMEOUT`.
+  `ProgramSpec` with no shell around it. It records the id and the start time of
+  that process once, at its start, and its stop and its drop end exactly that
+  process, so no signal reaches a later process that the system gave the same id.
+  A signal waits up to one second for a start time that a system fills after the
+  start, and the bridge writes a log line when it cannot name the process.
+  `Bridge::stop` waits at most `STOP_TIMEOUT`. A drop sends the signals on a
+  thread of its own and waits for nothing.
 - **The prompt is one line of the standard input.** The caller gives the text to
   `Bridge::send`, which builds the line with `serde_json`. The prompt never
   appears on the command line, in the process list or in a log line.
@@ -67,9 +79,12 @@ the same rules.
   input to the bridge. It starts the program of the active workspace when that
   workspace has none, on the worker of the dock, as the composer does.
 - **A name of a nested agent is removed.** Every inherited variable with the
-  prefix `CLAUDE_CODE_` or `HORIZON_WORK_`, and the variable `CLAUDECODE`, is
-  removed from the environment of the child before it starts, so a bridge inside
-  an agent panel does not speak as that panel.
+  prefix `CLAUDE_CODE_` or `HORIZON_WORK_`, the variable `CLAUDECODE`, and the
+  four names of an agent identity (`HORIZON`, `HORIZON_BROWSER_ACTOR`,
+  `HORIZON_BROWSER_HOST_INSTANCE` and `HORIZON_EXECUTABLE`) are removed from the
+  environment of the child before it starts, so a bridge inside an agent panel
+  does not speak as that panel. A start that has an identity of its own sets its
+  four values after that removal.
 - **No line of the program waits on a frame.** The reader, the writer and the
   reader of the standard error are threads of their own. `poll` reads a channel
   with `try_iter`, and `send` queues a line. A caller runs `start` and `stop` off
@@ -118,11 +133,16 @@ rules hold for it.
   `MAX_ENTRIES` entries, and each text of it is cut before it enters the
   snapshot.
 - **No entry becomes a control.** An entry draws no button, no card and no
-  click target, and no text of the program reaches a path, a command line, a log
-  line or a file.
-- **The words of Horizon are its own.** A notice that the dock adds, the state of
-  the header and the cost are built by Horizon from typed values, and never from
-  the text of a line.
+  click target. No text of an entry becomes a path, a command line, a log line or
+  a file.
+- **The words of Horizon are its own, with two named exceptions.** A notice that
+  the dock adds, the state of the header and the cost are built by Horizon from
+  typed values. Two notices carry text of a line after words of Horizon: the
+  refusal of a tool (`<tool name> was denied: <message>`) and the end of the
+  program (`the program ended with code N: <stderr tail>`). That text is cleaned
+  and cut to `MAX_SUMMARY_CHARS` characters as every other summary is. The dock
+  draws it as plain text, and no value of it becomes a command, a path or a
+  setting.
 
 ## The stored conversation is untrusted when it is read back
 
@@ -156,10 +176,10 @@ therefore reads it as untrusted text.
 - **The record of the session id is text of the program.** `WorkspaceState
   .orchestrator` holds the session id that the program named and the name of its
   file. The dock keeps the value as the conversation cut it, one line of
-  `MAX_SUMMARY_CHARS` characters, and the next start passes it as one argument
-  of `--resume`. It never becomes a word of a shell, a path or a log line, and a
-  record whose program name differs from the program of this dock resumes
-  nothing.
+  `MAX_SUMMARY_CHARS` characters. The next start resumes it only when it is a
+  UUID, and any other value starts a new session. It never becomes a word of a
+  shell, a path or a log line, and a record whose program name differs from the
+  program of this dock resumes nothing.
 - **A removed workspace removes its file.** The dock removes the file of a
   workspace that closes, on its worker, and the folder of a session goes whole
   when the person deletes that saved session.

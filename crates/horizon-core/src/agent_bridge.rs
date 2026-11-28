@@ -10,9 +10,11 @@
 //! error is untrusted, as is every byte that it does not write. The module turns
 //! a line into an event only when the line is JSON of the one grammar that
 //! [`ClaudeCodec`] reads; every other line becomes [`BridgeEvent::Dropped`] and
-//! ends nothing. No text of the program reaches a log line, a path, a command
-//! line or a snapshot field of its own: the events hold it, and the conversation
-//! of [`Conversation`] shows it as plain text. The page
+//! ends nothing, except an over-long `result` line, which also ends its turn. No
+//! text of the program reaches a log line, a path or a file of its own: the
+//! events hold it, and the conversation of [`Conversation`] shows it as plain
+//! text. One text of the program reaches a command line, and only as a UUID: the
+//! session id of `--resume`. The page
 //! `docs/review/trust-boundaries/agent-bridge.md` states that boundary, and
 //! `docs/architecture/agent-bridge.md` gives the threads, the bounds and the
 //! line format as it was measured on Claude Code 2.1.332.
@@ -31,14 +33,16 @@ use std::time::Duration;
 pub mod actor;
 mod codec;
 mod conversation;
+mod ending;
 mod event;
+mod line_reader;
 mod program;
 pub mod store;
 #[cfg(test)]
 mod tests;
 mod worker;
 
-pub use codec::{ClaudeCodec, LineCodec};
+pub use codec::{ClaudeCodec, LineCodec, LineShape};
 pub use conversation::{Conversation, ConversationSnapshot, Entry, LimitNote, Link, ToolState};
 pub use event::{BridgeEvent, DropReason};
 pub use program::{
@@ -47,11 +51,18 @@ pub use program::{
 pub use worker::{Bridge, BridgeError};
 
 /// The bytes of one line of the program. A longer line is read to its newline,
-/// dropped whole and reported as [`DropReason::TooLong`].
+/// dropped whole and reported as [`DropReason::TooLong`], and the reader parses
+/// only the shape of its head (see [`LineShape`]) so that the end of a turn is
+/// not lost.
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 /// The bytes of one text of the person or of the agent.
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
+
+/// The characters of one id that a line of the program names: the message id,
+/// the tool id and the session id. A longer id is cut when it enters an event, so
+/// the entries and the map of the codec hold no id above this bound.
+pub const MAX_ID_CHARS: usize = 128;
 
 /// The characters of one summary: of a tool call, of a tool result and of the
 /// refusal of a tool.

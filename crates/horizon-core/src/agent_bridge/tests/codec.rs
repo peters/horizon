@@ -280,3 +280,77 @@ fn the_user_line_is_one_line_of_the_shape_of_the_program() {
     assert_eq!(parsed["message"]["content"][0]["type"], "text");
     assert_eq!(parsed["message"]["content"][0]["text"], text);
 }
+
+#[test]
+fn an_id_of_the_program_is_cut_when_it_enters_an_event() {
+    let long = "a".repeat(5000);
+    let cut = "a".repeat(128);
+    let line = format!(
+        r#"{{"type":"assistant","message":{{"id":"{long}","content":[{{"type":"text","text":"alpha"}},{{"type":"tool_use","id":"{long}","name":"Bash","input":{{"command":"echo alpha"}}}}]}}}}"#
+    );
+    let events = parse(&line);
+    let [
+        BridgeEvent::AgentText { message_id, .. },
+        BridgeEvent::ToolStarted { tool_id, .. },
+    ] = events.as_slice()
+    else {
+        panic!("the line gave {events:?}");
+    };
+    assert_eq!(message_id, &cut);
+    assert_eq!(tool_id, &cut);
+    let result = format!(
+        r#"{{"type":"user","message":{{"content":[{{"tool_use_id":"{long}","type":"tool_result","content":"alpha"}}]}}}}"#
+    );
+    assert_eq!(
+        parse(&result),
+        vec![BridgeEvent::ToolEnded {
+            tool_id: cut,
+            failed: false,
+            summary: "alpha".to_owned(),
+        }],
+        "the end of the tool joins the row that its start made"
+    );
+}
+
+#[test]
+fn a_session_id_that_is_not_of_the_form_of_a_uuid_is_a_shape_the_codec_does_not_know() {
+    for id in [
+        "--dangerously-skip-permissions",
+        "--resume",
+        "",
+        "a-session",
+        "00000000-0000-4000-8000-00000000000",
+        "00000000-0000-4000-8000-0000000000011",
+        "000000000000-4000-8000-000000000001",
+        "00000000_0000-4000-8000-000000000001",
+    ] {
+        let line = format!(r#"{{"type":"system","subtype":"init","session_id":"{id}"}}"#);
+        assert_eq!(
+            parse(&line),
+            vec![BridgeEvent::Dropped {
+                reason: DropReason::UnknownShape
+            }],
+            "{id}"
+        );
+    }
+    let huge = "a".repeat(4096);
+    let line = format!(r#"{{"type":"system","subtype":"init","session_id":"{huge}"}}"#);
+    assert_eq!(
+        parse(&line),
+        vec![BridgeEvent::Dropped {
+            reason: DropReason::UnknownShape
+        }],
+        "a value above the length of one argument"
+    );
+    let upper = r#"{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-00000000000A"}"#;
+    assert_eq!(
+        parse(upper),
+        vec![
+            BridgeEvent::SessionStarted {
+                session_id: "00000000-0000-4000-8000-00000000000A".to_owned()
+            },
+            BridgeEvent::TurnStarted,
+        ],
+        "a hexadecimal digit of either case is of the form"
+    );
+}

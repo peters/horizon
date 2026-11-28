@@ -28,18 +28,31 @@ pub const LOCAL_ID_BYTES: usize = 36;
 /// The places of the four hyphens of that form.
 const HYPHENS: [usize; 4] = [8, 13, 18, 23];
 
+/// Whether `text` has the form of a UUID: [`LOCAL_ID_BYTES`] bytes of
+/// hexadecimal digits of either case, with a hyphen at each place of
+/// [`HYPHENS`].
+///
+/// A session id of the program becomes the `--resume` argument of a later start,
+/// so this is the one form that the codec accepts from a line and that the
+/// program of a start puts on its command line. No byte of it can be read as an
+/// option of the program or as a word of a shell.
+#[must_use]
+pub fn is_uuid(text: &str) -> bool {
+    text.len() == LOCAL_ID_BYTES
+        && text.bytes().enumerate().all(|(index, byte)| {
+            if HYPHENS.contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
 /// Whether `local_id` is a local id of the form that [`crate::new_local_id`]
 /// makes.
 #[must_use]
 pub fn is_local_id(local_id: &str) -> bool {
-    local_id.len() == LOCAL_ID_BYTES
-        && local_id.bytes().enumerate().all(|(index, byte)| {
-            if HYPHENS.contains(&index) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-            }
-        })
+    is_uuid(local_id) && !local_id.bytes().any(|byte| byte.is_ascii_uppercase())
 }
 
 /// The actor of the orchestrator of the workspace with `local_id`, or `None` for

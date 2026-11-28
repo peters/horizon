@@ -25,7 +25,7 @@ which the last section of this page describes.
 
 | Thread | Work |
 |---|---|
-| `agent-bridge-out` | Reads the standard output by lines, parses each line with the codec, sends the events of that line and calls the wake after each line that gave an event. |
+| `agent-bridge-out` | Reads the standard output by lines, parses each line with the codec, sends the events of that line and calls the wake after each line that gave an event. An over-long line gives the shape of its head to the codec. |
 | `agent-bridge-in` | Writes each line that `Bridge::send` queued to the standard input, and flushes it. The end of the queue closes the pipe. |
 | `agent-bridge-err` | Reads the standard error and keeps its last bytes for the notice of the end. |
 
@@ -36,25 +36,32 @@ wake. A turn of the program is not the end of its process: the `result` line end
 a turn, and the process can stay alive after it.
 
 `Bridge::poll` reads the channel with `try_iter`, so a frame never waits.
-`Bridge::send` queues one line and never waits for the program. `Bridge::stop`
-closes the standard input, waits, then ends the child by its own process id when
-the child ignores both steps, and joins the threads. `Drop` asks for the same
-stop and waits for nothing.
+`Bridge::send` queues one line and never waits for the program. `Bridge::start`
+records the process id and the start time of the child once, at its start.
+`Bridge::stop` closes the standard input, waits, then ends the child by that
+recorded identity when the child ignores both steps, and joins the threads. A
+`Drop` closes the standard input, sends the signals to that identity on a thread
+of its own and waits for nothing, so a bridge that nobody stops leaves no
+program behind.
 
 ## The bounds
 
 | Name | Value | What it bounds |
 |---|---|---|
-| `MAX_LINE_BYTES` | 1 MiB | One line of the program. A longer line is read to its newline, dropped whole and reported as `DropReason::TooLong`. |
+| `MAX_LINE_BYTES` | 1 MiB | One line of the program. A longer line is dropped as `DropReason::TooLong`, and its head is read for its shape. |
+| `MAX_SHAPE_BYTES` | 64 MiB | The bytes of one over-long line that the reader reads for the shape of its head. |
+| `MAX_SHAPE_CHARS` | 64 | One text of that head: its `type` and its `subtype`. |
 | `MAX_TEXT_BYTES` | 256 KiB | One text of the person or of the agent. |
+| `MAX_ID_CHARS` | 128 | One id of the program: a message id, a tool id and a session id. |
 | `MAX_SUMMARY_CHARS` | 400 | One summary of a tool, of a tool result, of a refusal and of a notice. |
 | `MAX_ENTRIES` | 2000 | The entries of one conversation. |
 | `STDERR_TAIL_BYTES` | 8 KiB | The last bytes of the standard error that the bridge keeps. |
 | `STOP_TIMEOUT` | 5 s | One stop of one bridge. |
 
 The codec joins the texts of the lines that share one `message.id`. Its memory has
-two bounds: 256 tracked messages, and `MAX_TEXT_BYTES` for one message. A full
-map is emptied, and a message id that the map lost starts a new text, which the
+three bounds: 256 tracked messages, `MAX_TEXT_BYTES` for one message, and
+`MAX_ID_CHARS` for one id, because an id is a key of that map. A full map is
+emptied, and a message id that the map lost starts a new text, which the
 conversation replaces as before.
 
 ## The events
@@ -71,6 +78,15 @@ conversation replaces as before.
 | `TurnEnded` | `result` | `failed`, `duration_ms`, `cost_usd` |
 | `Dropped` | a line that the codec refused | `reason`: `TooLong`, `NotJson` or `UnknownShape` |
 | `Ended` | the end of the standard output | `exit_code`, `stderr_tail` |
+
+A line above `MAX_LINE_BYTES` is dropped, and the reader parses the head of that
+line for its top level `type`, `subtype` and `is_error` only. A line whose head
+says `result` therefore gives `Dropped` with `TooLong` and also `TurnEnded` with
+that `is_error`, and with no duration and no cost: the turn of a program is one
+line, and a turn that the reader could not hold must still end. Every other
+over-long line gives `Dropped` alone. In the conversation, an ended turn marks
+every tool call that still runs as `Done`, or as `Failed` when the turn failed,
+and one notice per turn names an over-long line.
 
 A summary of a tool is built from one fixed key of the tool input and nothing
 else: `command` for `Bash`, `file_path` for a file tool, and the tool name for
@@ -156,8 +172,10 @@ The dock at the right edge of the root window is the one caller
 - **The wake.** The bridge asks for the next frame of the window with a clone of
   the `egui::Context` of the dock.
 - **The session id is text of the program.** The dock keeps the id only as the
-  conversation cut it: one line of `MAX_SUMMARY_CHARS` characters. The next
-  start passes it as one argument of `--resume`, never as a word of a shell.
+  conversation cut it: one line of `MAX_SUMMARY_CHARS` characters. The codec
+  accepts an id only in the form of a UUID, and the next start resumes it only in
+  that form: any other value starts a new session, so no id of the program is read
+  as another option of the program and none is passed as a word of a shell.
 - **The words of Horizon.** Three notices come from the dock and not from the
   program: `Claude Code did not start: <error of the system>`, `Stopped by you`,
   and `Claude Code reports that the plan limit is reached. Extra usage is in
@@ -230,5 +248,7 @@ and neither is written for a start that saves nothing.
 - No transcript of a conversation moves to another computer, and no card reads
   the stored entries. A later slice that does either keeps the bounds above.
 - `crate::ui_thread::blocking` is called nowhere in this module: the bridge starts
-  no work on a frame. The store calls it at the start of each file function, so a
-  frame that reaches one reports the wait.
+  no program on a frame and waits for nothing there. A `Drop` that runs on a frame
+  starts one short thread that signals the child and returns. The store calls
+  `ui_thread::blocking` at the start of each file function, so a frame that reaches
+  one reports the wait.

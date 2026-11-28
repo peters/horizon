@@ -60,8 +60,8 @@ pub enum BridgeEvent {
 /// Why the codec refused one line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropReason {
-    /// The line is above [`super::MAX_LINE_BYTES`]. The reader skipped it to its
-    /// newline and held no byte of it.
+    /// The line is above [`super::MAX_LINE_BYTES`]. The reader read it to its
+    /// newline, held no byte of it, and read only the shape of its head.
     TooLong,
     /// The line is not JSON.
     NotJson,
