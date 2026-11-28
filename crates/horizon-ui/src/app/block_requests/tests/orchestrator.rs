@@ -415,6 +415,9 @@ fn the_machine_operations_of_an_orchestrator_reach_the_machine_list() {
         provider: Some("Hetzner, hel1".into()),
         repository: None,
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         cards: false,
     };
     let answer = answered(&mut app, &ctx, &root, 1, set);

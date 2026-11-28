@@ -1,6 +1,7 @@
 //! The shareable part of a machine: its name, its route, the tmux session that a
-//! terminal attaches to, the repository that the machine is ready for and the
-//! provider line that the agent reported.
+//! terminal attaches to, the repository that the machine is ready for, the provider
+//! line that the agent reported and the three facts of a rented machine: its size,
+//! its place and its price for one hour.
 //!
 //! A record is what another computer may see, so it holds no name of a key: a key
 //! name resolves only in the Horizon home that made it. The key that this
@@ -16,6 +17,7 @@ use horizon_browser_control::manifest::block_terminal::{self, CheckedTerminal, T
 use serde::{Deserialize, Serialize};
 
 use super::MachineError;
+use super::facts::check_facts;
 use crate::ssh::{MachineKeyRef, SshConnection};
 
 /// One machine that an agent registered with Horizon.
@@ -46,6 +48,18 @@ pub struct Machine {
     /// The folder that the new terminals of this machine start in: one absolute path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// The size of a rented machine, such as `cpx32`: one line of 1 to 40
+    /// characters. It is the agent's claim, and Horizon draws it with the place.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// The place that a rented machine stands in, such as `Helsinki`: one line of
+    /// 1 to 40 characters, drawn with the size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    /// What one hour of a rented machine costs, such as `0.03 EUR`: one line of 1
+    /// to 40 characters, drawn at the right end of the row as `<price>/h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_per_hour: Option<String>,
     pub added_at_millis: u64,
     /// Whether the setup of the cards of the agents of this machine ran, so this
     /// window serves a card socket for each of its sessions. `machine_set` writes
@@ -70,7 +84,8 @@ pub struct CheckedMachine {
 }
 
 impl CheckedMachine {
-    /// The record of this machine, added at `added_at_millis`.
+    /// The record of this machine, added at `added_at_millis`, with no fact of a
+    /// rented machine: [`check_record`] adds the facts that the record names.
     #[must_use]
     pub fn record(&self, added_at_millis: u64) -> Machine {
         Machine {
@@ -82,6 +97,9 @@ impl CheckedMachine {
             provider: self.provider.clone(),
             repository: self.repository.clone(),
             folder: self.folder.clone(),
+            size: None,
+            place: None,
+            price_per_hour: None,
             added_at_millis,
             cards: self.cards,
         }
@@ -102,6 +120,9 @@ impl Machine {
             && self.provider == other.provider
             && self.repository == other.repository
             && self.folder == other.folder
+            && self.size == other.size
+            && self.place == other.place
+            && self.price_per_hour == other.price_per_hour
             && self.cards == other.cards
     }
 
@@ -190,11 +211,17 @@ pub fn check(
 
 /// Check one record that already exists, as a computer that did not make it reads
 /// it: the name, the route, the tmux session and the provider line pass the same
-/// rules as `machine_set`, and the returned record holds the checked values.
+/// rules as `machine_set`, the three facts of a rented machine pass theirs, and the
+/// returned record holds the checked values of all of them.
 ///
 /// # Errors
 /// Describes the first refused field with the code of [`MachineError::code`].
 pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
+    let facts = check_facts(
+        record.size.as_deref(),
+        record.place.as_deref(),
+        record.price_per_hour.as_deref(),
+    )?;
     let route = TerminalRoute {
         host: record.host.clone(),
         user: record.user.clone(),
@@ -209,7 +236,7 @@ pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
         record.folder.as_deref(),
         record.cards,
     )?;
-    Ok(checked.record(record.added_at_millis))
+    Ok(facts.into_record(checked.record(record.added_at_millis)))
 }
 
 /// Check one machine name. It is the key name rule, so a record and the keys

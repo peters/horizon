@@ -372,7 +372,10 @@ workspaces.
  "key": "build-1",
  "session": "build-1",
  "provider": "Hetzner, hel1",
- "repository": "example-org/shop"}
+ "repository": "example-org/shop",
+ "size": "cpx32",
+ "place": "Helsinki",
+ "price_per_hour": "0.03 EUR"}
 ```
 
 The answer is `machine_set` with `name` and `created`, which is false when the
@@ -395,9 +398,18 @@ name was already there and the record replaced the old one.
   the machine name.
 - `repository` is one line of at most 60 characters, such as
   `example-org/shop`: the repository that this machine is ready for. Horizon
-  draws it under the machine name beside the provider words, it reads no folder
-  and it starts nothing from it. Set it when the machine is ready for that
-  repository, and leave it out while the machine is ready for none.
+  draws it under the machine name beside the provider words while the record
+  names no size and no place, it reads no folder and it starts nothing from it.
+  Set it when the machine is ready for that repository, and leave it out while
+  the machine is ready for none.
+- `size`, `place` and `price_per_hour` are the facts of a rented machine, such as
+  `cpx32`, `Helsinki` and `0.03 EUR`. Each is one line of 1 to 40 characters with
+  no control character, and a value outside that bound is `invalid_machine_fact`
+  with the name of its field. Pass what the provider answered, never a guess.
+  Horizon draws the size and the place on the second line of the row of the
+  machine, and the price at the right end of that row as `<price>/h`. A call that
+  names no fact keeps the fact that the record holds, and the empty text clears
+  it.
 - The record holds no command line. Horizon builds the `ssh` argv and the tmux
   command from the record when a panel opens, so a record can never run a
   command that you saved in it.

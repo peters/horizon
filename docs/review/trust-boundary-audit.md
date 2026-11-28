@@ -200,8 +200,9 @@ boundary pages went away with their features.
     belong to the Horizon home, stay in a `0700` directory with a `0600` private
     key, are made and read on the coordination worker, and only the public line
     reaches an answer; a machine record passes the same route rule, a session
-    name of `A-Z`, `a-z`, `0-9`, `_` and `-`, a key name and a 60-character
-    provider line, holds no command line, is re-validated at click time, and its
+    name of `A-Z`, `a-z`, `0-9`, `_` and `-`, a key name, a 60-character
+    provider line and three facts of 1 to 40 characters (`size`, `place` and
+    `price_per_hour`), holds no command line, is re-validated at click time, and its
     click runs the argv that Horizon builds from the record; the record holds no
     key name, so the binding of a key to a machine of this computer is a separate
     `0600` file (`machines/keys.json`) that a record of an older Horizon fills on

@@ -183,6 +183,15 @@ without the field.
 - **The provider line is a claim.** It is folded to one line and cut to 60
   characters. Horizon draws it in a low-emphasis style under the machine name. It
   is never read by a program and never becomes a command, a path or a title.
+- **The size, the place and the price are claims.** `size`, `place` and
+  `price_per_hour` are the words of the agent program about the machine that it
+  rented, such as `cpx32`, `Helsinki` and `0.03 EUR`. Each one is one line of 1 to
+  40 characters with no control character, and a value outside that bound is
+  `invalid_machine_fact`, with the name of its field in the message. An update
+  that names no fact keeps the stored one, and the empty text clears it. Horizon
+  draws the size and the place on the second line of the row of the machine and
+  the price at its right end, and it reads nothing else into any of them: no
+  program reads a fact, and a fact is no command, no path and no title.
 - **No command line is saved.** A record holds no argv and no remote command.
   Horizon builds both from the record when a panel opens.
 
@@ -215,9 +224,12 @@ without the field.
   named, with the account in the record. Horizon does not verify that the host is
   the one the agent meant, and first contact with its host key is accepted and
   pinned for that key.
-- **A record is agent text about a machine.** The provider line is the agent's
-  reading of its CLI, and the record outlives the agent panel that wrote it. A
-  person who keeps a record keeps an agent's claim about a host.
+- **A record is agent text about a machine.** The provider line and the three
+  facts of a rented machine are the agent's reading of its provider, and the
+  record outlives the agent panel that wrote it. A person who keeps a record keeps
+  an agent's claim about a host, and Horizon states no price of its own: a price
+  that the record holds is the price that the agent read, at the time that it
+  read it.
 - **A forgotten record does not close a terminal.** `machine_delete` forgets the
   record and keeps the key. A terminal that the machine opened keeps its own saved
   connection, reconnects after a restart and is not tied to the record any more.

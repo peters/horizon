@@ -86,12 +86,18 @@ const ANY_ROW: usize = usize::MAX;
 
 /// One line of monospace text, for counts and kind labels.
 pub(super) fn mono(ui: &egui::Ui, text: &str, size: f32, color: Color32) -> Arc<Galley> {
+    mono_line(ui, text, size, color, f32::INFINITY)
+}
+
+/// One line of monospace text with a width of its own, cut with an ellipsis at
+/// `max_width`: the price of a rented machine, which stands at an edge of its row.
+pub(super) fn mono_line(ui: &egui::Ui, text: &str, size: f32, color: Color32, max_width: f32) -> Arc<Galley> {
     let format = TextFormat {
         font_id: FontId::monospace(size),
         color,
         ..Default::default()
     };
-    layout(ui, text, format, f32::INFINITY, ONE_ROW)
+    layout(ui, text, format, max_width, ONE_ROW)
 }
 
 fn layout(ui: &egui::Ui, text: &str, format: TextFormat, max_width: f32, max_rows: usize) -> Arc<Galley> {

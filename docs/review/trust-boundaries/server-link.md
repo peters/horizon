@@ -70,8 +70,12 @@ never on the UI thread.
   of the link is refused, so no computer spends the counters of another one.
 - **A record is checked at the server.** A machine record passes the validators of
   `horizon_core::machines::check_record`: the name rule, the route rule of an SSH
-  terminal, the session rule and the provider line. A record that breaks a rule is
-  `invalid_record` with the code of that rule, and nothing is written.
+  terminal, the session rule, the provider line and the three facts of a rented
+  machine, which are its `size`, its `place` and its `price_per_hour`. A record
+  that breaks a rule is `invalid_record` with the code of that rule, and nothing is
+  written. The body is one typed record with no field that this version does not
+  know, so a server of an older version refuses a record that carries a field that
+  it does not know instead of relaying it in part.
 - **The intents are bounded.** One push holds at most 256 intents and 8 secrets,
   the store keeps at most 64 machines, 64 internal probe objects and 256 secrets,
   one secret body holds at most 16 KiB, and one link holds at most 32 open waits.

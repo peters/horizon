@@ -1312,14 +1312,20 @@ The page of four starts answers the size of the window.
   `PALETTE_YELLOW` while it reconnects, `PALETTE_GREEN` when it is connected and
   `PALETTE_RED` when it is disconnected. The gap after the box is 10. The name is
   Inter 12.5 at weight 620 in `FG`; the line under it is Inter 10.5 in the
-  secondary colour, and it holds the repository and the provider line of the
-  record. The `pending` mark and the summary of a folded machine keep their words.
+  secondary colour. The line holds the size and the place of a rented machine as
+  `<size> · <place>`, such as `cpx32 · Helsinki`, or the one of the two that the
+  record knows. A record that knows neither shows the repository, the folder and
+  the provider line instead, in the form of before. The price of a rented machine
+  stands at the right end of the row, on the line of the name, in JetBrains Mono
+  10.5 in `FG_SOFT`, as `<price>/h`, such as `0.03 EUR/h`; a record without a price
+  shows none. The name ends before the price, so a long name is cut with an
+  ellipsis while the price stays whole, and the second line keeps the whole width
+  of the row, so the size and the place stay whole. The `pending` mark stands
+  before the price. The summary of a folded machine keeps its words.
   The fold control of the agents of the machine stands at the right end of the
   row, 6 in, with the words of the older form. The states, the menus and the
   presses of the row keep their rules, and a hover adds the fill
-  `alpha(PANEL_BG_ALT, 128)`. A row that the record gives a price would show it at
-  the right edge in JetBrains Mono 10.5 `FG_SOFT` as `<amount>/h`; a record of
-  this version carries no price, so the row shows none.
+  `alpha(PANEL_BG_ALT, 128)`.
 - The control `+ Rent a machine` stands under the rows of the machine section, and
   it stands there with no machine as well. It is 12 in from each side, 34 high,
   has radius 10, no fill, and a 1 px dashed outline in `BORDER_STRONG` with a dash

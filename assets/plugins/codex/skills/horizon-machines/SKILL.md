@@ -400,6 +400,9 @@ session:    "build-1"
 provider:   "<Provider>, <region>"
 repository: "<owner>/<repository>"
 folder:     "<absolute folder of the repository>"
+size:       "<size of the machine, such as cpx32>"
+place:      "<place that it stands in, such as Helsinki>"
+price_per_hour: "<what one hour of it costs, such as 0.03 EUR>"
 ```
 
 The answer is `machine_set` with `created`, which is false when the name was
@@ -407,17 +410,31 @@ already there. `name` follows the machine key rule, `session` is 1 to 40
 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, and `provider` and `repository`
 are one line of at most 60 characters each. `repository` is the repository that
 the machine is ready for, and Horizon draws it on the second line of the row of
-the machine in the sidebar. Leave it out while the machine is ready for no
-repository, and read `references/repository-machine.md` for a machine of a
-repository. `folder` is the absolute folder of that repository, such as
+the machine in the sidebar while the record names no size and no place. Leave it
+out while the machine is ready for no repository, and read
+`references/repository-machine.md` for a machine of a repository. `folder` is the absolute folder of that repository, such as
 `/home/dev/example-repo`: a new terminal of a workspace that is placed on the
 machine starts there, and a press on `Start <program> here` starts its program
 in the same folder. This version holds one repository folder for each machine.
-A record that holds `folder` needs a Horizon that knows the field on every
-computer that follows one server, because an older Horizon refuses the record of
-a newer one. The record belongs to the person's Horizon and not to your
-workspace, so every agent panel of this Horizon sees it and it survives a
-restart. The same name then appears in the Machines section of the sidebar, and
+
+`size`, `place` and `price_per_hour` are the facts of the machine that you rented,
+in the words of the provider: the size of the machine, the region or the city
+that it stands in, and what one hour of it costs. Each one is one line of 1 to 40
+characters with no control character, and a value outside that bound is
+`invalid_machine_fact`, with the name of the field in the message. Read the three
+facts from what the provider answered at the rent, and pass them as they are:
+never pass a size, a place or a price that you did not read, and leave a field
+out of the call when the provider does not name it. Leave a fact that a record
+already holds out of a later call as well, because Horizon keeps it. Horizon
+draws the size and the place on the second line of the row of the machine in the
+sidebar, and the price at the right end of that row as `<price>/h`. No program
+reads a fact: it is your claim about a rented machine, as the provider line is.
+
+A record that holds `folder`, `size`, `place` or `price_per_hour` needs a Horizon
+that knows the field on every computer that follows one server, because an older
+Horizon refuses the record of a newer one. The record belongs to the person's
+Horizon and not to your workspace, so every agent panel of this Horizon sees it
+and it survives a restart. The same name then appears in the Machines section of the sidebar, and
 a click on it opens the tmux session `build-1` with the machine key: the person
 never needs your agent panel for that.
 

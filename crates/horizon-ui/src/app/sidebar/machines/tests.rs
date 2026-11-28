@@ -2,7 +2,7 @@
 
 use super::super::super::test_support::{run_app_frame, test_app};
 use super::super::SidebarActions;
-use super::{MachineRow, MachineRows, MachineState, machine_click, spoken};
+use super::{MachineRow, MachineRows, MachineState, machine_click, price_line, spoken};
 use horizon_core::{Machine, MachineRegistry, Machines, PanelId, SshConnectionStatus};
 
 fn record(name: &str, provider: Option<&str>) -> Machine {
@@ -19,6 +19,16 @@ fn record(name: &str, provider: Option<&str>) -> Machine {
 fn with_repository(name: &str, repository: &str) -> Machine {
     Machine {
         repository: Some(repository.to_owned()),
+        ..record(name, Some("Hetzner, hel1"))
+    }
+}
+
+/// The record of [`with_repository`] with the facts of a rented machine.
+fn with_facts(name: &str, size: Option<&str>, place: Option<&str>, price_per_hour: Option<&str>) -> Machine {
+    Machine {
+        size: size.map(str::to_owned),
+        place: place.map(str::to_owned),
+        price_per_hour: price_per_hour.map(str::to_owned),
         ..record(name, Some("Hetzner, hel1"))
     }
 }
@@ -55,6 +65,67 @@ fn one_machine_of_the_list_is_one_row_in_name_order() {
         "no terminal of the machine is open"
     );
     assert_eq!(rows[0].panel, None);
+}
+
+#[test]
+fn a_rented_machine_shows_its_size_its_place_and_its_price() {
+    let (_temp, mut app) = test_app();
+    with_machines(
+        &mut app,
+        vec![
+            with_facts("build-1", Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+            with_facts("build-2", None, Some("Helsinki"), None),
+            with_facts("build-3", Some("cpx32"), None, None),
+            record("build-4", Some("Hetzner, hel1")),
+        ],
+    );
+    app.refresh_machine_rows();
+    let rows = app.machine_rows.rows();
+    assert_eq!(
+        rows[0].second.as_deref(),
+        Some("cpx32 \u{00b7} Helsinki"),
+        "the size and the place of the rented machine stand on the second line"
+    );
+    assert_eq!(rows[1].second.as_deref(), Some("Helsinki"), "the place alone");
+    assert_eq!(rows[2].second.as_deref(), Some("cpx32"), "the size alone");
+    assert_eq!(
+        rows[3].second.as_deref(),
+        Some("Hetzner, hel1"),
+        "a machine without a fact keeps the line of today"
+    );
+    assert_eq!(
+        rows[0].price.as_deref(),
+        Some("0.03 EUR"),
+        "the row keeps the price of the record for its right end"
+    );
+    assert_eq!(rows[3].price, None, "a record without a price shows none");
+    assert_eq!(
+        price_line("0.03 EUR"),
+        "0.03 EUR/h",
+        "the row says what one hour of the machine costs"
+    );
+}
+
+#[test]
+fn a_changed_price_is_read_again() {
+    let (_temp, mut app) = test_app();
+    with_machines(
+        &mut app,
+        vec![with_facts("build-1", Some("cpx32"), None, Some("0.03 EUR"))],
+    );
+    app.refresh_machine_rows();
+    let first = app.machine_rows.read_from();
+    with_machines(
+        &mut app,
+        vec![with_facts("build-1", Some("cpx32"), None, Some("0.05 EUR"))],
+    );
+    app.refresh_machine_rows();
+    assert_ne!(
+        first,
+        app.machine_rows.read_from(),
+        "a record whose price changed builds its row again"
+    );
+    assert_eq!(app.machine_rows.rows()[0].price.as_deref(), Some("0.05 EUR"));
 }
 
 #[test]
@@ -101,6 +172,7 @@ fn a_machine_that_waits_for_the_server_says_so() {
     let row = MachineRow {
         name: "build-1".into(),
         second: Some("Hetzner, hel1".into()),
+        price: None,
         state: MachineState::Closed,
         pending: true,
         panel: None,
@@ -120,6 +192,7 @@ fn a_press_on_a_closed_machine_opens_one_and_a_press_on_an_open_machine_focuses_
     let mut closed = MachineRow {
         name: "build-1".into(),
         second: None,
+        price: None,
         state: MachineState::Closed,
         pending: false,
         panel: None,

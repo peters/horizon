@@ -43,6 +43,9 @@ fn record(name: &str, session: Option<&str>) -> Machine {
         provider: Some("Hetzner, hel1".to_owned()),
         repository: None,
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         added_at_millis: 1,
         cards: false,
     }

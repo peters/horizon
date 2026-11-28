@@ -202,6 +202,42 @@ the server and the queue of that computer in one view:
    no binding here says `This computer has no key for <name> yet` instead, because
    there is no key name to report.
 
+### The three facts of a rented machine
+
+A record of a machine holds three more facts of a rented machine: its `size`, such
+as `cpx32`, its `place`, such as `Helsinki`, and its `price_per_hour`, such as
+`0.03 EUR`. Each one is one line of 1 to 40 characters with no control character,
+and `machine_set` refuses a value outside that bound with the words of its field.
+An update that names no fact keeps the fact that the record holds, and the empty
+text clears it.
+
+The server carries the facts with the record, because a record is one body of the
+object of the kind `machine`: `machine_put` re-encodes the record that it checked,
+and the row of the store holds the three fields. A computer that pulls the row
+reads them with the rest of the record.
+
+- **The format keeps no field that it does not know.** A record is one typed
+  object with `deny_unknown_fields`, and so is the frame that carries it. The
+  format therefore cannot keep a field that a version does not know: it refuses
+  the object. A computer or a server of the version before these three facts
+  **refuses a record that carries one**.
+  - A computer of the older version that pulls such a row stops with
+    `the server sent a machine record that this Horizon cannot read`. Its mark does
+    not move, so it applies no later change of the list either.
+  - A server of the older version answers a push that holds such a record with
+    `bad_frame`, the message names the field, and the link ends. The intent stays
+    in the queue of the computer.
+
+  Every computer that follows one server must know the three fields before a
+  machine gets one, as it must know `folder`.
+- **The bytes of a record without a fact are the bytes of the older form.** The
+  three fields are absent when the record holds none, so a record without a fact
+  reads on a computer of an older version as it reads on this one.
+- **This version tolerates the loss.** A record of the older form, or a record
+  that a person writes by hand without the three fields, reads on this version
+  with no fact: the row of the sidebar shows the line of the record of before, and
+  no price.
+
 ### The first link of a computer that has a list, keys and values
 
 A computer that kept its machine list in `machines/registry.json`, its key
@@ -479,7 +515,7 @@ one frame.
 {"device_list":{"rows":[{"name":"laptop-a","created_millis":1760000000000,"last_seen_millis":1760000000000,"login":"ssh","caller":false}],"now_millis":1760000000000}}
 {"device_remove":{"device":"laptop-b"}}
 {"device_removed":{"device":"laptop-b","removed":true}}
-{"push":{"intents":[{"device":"mbp-7c1","id":42,"seen":118,"op":{"machine_put":{"record":{"name":"build-1","host":"build-1.example","user":"peters","port":2222,"session":"work","provider":"Hetzner, hel1","added_at_millis":1760000000000}}}}]}}
+{"push":{"intents":[{"device":"mbp-7c1","id":42,"seen":118,"op":{"machine_put":{"record":{"name":"build-1","host":"build-1.example","user":"peters","port":2222,"session":"work","provider":"Hetzner, hel1","size":"cpx32","place":"Helsinki","price_per_hour":"0.03 EUR","added_at_millis":1760000000000}}}}]}}
 {"pushed":{"results":[{"id":42,"outcome":{"outcome":"applied","index":119}}],"next_expected":43}}
 {"pull":{"since":118,"tip":"9f2c1d…"}}
 {"changes":{"index":121,"reset":false,"rows":[{"kind":"machine","id":"build-1","body":{"name":"build-1"},"version":119,"deleted":false}]}}

@@ -27,6 +27,9 @@ fn machine(name: &str) -> Machine {
         provider: Some("Hetzner, hel1".to_owned()),
         repository: Some("example-org/shop".to_owned()),
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         added_at_millis: 7,
         cards: false,
     }
@@ -262,6 +265,58 @@ fn the_row_of_a_machine_keeps_the_folder_of_its_new_terminals() {
         read.folder.as_deref(),
         Some("/home/dev/example-repo"),
         "a computer that pulls the row reads the folder"
+    );
+}
+
+#[test]
+fn the_row_of_a_machine_keeps_its_size_its_place_and_its_price() {
+    let (_temp, store) = store();
+    let mut sent = machine("build-1");
+    sent.size = Some("cpx32".to_owned());
+    sent.place = Some("Helsinki".to_owned());
+    sent.price_per_hour = Some("0.03 EUR".to_owned());
+    applied(
+        &store,
+        "mbp-7c1",
+        Intent {
+            device: "mbp-7c1".to_owned(),
+            id: 1,
+            seen: None,
+            op: Op::MachinePut { record: sent },
+        },
+    );
+    let stored = store
+        .all()
+        .expect("the objects")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == KIND_MACHINE && row.id == "build-1")
+        .expect("the row of the machine");
+    let read: Machine = serde_json::from_value(stored.body).expect("the row reads as a record");
+    assert_eq!(
+        (
+            read.size.as_deref(),
+            read.place.as_deref(),
+            read.price_per_hour.as_deref()
+        ),
+        (Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+        "the row of the server holds the three facts, and a computer that pulls it reads them"
+    );
+    // The bytes of a record that holds no fact are the bytes of the older form: the
+    // three fields are left out, so a computer of the version before them reads the
+    // record as it reads its own, and this version reads it with no fact.
+    let older = serde_json::to_value(machine("build-2")).expect("the bytes of the older record");
+    for field in ["size", "place", "price_per_hour"] {
+        assert!(
+            older.get(field).is_none(),
+            "a record without a {field} names none, so the older form reads it: {older}"
+        );
+    }
+    let read: Machine = serde_json::from_value(older).expect("a computer reads the record of the older form");
+    assert_eq!(
+        (read.size, read.place, read.price_per_hour),
+        (None, None, None),
+        "a record of the older form reads with no fact"
     );
 }
 

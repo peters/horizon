@@ -91,8 +91,8 @@ pub use folder_id::{folder_identity, same_folder};
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use machines::{
-    CheckedMachine, MAX_MACHINES, MAX_PROVIDER_CHARS, MAX_SESSION_CHARS, Machine, MachineBindings, MachineError,
-    MachineRegistry, MachineStore, Machines, check_record,
+    CheckedMachine, INVALID_MACHINE_FACT, MAX_FACT_CHARS, MAX_MACHINES, MAX_PROVIDER_CHARS, MAX_SESSION_CHARS, Machine,
+    MachineBindings, MachineError, MachineFacts, MachineRegistry, MachineStore, Machines, check_facts, check_record,
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use open_files::{OpenFileLimit, raise_limit};

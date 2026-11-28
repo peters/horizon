@@ -22,8 +22,14 @@ pub const MAX_REPOSITORY_CHARS: usize = 60;
 /// The longest tmux session name accepted, in characters.
 pub const MAX_SESSION_CHARS: usize = 40;
 
+/// The longest fact of a rented machine kept, in characters.
+pub const MAX_FACT_CHARS: usize = 40;
+
 /// Refusal code of a folder of a machine that is not one absolute path.
 pub const INVALID_FOLDER: &str = "invalid_folder";
+
+/// Refusal code of a size, a place or a price of a machine that breaks its rule.
+pub const INVALID_MACHINE_FACT: &str = "invalid_machine_fact";
 
 const MAX_FOLDER_BYTES: usize = 512;
 
@@ -124,6 +130,24 @@ pub fn check_folder(folder: &str) -> Result<&str, MachineRefusal> {
         return Err(MachineRefusal::new(INVALID_FOLDER, rule));
     }
     Ok(folder)
+}
+
+/// Check one fact of a rented machine: its `size`, its `place` or its
+/// `price_per_hour`, such as `cpx32`, `Helsinki` or `0.03 EUR`.
+///
+/// The fact is text of the agent program that read it from its provider, so it is
+/// one line of 1 to [`MAX_FACT_CHARS`] characters with no control character, and
+/// a value outside that bound is refused with the name of its field. The empty
+/// text is no fact: a caller that sends it clears the one that the record holds.
+///
+/// # Errors
+/// Describes the rule of `field` with [`INVALID_MACHINE_FACT`].
+pub fn check_fact(field: &str, text: &str) -> Result<String, MachineRefusal> {
+    let rule = format!("{field} must be 1 to {MAX_FACT_CHARS} characters on one line with no control character");
+    if text.chars().count() > MAX_FACT_CHARS || text.chars().any(char::is_control) || text.is_empty() {
+        return Err(MachineRefusal::new(INVALID_MACHINE_FACT, rule));
+    }
+    Ok(text.to_owned())
 }
 
 /// The provider line and the repository line are short texts of a record that
@@ -272,6 +296,34 @@ mod tests {
     }
 
     #[test]
+    fn a_fact_of_a_rented_machine_is_one_line_within_the_bound() {
+        for text in ["cpx32", "Helsinki", "0.03 EUR", "a"] {
+            assert_eq!(
+                check_fact("place", text).expect("one fact of a machine"),
+                text,
+                "a fact is kept as the agent program sent it"
+            );
+        }
+        let longest = "p".repeat(MAX_FACT_CHARS);
+        assert_eq!(check_fact("size", &longest).expect("a fact at the bound"), longest);
+        for text in [
+            String::new(),
+            "p".repeat(MAX_FACT_CHARS + 1),
+            "cpx32\nnl-1".to_string(),
+            "2 vCPU\u{7}".to_string(),
+            "Helsinki\r".to_string(),
+        ] {
+            let refusal = check_fact("place", &text).expect_err("the fact must be refused");
+            assert_eq!(refusal.code, INVALID_MACHINE_FACT, "{text:?}");
+            assert!(
+                refusal.message.contains("place"),
+                "{text:?} refuses without the name of its field: {}",
+                refusal.message
+            );
+        }
+    }
+
+    #[test]
     fn one_terminal_names_one_target() {
         assert!(check_single_target(true, false).is_ok(), "a route alone is a terminal");
         assert!(
@@ -296,5 +348,7 @@ mod tests {
         assert_eq!(MAX_PROVIDER_CHARS, 60);
         assert_eq!(MAX_REPOSITORY_CHARS, 60);
         assert_eq!(MAX_SESSION_CHARS, 40);
+        assert_eq!(MAX_FACT_CHARS, 40);
+        assert_eq!(INVALID_MACHINE_FACT, "invalid_machine_fact");
     }
 }

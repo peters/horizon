@@ -53,6 +53,9 @@ fn set_machine(name: &str, session: Option<&str>, key: Option<&str>) -> block::O
         provider: None,
         repository: None,
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         cards: false,
     }
 }

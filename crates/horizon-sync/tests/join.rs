@@ -227,6 +227,9 @@ fn machine(name: &str) -> Machine {
         provider: Some("Hetzner, hel1".to_owned()),
         repository: Some("example-org/shop".to_owned()),
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         added_at_millis: 7,
         cards: false,
     }

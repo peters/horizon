@@ -350,6 +350,174 @@ fn a_record_of_an_older_version_reads_without_a_repository_and_one_with_it_round
     );
 }
 
+#[test]
+fn a_record_of_an_older_version_reads_with_no_fact_and_one_with_them_round_trips() {
+    // The stored bytes of the form that the version before this change wrote: the
+    // record of a machine with no `size`, no `place` and no `price_per_hour`.
+    let older = serde_json::json!({
+        "name": "build-1",
+        "host": "203.0.113.10",
+        "user": "root",
+        "session": "work",
+        "provider": "Hetzner, hel1",
+        "repository": "example-org/shop",
+        "folder": "/home/dev/example-repo",
+        "added_at_millis": 7
+    });
+    let record: Machine = serde_json::from_value(older.clone()).expect("a record of the older form");
+    assert_eq!(
+        (
+            record.size.as_deref(),
+            record.place.as_deref(),
+            record.price_per_hour.as_deref()
+        ),
+        (None, None, None),
+        "a record that names no fact reads with no fact"
+    );
+    let checked = check_record(&record).expect("the record of the older form still passes its rules");
+
+    let facts = check_facts(Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")).expect("three facts");
+    let mine = facts.into_record(checked);
+    let stored = serde_json::to_value(&mine).expect("the bytes of the record");
+    assert_eq!(
+        (
+            stored.get("size").and_then(serde_json::Value::as_str),
+            stored.get("place").and_then(serde_json::Value::as_str),
+            stored.get("price_per_hour").and_then(serde_json::Value::as_str)
+        ),
+        (Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+        "the record holds the three facts: {stored}"
+    );
+    let again: Machine = serde_json::from_value(stored.clone()).expect("the record reads again");
+    assert_eq!(again, mine, "a record with the facts round trips");
+    assert_eq!(
+        check_record(&again).expect("the facts of the record pass their rule"),
+        mine,
+        "the rules of a record keep its facts"
+    );
+
+    // A reader of the older form refuses the record of this one whole: the record
+    // is one typed object, and a version that holds no field for a fact holds no
+    // place to keep it either.
+    let refused = serde_json::from_value::<OlderRecord>(stored).expect_err("the older form refuses a fact");
+    assert!(
+        refused.to_string().contains("unknown field"),
+        "an older computer says which field it does not know: {refused}"
+    );
+    let read = serde_json::from_value::<OlderRecord>(older).expect("an older computer reads its own record");
+    assert_eq!(
+        (
+            read.name.as_str(),
+            read.host.as_str(),
+            read.user.as_deref(),
+            read.port,
+            read.session.as_deref(),
+            read.provider.as_deref(),
+            read.repository.as_deref(),
+            read.folder.as_deref(),
+            read.added_at_millis,
+            read.cards
+        ),
+        (
+            "build-1",
+            "203.0.113.10",
+            Some("root"),
+            None,
+            Some("work"),
+            Some("Hetzner, hel1"),
+            Some("example-org/shop"),
+            Some("/home/dev/example-repo"),
+            7,
+            false
+        ),
+        "the older form still reads every field that it wrote"
+    );
+}
+
+/// The record of the version before the three facts of a rented machine, as that
+/// version reads and writes it: the same fields and no field for a fact.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct OlderRecord {
+    name: String,
+    host: String,
+    user: Option<String>,
+    port: Option<u16>,
+    session: Option<String>,
+    provider: Option<String>,
+    repository: Option<String>,
+    folder: Option<String>,
+    added_at_millis: u64,
+    cards: bool,
+}
+
+#[test]
+fn a_fact_of_a_rented_machine_is_one_line_and_the_empty_text_clears_it() {
+    assert_eq!(
+        check_facts(Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")).expect("three facts"),
+        MachineFacts {
+            size: Some("cpx32".to_owned()),
+            place: Some("Helsinki".to_owned()),
+            price_per_hour: Some("0.03 EUR".to_owned()),
+        }
+    );
+    assert_eq!(
+        check_facts(Some(""), Some(""), Some("")).expect("three empty texts"),
+        MachineFacts::default(),
+        "the empty text is no fact, so it clears the one that the record holds"
+    );
+    assert_eq!(
+        check_facts(None, None, None).expect("no fact is named"),
+        MachineFacts::default(),
+        "a caller that names no fact names no value either"
+    );
+    for (size, place, price, field) in [
+        (Some("p".repeat(41)), None, None, "size"),
+        (None, Some("Helsinki\nEspoo".to_owned()), None, "place"),
+        (None, None, Some("0.03 EUR\u{7}".to_owned()), "price_per_hour"),
+    ] {
+        let error = check_facts(size.as_deref(), place.as_deref(), price.as_deref())
+            .expect_err("a fact outside the rule is refused");
+        assert_eq!(code(&error), INVALID_MACHINE_FACT, "{field}");
+        assert!(
+            error.to_string().contains(field),
+            "the refusal names its field: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_change_of_a_fact_is_a_change_of_the_record() {
+    let base = Machine {
+        name: "build-1".to_owned(),
+        host: "203.0.113.10".to_owned(),
+        added_at_millis: 7,
+        price_per_hour: Some("0.03 EUR".to_owned()),
+        ..Machine::default()
+    };
+    let dearer = Machine {
+        price_per_hour: Some("0.05 EUR".to_owned()),
+        ..base.clone()
+    };
+    let moved = Machine {
+        place: Some("Helsinki".to_owned()),
+        ..base.clone()
+    };
+    let stamped = Machine {
+        added_at_millis: 8,
+        ..base.clone()
+    };
+    assert!(
+        !base.same_change(&dearer),
+        "a price is a change that the server must hear"
+    );
+    assert!(
+        !base.same_change(&moved),
+        "a place is a change that the server must hear"
+    );
+    assert!(base.same_change(&stamped), "the stamp of the server is no change");
+}
+
 /// The same record as [`checked`], in the folder that the machine holds the work.
 fn checked_in_folder(name: &str, host: &str, folder: &str) -> CheckedMachine {
     check(

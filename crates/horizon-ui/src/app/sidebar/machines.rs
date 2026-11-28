@@ -126,9 +126,13 @@ impl MachineState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::app) struct MachineRow {
     pub(in crate::app) name: String,
-    /// The second line of the row: the repository that the record names and the
-    /// provider words of the agent, or nothing when the record names neither.
+    /// The second line of the row: the size and the place of a rented machine, or
+    /// the repository, folder and provider words of the record when it holds
+    /// neither, or nothing when the record names none of them.
     pub(in crate::app) second: Option<String>,
+    /// What one hour of a rented machine costs, when the agent that rented it
+    /// reported it: the row draws it at its right end as `<price>/h`.
+    pub(in crate::app) price: Option<String>,
     pub(in crate::app) state: MachineState,
     /// Whether the server has not decided the last change to this machine yet.
     pub(in crate::app) pending: bool,
@@ -202,6 +206,7 @@ impl HorizonApp {
                     name: machine.name.clone(),
                     // A lost link says when it was lost in the place of the record.
                     second: watch.lost.clone().or(second_line(machine)),
+                    price: machine.price_per_hour.clone(),
                     state: MachineState::of(panel.and_then(horizon_core::Panel::ssh_status)),
                     pending: pending.contains(machine.name.as_str()),
                     panel: panel.map(|panel| panel.id),
@@ -408,6 +413,19 @@ fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, 
     } else {
         card.max.x - PADDING
     };
+    // The price stands at the right end of the row, on the line of the name, and it
+    // gives way last: the name ends before it, so the price of a record stays whole.
+    // The second line keeps the whole width, so the size and the place stay whole.
+    let price = row.price.as_deref().map(|price| {
+        text::mono_line(
+            ui,
+            &price_line(price),
+            LINE_SIZE,
+            theme::FG_SOFT(),
+            (text_right - text_left).max(1.0),
+        )
+    });
+    let price_width = price.as_ref().map_or(0.0, |price| price.size().x + 6.0);
     let summary = row.watch.summary.as_deref().filter(|_| folded).map(|words| {
         text::line(
             ui,
@@ -415,7 +433,7 @@ fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, 
             LINE_SIZE,
             text::REGULAR,
             text::secondary(),
-            text_right - text_left,
+            (text_right - text_left).max(1.0),
         )
     });
     let summary_width = summary.as_ref().map_or(0.0, |summary| summary.size().x + 6.0);
@@ -436,7 +454,7 @@ fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, 
         NAME_SIZE,
         text::SEMIBOLD,
         theme::FG(),
-        (text_right - text_left - mark_width).max(1.0),
+        (text_right - text_left - mark_width - price_width).max(1.0),
     );
     let second = row.second.as_deref().map(|second| {
         text::line(
@@ -459,9 +477,19 @@ fn paint_machine_row(ui: &egui::Ui, card: Rect, row: &MachineRow, folded: bool, 
     painter.galley(pos2(text_left, top), name, theme::FG());
     if let Some(mark) = mark {
         ui.painter().galley(
-            pos2(text_right - mark.size().x, top + (name_height - mark.size().y) / 2.0),
+            pos2(
+                text_right - price_width - mark.size().x,
+                top + (name_height - mark.size().y) / 2.0,
+            ),
             mark,
             text::secondary(),
+        );
+    }
+    if let Some(price) = price {
+        ui.painter().galley(
+            pos2(text_right - price.size().x, top + (name_height - price.size().y) / 2.0),
+            price,
+            theme::FG_SOFT(),
         );
     }
     let line_top = top + name_height + gap;
@@ -654,10 +682,21 @@ fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
-/// The second line of a machine row: the repository that the record names, the
-/// folder that its new terminals start in, then the provider words of the agent.
-/// What Horizon knows comes first, so a narrow row cuts the claim of the agent.
+/// What the right end of a machine row says about one hour of the machine: the
+/// price of the record and `/h`, in the words that the design gives for it.
+fn price_line(price: &str) -> String {
+    format!("{price}/h")
+}
+
+/// The second line of a machine row: the size and the place of a rented machine
+/// when the record knows at least one of them, and the repository that the record
+/// names, the folder that its new terminals start in and the provider words of the
+/// agent otherwise. What Horizon knows comes first, so a narrow row cuts the claim
+/// of the agent.
 fn second_line(machine: &horizon_core::Machine) -> Option<String> {
+    if let Some(facts) = horizon_core::MachineFacts::of(machine).size_and_place() {
+        return Some(facts);
+    }
     let parts: Vec<&str> = [
         machine.repository.as_deref(),
         machine.folder.as_deref(),
@@ -686,6 +725,9 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         machine.provider.hash(&mut hasher);
         machine.repository.hash(&mut hasher);
         machine.folder.hash(&mut hasher);
+        machine.size.hash(&mut hasher);
+        machine.place.hash(&mut hasher);
+        machine.price_per_hour.hash(&mut hasher);
         pending.contains(machine.name.as_str()).hash(&mut hasher);
         app.node_cards.refusal(&machine.name).hash(&mut hasher);
     }

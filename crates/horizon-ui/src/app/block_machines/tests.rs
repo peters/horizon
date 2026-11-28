@@ -76,6 +76,9 @@ fn set(name: &str, host: &str, key: Option<&str>, session: Option<&str>) -> bloc
         provider: Some("Hetzner, hel1".into()),
         repository: None,
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         cards: false,
     }
 }
@@ -101,6 +104,9 @@ fn set_ready_for(name: &str, repository: Option<&str>) -> block::Operation {
         provider,
         repository: repository.map(str::to_string),
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         cards: false,
     }
 }
@@ -127,6 +133,44 @@ fn set_in_folder(name: &str, folder: Option<&str>) -> block::Operation {
         provider,
         repository,
         folder: folder.map(str::to_string),
+        size: None,
+        place: None,
+        price_per_hour: None,
+        cards: false,
+    }
+}
+
+/// The record of [`set_in_folder`] with the three facts of a rented machine.
+fn set_with_facts(
+    name: &str,
+    size: Option<&str>,
+    place: Option<&str>,
+    price_per_hour: Option<&str>,
+) -> block::Operation {
+    let block::Operation::MachineSet {
+        name,
+        ssh,
+        key,
+        session,
+        provider,
+        repository,
+        folder,
+        ..
+    } = set_in_folder(name, None)
+    else {
+        unreachable!("an operation of one machine")
+    };
+    block::Operation::MachineSet {
+        name,
+        ssh,
+        key,
+        session,
+        provider,
+        repository,
+        folder,
+        size: size.map(str::to_string),
+        place: place.map(str::to_string),
+        price_per_hour: price_per_hour.map(str::to_string),
         cards: false,
     }
 }
@@ -270,6 +314,101 @@ fn a_machine_set_keeps_the_folder_and_machines_answers_it() {
     let _ = answered(&mut app, &ctx, &root, set_in_folder("build-1", None));
     let listed = machines(&mut app, &ctx, &root);
     assert_eq!(listed[0].folder, None, "a set without a folder forgets the one before");
+}
+
+#[test]
+fn a_machine_set_keeps_the_size_the_place_and_the_price_and_machines_answers_them() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+
+    let answer = answered(
+        &mut app,
+        &ctx,
+        &root,
+        set_with_facts("build-1", Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+    );
+    assert!(
+        matches!(&answer, Outcome::MachineSet { created, .. } if *created),
+        "the record of the rented machine: {answer:?}"
+    );
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        (
+            listed[0].size.as_deref(),
+            listed[0].place.as_deref(),
+            listed[0].price_per_hour.as_deref()
+        ),
+        (Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+        "machines answers the three facts of the rented machine"
+    );
+    let reloaded = Machines::load(MachineRegistry::from_home(app.session_store.home())).expect("the list");
+    assert_eq!(
+        reloaded.records()[0].place.as_deref(),
+        Some("Helsinki"),
+        "a restart of Horizon reads the same place"
+    );
+
+    let _ = answered(
+        &mut app,
+        &ctx,
+        &root,
+        set_with_facts("build-1", None, None, Some("0.05 EUR")),
+    );
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        (
+            listed[0].size.as_deref(),
+            listed[0].place.as_deref(),
+            listed[0].price_per_hour.as_deref()
+        ),
+        (Some("cpx32"), Some("Helsinki"), Some("0.05 EUR")),
+        "a set that names no size and no place keeps the ones of the record"
+    );
+
+    let _ = answered(
+        &mut app,
+        &ctx,
+        &root,
+        set_with_facts("build-1", Some(""), Some(""), None),
+    );
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        (
+            listed[0].size.as_deref(),
+            listed[0].place.as_deref(),
+            listed[0].price_per_hour.as_deref()
+        ),
+        (None, None, Some("0.05 EUR")),
+        "an empty text clears a fact and a field that the caller leaves out keeps it"
+    );
+}
+
+#[test]
+fn a_fact_of_a_rented_machine_that_breaks_its_rule_is_refused_with_its_field() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+
+    for (size, place, price, field) in [
+        (Some("p".repeat(41)), None, None, "size"),
+        (None, Some("Helsinki\nEspoo".to_string()), None, "place"),
+        (None, None, Some("\u{7}".to_string()), "price_per_hour"),
+    ] {
+        let answer = answered(
+            &mut app,
+            &ctx,
+            &root,
+            set_with_facts("build-1", size.as_deref(), place.as_deref(), price.as_deref()),
+        );
+        assert_eq!(code(&answer), "invalid_machine_fact", "{field}: {answer:?}");
+        let words = format!("{answer:?}");
+        assert!(words.contains(field), "the refusal names the field {field}: {words}");
+        assert!(
+            machines(&mut app, &ctx, &root).is_empty(),
+            "a refused fact writes no record"
+        );
+    }
 }
 
 #[test]

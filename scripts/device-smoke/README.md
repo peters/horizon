@@ -616,8 +616,8 @@ file stays, and a later run appends to it.
 Write one JSON object per line of the command file, and keep the newline:
 
 ```
-{"tool": "machine_set", "arguments": {"name": "build-1", "ssh": {"host": "127.0.0.1"}}, "timeout": 30}
-{"tool": "machines"}
+{"tool": "block_panel", "arguments": {"operation": "machine_set", "name": "build-1", "ssh": {"host": "127.0.0.1"}}, "timeout": 30}
+{"tool": "block_panel", "arguments": {"operation": "machines"}}
 {"quit": true}
 ```
 
@@ -638,8 +638,8 @@ The example sets one machine and then reads the machine list:
 
 ```sh
 printf '%s\n' \
-  '{"tool": "machine_set", "arguments": {"name": "build-1", "ssh": {"host": "127.0.0.1"}}}' \
-  '{"tool": "machines"}' >> <state>/data/file-agent/commands.jsonl
+  '{"tool": "block_panel", "arguments": {"operation": "machine_set", "name": "build-1", "ssh": {"host": "127.0.0.1"}}}' \
+  '{"tool": "block_panel", "arguments": {"operation": "machines"}}' >> <state>/data/file-agent/commands.jsonl
 ```
 
 Result: the panel of the file agent holds one line for the answer of

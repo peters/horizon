@@ -291,6 +291,64 @@ a forgotten record leaves its key.
    Result: The dot, the name and the provider text do not move or jump. No row
    flickers between two states.
 
+### 6.10 M9 — The row of a rented machine
+
+1. Call `block_panel` with the record of a rented machine and its three facts.
+
+   ```json
+   {"operation":"machine_set","name":"build-9",
+    "ssh":{"host":"127.0.0.1","user":"root","port":2222},
+    "provider":"Hetzner, hel1",
+    "size":"cpx32","place":"Helsinki","price_per_hour":"0.03 EUR"}
+   ```
+
+   Result: The answer is `status: machine_set` with `created: true`.
+
+2. Look at the row `build-9`.
+
+   Result: The name `build-9` stands above the dimmed line `cpx32 · Helsinki`. The
+   right end of the row, on the line of the name, says `0.03 EUR/h` in the
+   monospace font and the soft foreground colour. The row shows no repository and
+   no provider line, because the record names the size and the place.
+
+3. Call `block_panel` again with
+   `{"operation":"machine_set","name":"build-9","ssh":{"host":"127.0.0.1","user":"root","port":2222},"price_per_hour":"0.05 EUR"}`.
+
+   Result: The answer is `status: machine_set` with `created: false`. The second
+   line still says `cpx32 · Helsinki`, and the price says `0.05 EUR/h`: a call
+   that names no fact keeps the fact that the record holds.
+
+4. Call `block_panel` again with the same record, `"size":""` and `"place":""`,
+   and no `price_per_hour`.
+
+   Result: The second line shows the provider line `Hetzner, hel1` of the record
+   again, because the empty text cleared the size and the place. The price still
+   says `0.05 EUR/h`, because the call names no price.
+
+5. Call `block_panel` with `{"operation":"machines"}`.
+
+   Result: The row of `build-9` names no `size` and no `place`, and it says
+   `price_per_hour: "0.05 EUR"`.
+
+6. Call `block_panel` with a price of 41 characters.
+
+   ```json
+   {"operation":"machine_set","name":"build-9",
+    "ssh":{"host":"127.0.0.1","user":"root","port":2222},
+    "price_per_hour":"00000000000000000000000000000000000000000"}
+   ```
+
+   Result: The answer is `code: invalid_machine_fact`, and the message names
+   `price_per_hour` and the bound of 40 characters. The row of `build-9` keeps
+   the price of step 3.
+
+7. Call `block_panel` with the facts of step 1 and the name
+   `a-rented-machine-with-a-long-name`.
+
+   Result: The row of that machine shows the name with an ellipsis, while the
+   whole price `0.03 EUR/h` stays at the right end of the row and the second line
+   `cpx32 · Helsinki` stays whole. The hover text of the row shows the whole name.
+
 ## 7. Pass criteria
 
 - The section shows no header and no row while this Horizon has no machine.
@@ -302,6 +360,10 @@ a forgotten record leaves its key.
   and reports `key_missing: true` to an agent.
 - A terminal of a machine reconnects by itself after a lost link, and a key press
   in a panel whose attempt is in flight starts the new attempt at once.
+- A rented machine shows its size and its place on the second line of its row and
+  its price at the right end of that row. A call that names no fact keeps the
+  stored one, the empty text clears it, and a value outside the bound is
+  `invalid_machine_fact`.
 
 ## 8. Clean-up
 

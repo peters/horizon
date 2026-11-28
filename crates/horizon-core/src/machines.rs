@@ -2,9 +2,10 @@
 //! click on one opens.
 //!
 //! A machine is the record that an agent writes when it has rented or reached a
-//! host: a name, an SSH route, an optional tmux session and the provider line
-//! that the agent read from its CLI. The list belongs to the person and not to a
-//! workspace or a session, so it is one file under the Horizon home,
+//! host: a name, an SSH route, an optional tmux session, the provider line that the
+//! agent read from its CLI and the three facts of a rented machine, which are its
+//! size, its place and its price for one hour. The list belongs to the person and
+//! not to a workspace or a session, so it is one file under the Horizon home,
 //! `machines/registry.json`, written to a temporary file and renamed. Every call
 //! here reads or writes that file, so it runs on a coordination worker thread and
 //! never on the UI thread.
@@ -24,20 +25,22 @@
 use std::{io, path::Path};
 
 mod bindings;
+mod facts;
 mod record;
 mod registry;
 #[cfg(test)]
 mod tests;
 
 pub use bindings::MachineBindings;
+pub use facts::{MachineFacts, check_facts};
 pub use record::{
     CheckedMachine, Machine, check, check_record, machine_key_name, machine_name, session_command, session_name,
 };
 pub use registry::{LoadedMachines, MachineRegistry, MachineStore, Machines};
 
 pub use horizon_browser_control::manifest::block_machines::{
-    INVALID_MACHINE_NAME, INVALID_SESSION_NAME, MACHINE_UNAVAILABLE, MAX_MACHINES, MAX_PROVIDER_CHARS,
-    MAX_SESSION_CHARS, TOO_MANY_MACHINES,
+    INVALID_MACHINE_FACT, INVALID_MACHINE_NAME, INVALID_SESSION_NAME, MACHINE_UNAVAILABLE, MAX_FACT_CHARS,
+    MAX_MACHINES, MAX_PROVIDER_CHARS, MAX_SESSION_CHARS, TOO_MANY_MACHINES,
 };
 
 /// Why Horizon refused or could not read a machine record.
@@ -52,6 +55,9 @@ pub enum MachineError {
     /// The folder of the machine's new terminals is not one absolute path.
     #[error("{message}")]
     InvalidFolder { message: String },
+    /// The size, the place or the price of a rented machine breaks its rule.
+    #[error("{message}")]
+    InvalidFact { message: String },
     /// The route breaks the rule of an SSH terminal.
     #[error("{message}")]
     InvalidRoute { message: String },
@@ -79,6 +85,7 @@ impl MachineError {
             Self::InvalidName { .. } => INVALID_MACHINE_NAME,
             Self::InvalidSession { .. } => INVALID_SESSION_NAME,
             Self::InvalidFolder { .. } => horizon_browser_control::manifest::block_machines::INVALID_FOLDER,
+            Self::InvalidFact { .. } => INVALID_MACHINE_FACT,
             Self::InvalidRoute { .. } => horizon_browser_control::manifest::block_terminal::INVALID_SSH_ROUTE,
             Self::InvalidKey { .. } => horizon_browser_control::manifest::block_keys::INVALID_KEY_NAME,
             Self::TooMany { .. } => TOO_MANY_MACHINES,

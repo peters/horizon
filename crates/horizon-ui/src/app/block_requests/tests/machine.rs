@@ -29,6 +29,9 @@ fn keep_machine(app: &mut HorizonApp, cards: bool) {
         provider: None,
         repository: None,
         folder: None,
+        size: None,
+        place: None,
+        price_per_hour: None,
         added_at_millis: 0,
         cards,
     };

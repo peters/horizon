@@ -131,15 +131,22 @@ impl HorizonApp {
             provider,
             repository,
             folder,
+            size,
+            place,
+            price_per_hour,
             cards,
         } = *asked;
+        // The fields of the record pass the rules that `check_record` also runs on a
+        // record of the server. An update keeps a fact that it says nothing about, so the
+        // worker resolves the facts with the record that this Horizon holds.
+        let facts = horizon_core::MachineFacts::reported(size, place, price_per_hour);
         let checked = horizon_core::machines::check(name, ssh, session, provider, repository, folder, cards).and_then(
             |checked| {
                 let key = key.map(horizon_core::machines::machine_key_name).transpose()?;
-                Ok((checked, key))
+                Ok((checked.record(u64::try_from(manifest::now_millis()).unwrap_or(0)), key))
             },
         );
-        let (checked, key) = match checked {
+        let (record, key) = match checked {
             Ok(checked) => checked,
             Err(error) => {
                 self.write_block_answer(BlockAnswer::new(root, request.clone(), refused(&error)));
@@ -147,7 +154,6 @@ impl HorizonApp {
                 return;
             }
         };
-        let record = checked.record(u64::try_from(manifest::now_millis()).unwrap_or(0));
         let keys = horizon_core::MachineKeys::from_home(self.session_store.home());
         let registry = self.machine_registry();
         let store = self.machine_store(&registry);
@@ -160,7 +166,9 @@ impl HorizonApp {
                 if let Some(key) = key.as_deref() {
                     keys.require(key)?;
                 }
-                let (next, created) = Machines::from_store(&registry, store)?.with_record(record, key.as_deref())?;
+                let machines = Machines::from_store(&registry, store)?;
+                let record = facts.checked(machines.find(&record.name))?.into_record(record);
+                let (next, created) = machines.with_record(record, key.as_deref())?;
                 next.save()?;
                 Ok::<_, MachineError>((next, created))
             },
@@ -237,6 +245,9 @@ impl HorizonApp {
                 provider,
                 repository,
                 folder,
+                size,
+                place,
+                price_per_hour,
                 cards,
             } => {
                 self.answer_machine_set(
@@ -248,6 +259,9 @@ impl HorizonApp {
                         provider: provider.as_deref(),
                         repository: repository.as_deref(),
                         folder: folder.as_deref(),
+                        size: size.as_deref(),
+                        place: place.as_deref(),
+                        price_per_hour: price_per_hour.as_deref(),
                         cards: *cards,
                     },
                     request,
@@ -380,6 +394,9 @@ impl HorizonApp {
                 provider: machine.provider.clone(),
                 repository: machine.repository.clone(),
                 folder: machine.folder.clone(),
+                size: machine.size.clone(),
+                place: machine.place.clone(),
+                price_per_hour: machine.price_per_hour.clone(),
                 added_at_millis: machine.added_at_millis,
                 terminal_open: self.machine_panel(&machine.name).is_some(),
                 key_missing: false,
@@ -438,6 +455,9 @@ pub(in crate::app) struct MachineSetFields<'a> {
     pub(in crate::app) provider: Option<&'a str>,
     pub(in crate::app) repository: Option<&'a str>,
     pub(in crate::app) folder: Option<&'a str>,
+    pub(in crate::app) size: Option<&'a str>,
+    pub(in crate::app) place: Option<&'a str>,
+    pub(in crate::app) price_per_hour: Option<&'a str>,
     pub(in crate::app) cards: bool,
 }
 

@@ -248,6 +248,22 @@ pub enum Operation {
         /// `/home/dev/example-repo`: one absolute path of the machine.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
+        /// The size of the rented machine, such as `cpx32`: one line of 1 to 40
+        /// characters with no control character. Pass what the provider answered,
+        /// never a guess, and leave it out when you do not know it. Horizon draws
+        /// it with the place on the second line of the row of the machine.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<String>,
+        /// The place that the rented machine stands in, such as `Helsinki`: one
+        /// line of 1 to 40 characters with no control character. Pass what the
+        /// provider answered, never a guess.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        place: Option<String>,
+        /// What one hour of the rented machine costs, such as `0.03 EUR`: one line
+        /// of 1 to 40 characters with no control character, in the words of the
+        /// provider. Horizon draws it at the right end of the row as `<price>/h`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        price_per_hour: Option<String>,
     },
     /// Forget one machine of this Horizon. Does not delete its key: call
     /// `delete_machine_key` for that. A terminal that the machine opened keeps
@@ -615,6 +631,15 @@ pub struct MachineSummary {
     /// The folder that the new terminals of this machine start in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// The size of a rented machine, when the agent that rented it reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// The place that a rented machine stands in, when the agent reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    /// What one hour of a rented machine costs, when the agent reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_per_hour: Option<String>,
     pub added_at_millis: u64,
     /// Whether a terminal panel of this machine is open in this Horizon.
     pub terminal_open: bool,
@@ -1602,6 +1627,9 @@ mod tests {
             "provider": "Hetzner, hel1",
             "repository": "example-org/shop",
             "folder": "/home/dev/example-repo",
+            "size": "cpx32",
+            "place": "Helsinki",
+            "price_per_hour": "0.03 EUR",
             "cards": true
         }))
         .expect("machine_set parses");
@@ -1613,6 +1641,9 @@ mod tests {
             provider,
             repository,
             folder,
+            size,
+            place,
+            price_per_hour,
             cards,
         } = set
         else {
@@ -1631,6 +1662,11 @@ mod tests {
             "machine_set carries the folder of the new terminals"
         );
         assert!(cards, "machine_set carries the mark of the card setup");
+        assert_eq!(
+            (size.as_deref(), place.as_deref(), price_per_hour.as_deref()),
+            (Some("cpx32"), Some("Helsinki"), Some("0.03 EUR")),
+            "machine_set carries the three facts of a rented machine as the text of a program"
+        );
         assert!(
             serde_json::from_value::<Operation>(serde_json::json!({
                 "operation": "machine_set",
@@ -1652,6 +1688,10 @@ mod tests {
         .expect("serialize");
         assert_eq!(answer["status"], serde_json::json!("machine_set"));
         assert_eq!(answer["created"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn the_machine_list_answers_the_record_of_a_machine() {
         let listed = serde_json::to_value(Outcome::Machines {
             server: Some("in_step".into()),
             machines: vec![MachineSummary {
@@ -1664,6 +1704,9 @@ mod tests {
                 provider: Some("Hetzner, hel1".into()),
                 repository: Some("example-org/shop".into()),
                 folder: None,
+                size: Some("cpx32".into()),
+                place: Some("Helsinki".into()),
+                price_per_hour: Some("0.03 EUR".into()),
                 added_at_millis: 7,
                 terminal_open: true,
                 pending: true,
@@ -1680,6 +1723,19 @@ mod tests {
             "a machine whose key was deleted says so"
         );
         assert_eq!(listed["server"], serde_json::json!("in_step"));
+        assert_eq!(
+            (
+                listed["machines"][0]["size"].clone(),
+                listed["machines"][0]["place"].clone(),
+                listed["machines"][0]["price_per_hour"].clone()
+            ),
+            (
+                serde_json::json!("cpx32"),
+                serde_json::json!("Helsinki"),
+                serde_json::json!("0.03 EUR")
+            ),
+            "machines answers the three facts of a rented machine"
+        );
     }
 
     #[test]
