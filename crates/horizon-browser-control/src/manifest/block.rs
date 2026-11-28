@@ -132,12 +132,18 @@ pub enum Operation {
         /// the oldest waiting click of those cards answers first.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         panel_id: Option<String>,
-        /// How long to wait, 1 000-3 600 000 ms; 300 000 when omitted.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// How long to wait, 1 000-3 600 000 ms; 300 000 when omitted. A real
+        /// agent program sent this number as text, so the field reads both.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "value_or_text")]
         timeout_millis: Option<u64>,
     },
     /// Show or hide a card the caller owns.
-    Visibility { panel_id: String, visible: bool },
+    Visibility {
+        panel_id: String,
+        /// Whether the card shows. It reads `true` and the text `"true"`.
+        #[serde(deserialize_with = "value_or_text")]
+        visible: bool,
+    },
     /// Close a card the caller owns. The document is dropped with it.
     Close { panel_id: String },
     /// Open an SSH terminal panel beside the caller, in the caller's workspace,
@@ -226,7 +232,11 @@ pub enum Operation {
         provider: Option<String>,
         /// Whether the setup of the cards of the agents of this machine ran, so
         /// this window serves a card socket for each session of the machine.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(
+            default,
+            skip_serializing_if = "std::ops::Not::not",
+            deserialize_with = "value_or_text"
+        )]
         cards: bool,
         /// The repository that this machine is ready for, such as
         /// `example-org/shop`: one line of at most 60 characters. Horizon draws
@@ -358,7 +368,10 @@ pub enum Operation {
     /// workspace.
     WorkItemPropose {
         /// One to six items, each with a title of 1 to 60 characters on one line,
-        /// a task of 1 to 4 000 characters, and an optional absolute folder.
+        /// a task of 1 to 4 000 characters, and an optional absolute folder. A
+        /// real agent program sent this list as the JSON text of it, so the field
+        /// reads both.
+        #[serde(deserialize_with = "value_or_text")]
         items: Vec<ProposedItem>,
     },
     /// Pass one message of the person to the orchestrator of one work item, with
@@ -1146,6 +1159,42 @@ mod tests {
     }
 
     #[test]
+    fn a_number_and_a_flag_that_a_program_sends_as_text_are_read() {
+        // A real agent program sent `"300000"` for the wait of `next_click`, and
+        // Horizon refused it twice before the program sent a number.
+        let wait = serde_json::json!({"operation": "next_click", "panel_id": "card-1", "timeout_millis": "300000"});
+        let Operation::NextClick { timeout_millis, .. } = serde_json::from_value::<BlockPanelInput>(wait)
+            .expect("the wait whose number is text")
+            .into_operation()
+        else {
+            panic!("the wait operation");
+        };
+        assert_eq!(timeout_millis, Some(300_000));
+        let plain = serde_json::json!({"operation": "next_click"});
+        assert!(matches!(
+            serde_json::from_value::<BlockPanelInput>(plain)
+                .expect("the wait with no number")
+                .into_operation(),
+            Operation::NextClick {
+                timeout_millis: None,
+                ..
+            }
+        ));
+        let hide = serde_json::json!({"operation": "visibility", "panel_id": "card-1", "visible": "false"});
+        assert!(matches!(
+            serde_json::from_value::<BlockPanelInput>(hide)
+                .expect("the flag that is text")
+                .into_operation(),
+            Operation::Visibility { visible: false, .. }
+        ));
+        let no_number = serde_json::json!({"operation": "next_click", "timeout_millis": "soon"});
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(no_number).is_err(),
+            "a text that holds no number is refused"
+        );
+    }
+
+    #[test]
     fn the_three_work_item_operations_read_as_the_operation_that_a_caller_sends() {
         let propose = serde_json::json!({
             "operation": "work_item_propose",
@@ -1163,6 +1212,26 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].folder.as_deref(), Some("/home/person/work"));
         assert_eq!(items[1].folder, None, "a folder is optional");
+
+        // A real agent program sent the list as one text that holds its JSON. The
+        // stand-in of the tests sent a list, so only the real program showed it.
+        let as_text = serde_json::json!({
+            "operation": "work_item_propose",
+            "items": "[{\"title\": \"Colour\", \"task\": \"Ask for a colour\"}]"
+        });
+        let Operation::WorkItemPropose { items } = serde_json::from_value::<BlockPanelInput>(as_text)
+            .expect("the proposal whose list is text")
+            .into_operation()
+        else {
+            panic!("the proposal operation");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Colour");
+        let no_list = serde_json::json!({"operation": "work_item_propose", "items": "two tasks"});
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(no_list).is_err(),
+            "a text that holds no list is refused"
+        );
         super::super::block_proposal::check_items(&items).expect("the items of this proposal pass");
 
         let message = serde_json::json!({
